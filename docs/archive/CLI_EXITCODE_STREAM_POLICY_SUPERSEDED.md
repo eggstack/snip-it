@@ -71,7 +71,7 @@ boundary in `main.rs`. Ctrl+C in the TUI (normal mode) also maps to
    goes to stdout (e.g., `snp select` prints the command to stdout).
 
 4. **Error messages** always go to stderr, prefixed with `error:` (current
-   behavior in `main.rs:1026`).
+   behavior in `main.rs:1063`).
 
 ### Command-by-Command Stream Changes
 

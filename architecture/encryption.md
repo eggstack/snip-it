@@ -11,8 +11,8 @@ fields. Key derivation uses Argon2id; bulk encryption uses AES-256-GCM.
 
 > **Trust boundary — read this before calling it "end-to-end".** The API key
 > *does* leave the client: it is sent as `Bearer <api_key>` in the gRPC
-> `authorization` metadata on every request (`src/sync.rs:291-299`), and the
-> server reads it from there (`snip-sync/src/lib.rs:1058`). The server stores
+> `authorization` metadata on every request (`src/sync.rs:306-314`), and the
+> server reads it from there (`snip-sync/src/lib.rs:1079`). The server stores
 > only an Argon2 hash of the key in `users.api_key`, so it cannot recover the
 > key from the database — but anything that can observe the bearer token (the
 > server process itself, a TLS-terminating proxy, a request log) can re-derive
@@ -21,9 +21,9 @@ fields. Key derivation uses Argon2id; bulk encryption uses AES-256-GCM.
 > at-rest obfuscation of snippet bodies**, not server-blindness.
 
 **Scope boundary — what is *not* encrypted.** `encrypt_snippet`
-(`src/sync.rs:1264-1294`) encrypts only
+(`src/sync.rs:1389-1419`) encrypts only
 `EncryptedSnippetData { description, command, tags }`
-(`src/sync.rs:301-306`), serialized as JSON and placed in the proto `command`
+(`src/sync.rs:316-321`), serialized as JSON and placed in the proto `command`
 field. The routing and bookkeeping fields `id`, `created_at`, `updated_at`,
 `device_id`, and `deleted` are sent as **plaintext** proto fields — the server
 needs them for merge ordering and deletion tombstones. `output` is not in
@@ -138,13 +138,13 @@ as `InvalidData`.
 
 | Path | Behaviour |
 |------|-----------|
-| Upload | `encrypt_snippets` (`src/sync.rs:1298-1303`) encrypts each local snippet via `encrypt_snippet`; records that fail encryption are collected into `failed_ids` (`src/sync.rs:1308-1324`) and surface as `skipped_count`. |
-| Upload shape | `encrypt_snippet` (`src/sync.rs:1264-1294`) returns a `ProtoSnippet` with `description = ""`, `tags = []`, `command = <base64 ciphertext>`, and `encrypted = true`. |
-| Download | `decrypt_snippet` (`src/sync.rs:1327-1355`) returns the snippet unchanged when `encrypted == false` (plaintext records are passed through as-is), otherwise decrypts `command`, JSON-parses it back into `EncryptedSnippetData`, and restores `description`, `command`, and `tags`. |
-| Download failures | A decryption failure increments the page's decrypt-failure counter and the snippet's id is appended to the skipped-id list (`src/sync.rs:749-757`). |
+| Upload | `encrypt_snippets` (`src/sync.rs:1428-1434`) encrypts each local snippet via `encrypt_snippet`; records that fail encryption are collected into `failed_ids` (`src/sync.rs:1439-1460`) and surface as `skipped_count`. |
+| Upload shape | `encrypt_snippet` (`src/sync.rs:1389-1419`) returns a `ProtoSnippet` with `description = ""`, `tags = []`, `command = <base64 ciphertext>`, and `encrypted = true`. |
+| Download | `decrypt_snippet` (`src/sync.rs:1463-1491`) returns the snippet unchanged when `encrypted == false` (plaintext records are passed through as-is), otherwise decrypts `command`, JSON-parses it back into `EncryptedSnippetData`, and restores `description`, `command`, and `tags`. |
+| Download failures | A decryption failure increments the page's decrypt-failure counter and the snippet's id is appended to the skipped-id list (`src/sync.rs:849-857`). |
 
 The server enforces a **1 MiB cap on encrypted payloads**
-(`DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH`, `snip-sync/src/lib.rs:93`, enforced at
+(`DEFAULT_MAX_ENCRYPTED_PAYLOAD_LENGTH`, `snip-sync/src/lib.rs:102`, enforced at
 `:880-885`) so a single record can always be transported. Records above the
 cap are refused, and the refusal is reported to the client in `skipped_ids`.
 
@@ -159,7 +159,7 @@ pub(crate) fn key_cache_guard() -> KeyCacheGuard                         // :90
 Session-local only: it avoids re-running Argon2id for the same
 `(api_key, salt)` pair within one sync. `KeyCacheGuard` is an RAII guard whose
 `Drop` clears the whole cache (`src/encryption.rs:82-88`); it is taken at the
-top of `sync_encrypted_inner` (`src/sync.rs:420`) and of
+top of `sync_encrypted_inner` (`src/sync.rs:504`) and of
 `run_sync_with_limits` (`src/sync_commands.rs:675`), so the cache never
 outlives the sync operation.
 
@@ -210,7 +210,7 @@ different keys → different hashes).
 
 - `src/encryption.rs` — params, payload, `derive_key`, `encrypt`/`decrypt`,
   `KEY_CACHE`, `CryptoError`, unit tests.
-- `src/sync.rs:1264-1355` — `encrypt_snippet` / `decrypt_snippet`, the
+- `src/sync.rs:1389-1491` — `encrypt_snippet` / `decrypt_snippet`, the
   client-side crypto seam.
 - `src/sync_commands.rs:908-974` — the `skipped_count` gate on `last_sync`.
 - `src/config/sync_settings.rs:236-334` — keychain-backed API-key storage.
@@ -221,7 +221,7 @@ different keys → different hashes).
 - **Argon2 parameter changes break all existing encrypted payloads** — version
   the format first; never silently retune memory/time/parallelism.
 - **The API key does leave the client.** It travels as a `Bearer <api_key>`
-  gRPC metadata header on every request (`src/sync.rs:291-299`), so the server
+  gRPC metadata header on every request (`src/sync.rs:306-314`), so the server
   can re-derive the payload key; the confidentiality this module provides is
   transport + at-rest, not server-blindness (see the trust-boundary note in the
   Overview). Errors and logs must never contain key material.

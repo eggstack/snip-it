@@ -294,6 +294,121 @@ fn debounce_elapsed(last_update: Option<Instant>, debounce_ms: u64) -> bool {
     last_update.is_none_or(|t| t.elapsed() >= Duration::from_millis(debounce_ms))
 }
 
+/// Filter-rebuild state owned by the selector loop.
+struct FilterRebuildState {
+    /// Candidate (index, score) pairs backing the current filter.
+    candidates: Vec<(usize, Option<i64>)>,
+    /// The filter request the candidate set was built from.
+    request: Option<FilterRequest>,
+}
+
+/// Read-only inputs of a filter rebuild.
+///
+/// The display strings, the snippet list, and the usage data never change
+/// while the selector is open, so this is built once per run.
+struct FilterRebuildBase<'a> {
+    all_display: &'a [String],
+    all_display_lower: &'a [String],
+    all_commands_lower: &'a [String],
+    all_tags_search: &'a [String],
+    snippets: &'a [crate::library::Snippet],
+    favorites_first: bool,
+    usage: Option<&'a [crate::usage::UsageData]>,
+}
+
+/// Rebuilds `filtered` from the current filter text.
+///
+/// Extracted from the event loop so the same rebuild can be applied from the
+/// debounced rebuild site *and* from the paths that resolve the selection
+/// (`Enter`, `y`), which must never read a stale filtered list.
+fn rebuild_filtered_list(
+    filter: &str,
+    tag_filter_mode: bool,
+    filter_state: &FilterState,
+    base: &FilterRebuildBase<'_>,
+    rebuild: &mut FilterRebuildState,
+    filtered: &mut Vec<usize>,
+    sel: &mut SelectState,
+) {
+    let filter_request = current_filter_request(filter, filter_state, tag_filter_mode);
+    let previous = rebuild.request.as_ref();
+    if previous != Some(&filter_request) {
+        if previous.is_some_and(|prev| filter_request.can_narrow_from(prev)) {
+            rebuild_filter_candidates(
+                &mut rebuild.candidates,
+                filtered.iter().copied(),
+                &filter_request,
+                base.all_display,
+                base.all_display_lower,
+                base.all_tags_search,
+            );
+        } else {
+            rebuild_filter_candidates(
+                &mut rebuild.candidates,
+                0..base.all_display.len(),
+                &filter_request,
+                base.all_display,
+                base.all_display_lower,
+                base.all_tags_search,
+            );
+        }
+    }
+
+    let has_filter = !filter_request.is_empty();
+    sort_filtered_indices(
+        &mut rebuild.candidates,
+        filter_state,
+        base.snippets,
+        base.all_display_lower,
+        base.all_commands_lower,
+        has_filter,
+        base.favorites_first,
+        base.usage,
+    );
+
+    filtered.clear();
+    filtered.extend(rebuild.candidates.iter().map(|(i, _)| *i));
+    rebuild.request = Some(filter_request);
+
+    sel.update(filtered.len());
+}
+
+/// Applies a pending filter rebuild, if any.
+///
+/// The rebuild is debounced, so one can still be outstanding when the user
+/// presses Enter or `y` (a broadening edit — backspace, the tag-filter
+/// toggle — arms the debounce window). Flushing it here guarantees the
+/// selection is never resolved against a stale filtered list.
+///
+/// Returns `true` when a rebuild was applied, so the caller can redraw.
+fn flush_filter_rebuild(
+    filter: &str,
+    tag_filter_mode: bool,
+    filter_state: &FilterState,
+    base: &FilterRebuildBase<'_>,
+    rebuild: &mut FilterRebuildState,
+    filtered: &mut Vec<usize>,
+    sel: &mut SelectState,
+    dirty: &mut bool,
+    last_update: &mut Option<Instant>,
+) -> bool {
+    if !*dirty {
+        return false;
+    }
+    rebuild_filtered_list(
+        filter,
+        tag_filter_mode,
+        filter_state,
+        base,
+        rebuild,
+        filtered,
+        sel,
+    );
+    *dirty = false;
+    *last_update = None;
+    true
+}
+
 fn pending_debounce_timeout(
     dirty: bool,
     last_update: Option<Instant>,
@@ -649,9 +764,19 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         .iter()
         .map(|snippet_tags| snippet_tags.join("\n").to_lowercase())
         .collect();
-    let mut filter_candidates: Vec<(usize, Option<i64>)> =
-        (0..all_display.len()).map(|i| (i, None)).collect();
-    let mut last_filter_request: Option<FilterRequest> = None;
+    let base = FilterRebuildBase {
+        all_display: &all_display,
+        all_display_lower: &all_display_lower,
+        all_commands_lower: &all_commands_lower,
+        all_tags_search: &all_tags_search,
+        snippets,
+        favorites_first,
+        usage,
+    };
+    let mut rebuild = FilterRebuildState {
+        candidates: (0..all_display.len()).map(|i| (i, None)).collect(),
+        request: None,
+    };
     let mut needs_redraw = true;
     sel.update(filtered.len());
 
@@ -752,49 +877,15 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
         };
 
         if should_recompute {
-            let filter_request = current_filter_request(&filter, &filter_state, tag_filter_mode);
-            if last_filter_request.as_ref() != Some(&filter_request) {
-                if last_filter_request
-                    .as_ref()
-                    .is_some_and(|previous| filter_request.can_narrow_from(previous))
-                {
-                    rebuild_filter_candidates(
-                        &mut filter_candidates,
-                        filtered.iter().copied(),
-                        &filter_request,
-                        &all_display,
-                        &all_display_lower,
-                        &all_tags_search,
-                    );
-                } else {
-                    rebuild_filter_candidates(
-                        &mut filter_candidates,
-                        0..all_display.len(),
-                        &filter_request,
-                        &all_display,
-                        &all_display_lower,
-                        &all_tags_search,
-                    );
-                }
-            }
-
-            let has_filter = !filter_request.is_empty();
-            sort_filtered_indices(
-                &mut filter_candidates,
+            rebuild_filtered_list(
+                &filter,
+                tag_filter_mode,
                 &filter_state,
-                snippets,
-                &all_display_lower,
-                &all_commands_lower,
-                has_filter,
-                favorites_first,
-                usage,
+                &base,
+                &mut rebuild,
+                &mut filtered,
+                &mut sel,
             );
-
-            filtered.clear();
-            filtered.extend(filter_candidates.iter().map(|(i, _)| *i));
-            last_filter_request = Some(filter_request);
-
-            sel.update(filtered.len());
             needs_redraw = true;
         } else {
             sel.update(filtered.len());
@@ -1717,6 +1808,20 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                 }
                                 KeyCode::Up if sel.selected > 0 => sel.move_up(),
                                 KeyCode::Enter => {
+                                    // Flush a pending (debounced) filter rebuild
+                                    // so the selection is resolved against the
+                                    // current filter, not a stale list.
+                                    flush_filter_rebuild(
+                                        &filter,
+                                        tag_filter_mode,
+                                        &filter_state,
+                                        &base,
+                                        &mut rebuild,
+                                        &mut filtered,
+                                        &mut sel,
+                                        &mut filter_dirty,
+                                        &mut last_filter_update,
+                                    );
                                     break;
                                 }
                                 KeyCode::Backspace => {
@@ -1749,7 +1854,7 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                         &filter,
                                         &filter_state,
                                         tag_filter_mode,
-                                        last_filter_request.as_ref(),
+                                        rebuild.request.as_ref(),
                                     );
                                     if !filtered.is_empty() {
                                         sel.move_to_top();
@@ -1770,6 +1875,20 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     break;
                                 }
                                 KeyCode::Enter => {
+                                    // Flush a pending (debounced) filter rebuild
+                                    // so the selection is resolved against the
+                                    // current filter, not a stale list.
+                                    flush_filter_rebuild(
+                                        &filter,
+                                        tag_filter_mode,
+                                        &filter_state,
+                                        &base,
+                                        &mut rebuild,
+                                        &mut filtered,
+                                        &mut sel,
+                                        &mut filter_dirty,
+                                        &mut last_filter_update,
+                                    );
                                     // Run selected snippet (exit loop with selection)
                                     break;
                                 }
@@ -1778,6 +1897,24 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
                                     input_text = filter.clone();
                                 }
                                 KeyCode::Char('y') => {
+                                    // Flush a pending (debounced) filter rebuild
+                                    // before the copy reads `filtered`.
+                                    if flush_filter_rebuild(
+                                        &filter,
+                                        tag_filter_mode,
+                                        &filter_state,
+                                        &base,
+                                        &mut rebuild,
+                                        &mut filtered,
+                                        &mut sel,
+                                        &mut filter_dirty,
+                                        &mut last_filter_update,
+                                    ) {
+                                        // The visible list changed under the
+                                        // user: redraw it before they act on
+                                        // the copy.
+                                        needs_redraw = true;
+                                    }
                                     if sel.selected < filtered.len() {
                                         let idx = filtered[sel.selected];
                                         should_copy = Some(descriptions[idx].clone());
@@ -2051,6 +2188,143 @@ mod tests {
         let timeout = next_event_poll_timeout(true, Some(last_update), 35, false, None, 100);
 
         assert!(timeout <= Duration::from_millis(35));
+    }
+
+    /// Two-snippet fixture for the filter-rebuild helpers.
+    struct RebuildFixture {
+        all_display: Vec<String>,
+        all_display_lower: Vec<String>,
+        all_commands_lower: Vec<String>,
+        all_tags_search: Vec<String>,
+    }
+
+    impl RebuildFixture {
+        fn new() -> Self {
+            let descriptions = ["alpha".to_string(), "beta".to_string()];
+            let commands = ["echo alpha".to_string(), "echo beta".to_string()];
+            let tags: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+
+            let all_display: Vec<String> = descriptions
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("[{}]: {}", descriptions[i], commands[i]))
+                .collect();
+            let all_display_lower: Vec<String> =
+                all_display.iter().map(|d| d.to_lowercase()).collect();
+            let all_commands_lower: Vec<String> =
+                commands.iter().map(|c| c.to_lowercase()).collect();
+            let all_tags_search: Vec<String> = tags
+                .iter()
+                .map(|snippet_tags| snippet_tags.join("\n").to_lowercase())
+                .collect();
+
+            RebuildFixture {
+                all_display,
+                all_display_lower,
+                all_commands_lower,
+                all_tags_search,
+            }
+        }
+
+        fn base(&self) -> FilterRebuildBase<'_> {
+            FilterRebuildBase {
+                all_display: &self.all_display,
+                all_display_lower: &self.all_display_lower,
+                all_commands_lower: &self.all_commands_lower,
+                all_tags_search: &self.all_tags_search,
+                snippets: &[],
+                favorites_first: false,
+                usage: None,
+            }
+        }
+    }
+
+    #[test]
+    fn flush_filter_rebuild_applies_a_pending_broadening_edit() {
+        let fixture = RebuildFixture::new();
+        let base = fixture.base();
+        let filter_state = FilterState::default();
+        let mut rebuild = FilterRebuildState {
+            candidates: (0..base.all_display.len()).map(|i| (i, None)).collect(),
+            request: None,
+        };
+        let mut filtered: Vec<usize> = (0..base.all_display.len()).collect();
+        let mut sel = SelectState::new();
+
+        // Narrow filter: only the first snippet matches.
+        let mut filter = "alpha".to_string();
+        rebuild_filtered_list(
+            &filter,
+            false,
+            &filter_state,
+            &base,
+            &mut rebuild,
+            &mut filtered,
+            &mut sel,
+        );
+        assert_eq!(filtered, vec![0]);
+
+        // Backspace broadens the filter and arms the debounce window, so the
+        // rebuild is still pending and `filtered` holds the narrow list.
+        filter.clear();
+        let mut dirty = true;
+        let mut last_update = Some(Instant::now());
+        assert_eq!(filtered, vec![0], "precondition: the list is still stale");
+
+        // Enter must flush the pending rebuild before resolving the
+        // selection, otherwise the stale `filtered[0]` is used.
+        let flushed = flush_filter_rebuild(
+            &filter,
+            false,
+            &filter_state,
+            &base,
+            &mut rebuild,
+            &mut filtered,
+            &mut sel,
+            &mut dirty,
+            &mut last_update,
+        );
+
+        assert!(flushed, "the flush must report that it rebuilt the list");
+        assert_eq!(
+            filtered,
+            vec![0, 1],
+            "the flush must apply the pending rebuild"
+        );
+        assert!(!dirty, "the flush must clear the pending flag");
+        assert!(last_update.is_none(), "the flush must clear the deadline");
+    }
+
+    #[test]
+    fn flush_filter_rebuild_is_a_noop_without_a_pending_rebuild() {
+        let fixture = RebuildFixture::new();
+        let base = fixture.base();
+        let filter_state = FilterState::default();
+        let mut rebuild = FilterRebuildState {
+            candidates: (0..base.all_display.len()).map(|i| (i, None)).collect(),
+            request: None,
+        };
+        let mut filtered: Vec<usize> = (0..base.all_display.len()).collect();
+        let mut sel = SelectState::new();
+        let mut dirty = false;
+        let mut last_update: Option<Instant> = None;
+
+        // No pending rebuild: the flush must not touch the list.
+        let flushed = flush_filter_rebuild(
+            "alpha",
+            false,
+            &filter_state,
+            &base,
+            &mut rebuild,
+            &mut filtered,
+            &mut sel,
+            &mut dirty,
+            &mut last_update,
+        );
+
+        assert!(!flushed, "the flush must report that nothing was rebuilt");
+        assert_eq!(filtered, vec![0, 1]);
+        assert!(rebuild.request.is_none(), "no rebuild must have run");
     }
 
     #[test]

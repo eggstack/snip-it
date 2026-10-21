@@ -26,9 +26,9 @@ recovery side effects into a surface that must not have them:
 
 | Entry point | Library source | `ensure_library_mode()` | Use on |
 |---|---|---|---|
-| `resolve_selector_readonly()` — `src/selector.rs:623` | `library::readonly_library_sources()` (`:629`) | **no** | read paths: `snp get`, MCP, inspection |
-| `resolve_selector()` — `src/selector.rs:681` | `LibraryManager` (`:682`) | **yes** (`:683`) | mutating / recovery-owning commands |
-| `resolve_exact_target()` — `src/selector.rs:604` | delegates to `resolve_selector()` (`:611`) | **yes** (indirectly) | exact-mode `run` / `clip` / `edit` |
+| `resolve_selector_readonly()` — `src/selector.rs:645` | `library::readonly_library_sources()` (`:629`) | **no** | read paths: `snp get`, MCP, inspection |
+| `resolve_selector()` — `src/selector.rs:703` | `LibraryManager` (`:682`) | **yes** (`:683`) | mutating / recovery-owning commands |
+| `resolve_exact_target()` — `src/selector.rs:626` | delegates to `resolve_selector()` (`:611`) | **yes** (indirectly) | exact-mode `run` / `clip` / `edit` |
 
 `ensure_library_mode()` may create `libraries/`, copy a legacy single-file
 checkout, write `libraries.toml`, and bump the library generation. A read
@@ -74,7 +74,7 @@ distinct scopes and `None` is never silently widened.
 
 `"all"` is also a **reserved library name**: `validate_library_name`
 (`src/library/model.rs:213-223`) rejects it, and `create_library` enforces it
-(`src/library/manager.rs:366-367`), so `snp library create all` fails with
+(`src/library/manager.rs:379-380`), so `snp library create all` fails with
 
 > Invalid library name
 > Library name cannot be 'all' (reserved as the cross-library scope keyword). Use 'snp list --library all' to target every library.
@@ -86,7 +86,7 @@ instead of an error.
 
 ### `SnippetSelector` — field semantics
 
-`src/selector.rs:267-280`
+`src/selector.rs:289-302`
 
 ```rust
 pub struct SnippetSelector {
@@ -101,19 +101,19 @@ pub struct SnippetSelector {
 
 All fields are optional except `library` and `resolution`. At least one of
 `id`, `description_exact`, `command_exact`, `query` must be set — enforced by
-`validate()` (`src/selector.rs:326-338`), which errors with
+`validate()` (`src/selector.rs:348-360`), which errors with
 
 > No selector specified
 > Provide --id, --description-exact, --command-exact, or --query
 
 | Field | Match semantics | Implementation |
 |---|---|---|
-| `id` | **case-sensitive** byte equality on the whole ID | `s.id == id.as_str()` — `src/selector.rs:369` |
-| `description_exact` | **case-insensitive** ASCII equality of the whole description | `s.description.eq_ignore_ascii_case(desc)` — `src/selector.rs:400` |
-| `command_exact` | **case-insensitive** ASCII equality of the whole command | `s.command.eq_ignore_ascii_case(cmd)` — `src/selector.rs:410` |
-| `query` | fuzzy subsequence match over `searchable_text` | `src/selector.rs:418-419` |
+| `id` | **case-sensitive** byte equality on the whole ID | `s.id == id.as_str()` — `src/selector.rs:391` |
+| `description_exact` | **case-insensitive** ASCII equality of the whole description | `s.description.eq_ignore_ascii_case(desc)` — `src/selector.rs:422` |
+| `command_exact` | **case-insensitive** ASCII equality of the whole command | `s.command.eq_ignore_ascii_case(cmd)` — `src/selector.rs:432` |
+| `query` | fuzzy subsequence match over `searchable_text` | `src/selector.rs:440-441` |
 | `library` | scope: primary / named / all | `LibraryScope` — `src/selector.rs:48-77` |
-| `resolution` | what to do with multiple matches | `ResolutionPolicy` — `src/selector.rs:217-225` |
+| `resolution` | what to do with multiple matches | `ResolutionPolicy` — `src/selector.rs:239-247` |
 
 Note the asymmetry: **`id` is case-sensitive, description and command are
 case-insensitive.** This is the same rule MCP `snippet_get` must reproduce.
@@ -124,7 +124,7 @@ Builder methods: `new()` (`:284`), `with_id()` (`:296`), `with_description_exact
 
 ### `ResolutionPolicy`
 
-`src/selector.rs:215-225`
+`src/selector.rs:237-247`
 
 ```rust
 pub enum ResolutionPolicy {
@@ -137,7 +137,7 @@ pub enum ResolutionPolicy {
 
 ### `SelectionResult`
 
-`src/selector.rs:251-260`
+`src/selector.rs:273-282`
 
 ```rust
 pub enum SelectionResult {
@@ -154,7 +154,7 @@ clone a command body.
 
 ### `SnippetMatch` and `SnippetIdentity`
 
-`src/selector.rs:229-247`
+`src/selector.rs:251-269`
 
 ```rust
 pub struct SnippetMatch {
@@ -181,7 +181,7 @@ description, command, and the owning library name.
 
 ### `resolve_exact_target` — the mutating exact path
 
-`src/selector.rs:604-612`
+`src/selector.rs:626-634`
 
 ```rust
 pub fn resolve_exact_target(
@@ -195,7 +195,7 @@ pub fn resolve_exact_target(
 }
 ```
 
-`exact_selector()` (`src/selector.rs:579-597`) builds the selector with
+`exact_selector()` (`src/selector.rs:601-619`) builds the selector with
 `ResolutionPolicy::Unique` and `LibraryScope::from_owned_arg(library)`.
 This is the single canonical constructor for the exact-mode `run`, `clip`,
 and `edit` paths.
@@ -207,14 +207,14 @@ means `resolve_exact_target` must never be used from a read-only surface.
 
 ### `resolve_selector_readonly` — the side-effect-free path
 
-`src/selector.rs:623-674`
+`src/selector.rs:645-696`
 
 - Maps the scope to the library-layer argument
   (`Primary → None`, `Named(n) → n`, `AllLibraries → Some("all")`) at
   `:624-628`.
 - Calls `crate::library::readonly_library_sources(scope_arg.as_deref())`
   (`:629`) — the canonical resolver in
-  `src/library/manager.rs:248-289`. It performs **no migration and creates no
+  `src/library/manager.rs:261-302`. It performs **no migration and creates no
   files or directories**; `None` → primary (or the legacy file in
   single-file mode), `Some("all")` → every visible library,
   `Some(name)` → that library or `library_not_found`.
@@ -229,7 +229,7 @@ means `resolve_exact_target` must never be used from a read-only surface.
 
 ### `resolve_selector` — the mutating path
 
-`src/selector.rs:681-737`
+`src/selector.rs:703-759`
 
 - `LibraryManager::new()` + `ensure_library_mode()` (`:682-683`) — this is
   the step that can migrate, create, and rewrite metadata.
@@ -262,9 +262,9 @@ fails with a *wrong* message.
 | `snp get` | `exact_selector()` + `resolve_selector_readonly()` — `src/commands/get_cmd.rs:149,168` | **works** |
 | `snp list` | `commands::load_readonly_snippets()` → `library::readonly_library_sources()` — `src/commands/list_cmd.rs:71` | **works** |
 | MCP (`snippets_list`, `snippets_search`, `snippet_get`) | list/search go through `load_snippets()` → `library::readonly_library_sources()` (`src/mcp/tools.rs:64,77,253-254`); `snippet_get` uses `LibraryScope::from_filter_arg()` + `resolve_selector_readonly()` (`src/mcp/tools.rs:146,160`) | **works** |
-| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` → `resolve_selector()` — `src/selector.rs:604` | **works** |
+| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` → `resolve_selector()` — `src/selector.rs:626` | **works** |
 | `snp search` | explicit guard — `src/commands/search_cmd.rs:37-44` | **rejected** (see below) |
-| `snp new`, `snp edit` (single-library mutating path) | `commands::get_library_path()` — `src/commands/mod.rs:91-115` | **fails** with `library_not_found` |
+| `snp new`, `snp edit` (single-library mutating path) | `commands::get_library_path()` — `src/commands/mod.rs:91-157` | **fails** with `library_not_found` |
 
 ### Why `snp search --library all` is rejected
 
@@ -279,11 +279,11 @@ cross-library scope has no coherent write target. Before this guard, the
 lookup failed with `"Library 'all' does not exist"`, which was false —
 `all` is the scope keyword, and it *does* work for `snp get`, `snp list`, and
 MCP. `SnipError::Runtime` maps to exit code **1**
-(`src/main.rs:1026-1032`).
+(`src/main.rs:1063-1069`).
 
 ### Why `commands::get_library_path` does not understand `all`
 
-`src/commands/mod.rs:91-115` resolves a library by **filename** and never
+`src/commands/mod.rs:91-157` resolves a library by **filename** and never
 consults `LibraryScope`:
 
 ```rust
@@ -302,7 +302,7 @@ commands (`snp new`, `snp edit`). Do not route a scope through it.
 ### `snp list` resolves read-only
 
 `snp list` does **not** go through `get_library_path`. It calls
-`commands::load_readonly_snippets()` (`src/commands/mod.rs:127-147`), which
+`commands::load_readonly_snippets()` (`src/commands/mod.rs:169-189`), which
 uses `library::readonly_library_sources()` and concatenates the snippets of
 every resolved source in resolution order.
 
@@ -336,7 +336,7 @@ pub struct SearchFields {
 
 ### `searchable_text`
 
-`src/selector.rs:135-158`
+`src/selector.rs:142-180`
 
 Builds the canonical searchable text for a snippet: `description` and
 `command` **always**, `tags` (space-joined) when `include_tags`, and
@@ -346,7 +346,7 @@ fields are skipped; parts are joined with a single space.
 
 ### `score_fuzzy_matches`
 
-`src/selector.rs:166-198`
+`src/selector.rs:188-220`
 
 Returns `(matched_indices, scores)` where indices are positions in the
 input slice and scores are `SkimMatcherV2` scores.
@@ -360,7 +360,7 @@ input slice and scores are `SkimMatcherV2` scores.
 
 ### `matches_required_tags`
 
-`src/selector.rs:202-212` — every required tag must be present, compared
+`src/selector.rs:224-234` — every required tag must be present, compared
 ASCII case-insensitively; an empty requirement list matches everything.
 This backs MCP's explicit `tags` parameter only.
 
@@ -373,7 +373,7 @@ surfaces call `shared_fuzzy_matcher().fuzzy_match()` directly on the same
 
 | Surface | Entry point | Field set | Scorer |
 |---|---|---|---|
-| `snp get --query` | `src/selector.rs:418-419` | `SearchFields::fuzzy_default()` — description + command + tags | `score_fuzzy_matches()` (`:166`) |
+| `snp get --query` | `src/selector.rs:440-441` | `SearchFields::fuzzy_default()` — description + command + tags | `score_fuzzy_matches()` (`:166`) |
 | `snp list --filter` | `src/commands/list_cmd.rs:86-107` | `include_tags: true`, `include_output: --search-output` (`:80-83`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:100`) |
 | MCP `snippets_search` | `src/mcp/tools.rs:74-127` | `include_tags: true`, `include_output: search_output` (`:79-82`) | `shared_fuzzy_matcher().fuzzy_match()` inline (`:103`) |
 
@@ -381,7 +381,7 @@ Consequences a reviewer should hold onto:
 
 - `snp get --query` has **no** `--search-output` flag — `output`/notes are
   never searched on that surface, and `SearchFields::fuzzy_default()` is
-  hard-wired at `src/selector.rs:419`.
+  hard-wired at `src/selector.rs:441`.
 - `output`/notes join **only** via `SearchFields::with_output()`, i.e.
   `snp list --search-output` and MCP `search_output: true`.
 - `folders`, `favorite`, sync metadata (`id`, `device_id`, timestamps,
@@ -401,7 +401,7 @@ the CLI flag and the MCP parameter together, and extend
 
 ## Resolution priority
 
-`SnippetSelector::resolve()` — `src/selector.rs:354-454` — applies
+`SnippetSelector::resolve()` — `src/selector.rs:376-476` — applies
 selectors in strict priority order. **Only the first applicable field is
 evaluated**; if `id` is set, description, command, and query are ignored.
 
@@ -426,11 +426,11 @@ Deleted snippets are excluded from every mode, including ID lookup
 
 ## Aggregate ordering
 
-`finish_aggregate()` — `src/selector.rs:536-571` — is the single definition
+`finish_aggregate()` — `src/selector.rs:558-593` — is the single definition
 of cross-library behavior. It first sorts with `sort_matches()`, then
 applies the policy.
 
-`sort_matches()` — `src/selector.rs:519-527` — orders by
+`sort_matches()` — `src/selector.rs:541-549` — orders by
 **library name (lowercased) → description (lowercased) → snippet ID**.
 `sort_by_cached_key` evaluates each lowercased key once instead of
 re-lowercasing on every comparison.
@@ -448,7 +448,7 @@ resolver produced it.
 | `snp get` | `src/commands/get_cmd.rs:149,168` | `resolve_selector_readonly` | primary / named / all |
 | `snp list` | `src/commands/list_cmd.rs:71` | `load_readonly_snippets` → `readonly_library_sources` | primary / named / all |
 | MCP `snippet_get` | `src/mcp/tools.rs:145-160` | `resolve_selector_readonly` | primary / named / all |
-| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` — `src/selector.rs:604`, called from `src/main.rs:504,550,638` | `resolve_selector` (mutating) | primary / named / all |
+| exact-mode `run` / `clip` / `edit` | `resolve_exact_target()` — `src/selector.rs:626`, called from `src/main.rs:530,550,638` | `resolve_selector` (mutating) | primary / named / all |
 | `snp search` | `src/commands/search_cmd.rs:37-44` | interactive TUI | primary / named only |
 
 `snp get` reads the requested `--resolution` policy
@@ -493,9 +493,9 @@ MCP `snippet_get` requires **exactly one** of `id` (case-sensitive),
 | `src/commands/get_cmd.rs:149,168` | `snp get` builds a selector and resolves read-only |
 | `src/commands/list_cmd.rs:65-107` | `snp list` read-only load + inline fuzzy filter |
 | `src/commands/search_cmd.rs:37-44` | The `snp search --library all` rejection |
-| `src/commands/mod.rs:91-115` | `get_library_path` — mutating, single-library, no `all` |
-| `src/commands/mod.rs:127-147` | `load_readonly_snippets` — read-only multi-library load |
-| `src/library/manager.rs:248-289` | `resolve_readonly_sources` — the library-layer scope resolver |
+| `src/commands/mod.rs:91-157` | `get_library_path` — mutating, single-library, no `all` |
+| `src/commands/mod.rs:169-189` | `load_readonly_snippets` — read-only multi-library load |
+| `src/library/manager.rs:261-302` | `resolve_readonly_sources` — the library-layer scope resolver |
 | `src/library/model.rs:154-161` | `library_not_found` — the message `get_library_path` produces for `all` |
 | `src/library/model.rs:179-225` | `validate_library_name` — `all` is reserved |
 | `src/mcp/tools.rs:74-160` | MCP `snippets_search` / `snippet_get` |

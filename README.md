@@ -11,10 +11,9 @@ short scripts. Save commands as plain TOML, find them with fuzzy search, fill in
 variables at use time, and run, copy, inspect, or insert them from a
 keyboard-driven TUI.
 
-It is inspired by [pet](https://github.com/knqyf263/pet) and keeps pet's simple
-editable snippet format. Snip-it adds libraries, richer TUI navigation, shell
-integration, themes, local usage metadata, and optional self-hosted encrypted
-synchronization.
+Inspired by [pet](https://github.com/knqyf263/pet) — same simple editable
+snippet format — with libraries, richer TUI navigation, shell integration,
+themes, and optional self-hosted encrypted sync.
 
 > Commands chosen with `snp run` are executed through your shell exactly as
 > stored after variable expansion. Snip-it is a snippet manager, not a sandbox or
@@ -37,18 +36,16 @@ Get-Content .\install-snip-it.ps1
 Or from crates.io (needs Rust 1.94+):
 
 ```bash
-cargo install snp-it
+cargo install snip-it
 ```
 
-The binary lands at `target/release/snp` (`snp.exe` on Windows). The installer
-also takes `--server` for `snip-sync` and `--both`; see
+The installer also takes `--server` for `snip-sync` and `--both`; see
 [packaging/README.md](packaging/README.md) for pinned installs and the
-verification/fallback contract. A Homebrew-managed `snp` stays owned by
-Homebrew — use `brew upgrade snip-it`.
+verification/fallback contract.
 
 ## Quick start
 
-Store a snippet, then use it. Variables are prompted for at use time.
+**Store a snippet.**
 
 ```bash
 snp new 'git push origin <branch=main>' --description 'Push a branch' --tags git,release
@@ -59,7 +56,7 @@ Command> git push origin <branch=main>
 Snippet added
 ```
 
-Browse what you have stored:
+**See what you have stored.**
 
 ```bash
 snp list
@@ -71,8 +68,9 @@ Push a branch: git push origin <branch=main>
 Tags: git, release
 ```
 
-Then pick one interactively — `run` executes it through your shell, `clip`
-copies it, and `search` inspects it:
+**Use it.** All three open the same fuzzy-search TUI: `run` executes the
+snippet through your shell, `clip` copies it to the clipboard, `search`
+inspects it.
 
 ```bash
 snp run
@@ -80,12 +78,12 @@ snp clip
 snp search
 ```
 
-Variables come in three forms:
+Variables are prompted for at use time and come in three forms:
 
 ```text
-ssh <user>@<host>                              # prompt for both
-git checkout <branch=main>                     # prompt, pre-filled default
-kubectl config use-context <ctx=|_dev_||_prod_|>   # pet-compatible choice
+ssh <user>@<host>                                 # prompt for both
+git checkout <branch=main>                        # prompt, pre-filled default
+kubectl config use-context <ctx=|_dev_||_prod_|>  # pet-compatible choice
 ```
 
 ## Scripting
@@ -101,7 +99,7 @@ snp get --query 'push a branch' --field command
 git push origin <branch=main>
 ```
 
-`--json` returns the full record, including the expanded command and the
+`--json` returns the whole record, including the expanded command and the
 snippet's stable ID:
 
 ```bash
@@ -115,14 +113,18 @@ snp get --query 'push a branch' --json
   "description": "Push a branch",
   "command": "git push origin <branch=main>",
   "expanded": "git push origin main",
-  "tags": ["git", "release"],
+  "tags": [
+    "git",
+    "release"
+  ],
   "library": "snippets",
   "library_id": ""
 }
 ```
 
 `snp get` exits **3** when nothing matches and **5** when a query matches more
-than one snippet. The full exit-code table is in
+than one snippet. For machine-readable listings use `snp list --json` or
+`snp list --csv`. The full exit-code table is in
 [docs/EXIT_CODES.md](docs/EXIT_CODES.md).
 
 ## Libraries
@@ -138,7 +140,8 @@ snp list --library work
 ```
 
 `--library all` targets every library at once. `all` is a reserved name and
-cannot be used as a library name.
+cannot be used as a library name. See
+[docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md).
 
 ## Shell integration
 
@@ -150,45 +153,22 @@ snp shell init bash >> ~/.bashrc
 snp doctor --check-shell bash
 ```
 
-## Optional extras
+## Also available
 
-**Import from [pet](https://github.com/knqyf263/pet).** Inspect first, then
-merge:
+| Feature | Command | Detail |
+|---------|---------|--------|
+| Import from [pet](https://github.com/knqyf263/pet) | `snp import pet <file> --dry-run` | [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) |
+| Self-hosted encrypted sync | `snp register --server <url>` then `snp sync run` | [snip-sync/README.md](snip-sync/README.md) |
+| Auto-sync after local edits | `snp sync config --auto-sync on` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#auto-sync) |
+| Coding agents (MCP) | `snp mcp instructions claude` | [docs/MCP.md](docs/MCP.md) |
+| Themes | press `e` in the TUI, or edit `themes.toml` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#themes) |
+| Diagnostics | `snp doctor --library <name>` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting-and-recovery) |
 
-```bash
-snp doctor --pet-file ~/.config/pet/snippets.toml   # inspect
-snp import pet ~/.config/pet/snippets.toml --dry-run # preview, writes nothing
-snp import pet ~/.config/pet/snippets.toml --merge   # merge into the library
-```
-
-The behavioral matrix is in [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md).
-
-**Self-hosted sync.** The client encrypts snippet content (description,
-command, tags) with AES-256-GCM before sending it, and the server stores only
-ciphertext for that content. Sync metadata — snippet IDs, timestamps, device
-ID, and deletion markers — travels in the clear, and the server sees your API
-key as a bearer token. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for
-the trust boundary.
-
-```bash
-cargo install snip-sync
-snip-sync init --skip-cert
-snp register --server http://127.0.0.1:50051
-snp sync run --push-only
-```
-
-Auto-sync after local mutations is off by default — enable it with
-`snp sync config --auto-sync on`. Deployment and reverse-proxy setup:
-[snip-sync/README.md](snip-sync/README.md).
-
-**Coding agents (MCP).** `snp mcp serve` exposes your snippets to a local
-agent over stdio. It binds no port, is read-only, and never executes stored
-commands.
-
-```bash
-snp mcp instructions claude    # or codex, vscode, cursor, opencode, zed
-snp mcp install claude         # noninteractive registration where supported
-```
+Sync encrypts snippet content (description, command, tags) with AES-256-GCM
+before sending it, and the server stores only ciphertext for that content. Sync
+metadata — snippet IDs, timestamps, device ID, and deletion markers — travels
+in the clear, and the server sees your API key as a bearer token. See
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the trust boundary.
 
 ## Configuration
 
@@ -213,10 +193,6 @@ paths, environment variables, and auto-sync settings.
 
 Start with the [docs index](docs/README.md).
 
-Contributors and reviewers should start with
-[architecture/overview.md](architecture/overview.md) — the module map, the
-cross-cutting invariants, and the index of 61 per-component deep dives.
-
 | Document | Subject |
 |----------|---------|
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Task-oriented guide: libraries, variables, pet import, shell integration, themes, sync, auto-sync, recovery |
@@ -226,8 +202,13 @@ cross-cutting invariants, and the index of 61 per-component deep dives.
 | [docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md) | How `--library` resolves |
 | [docs/MCP.md](docs/MCP.md) | The read-only MCP server and its tools |
 | [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Behavioral matrix vs. `pet` import |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Sync trust boundary and what is not encrypted |
 | [docs/IDENTITY_CONTRACT.md](docs/IDENTITY_CONTRACT.md) | How snippet IDs are derived |
 | [SECURITY.md](SECURITY.md) | Reporting a vulnerability and current posture |
+
+Contributors and reviewers should start with
+[architecture/overview.md](architecture/overview.md) — the module map, the
+cross-cutting invariants, and the index of 61 per-component deep dives.
 
 ## License
 

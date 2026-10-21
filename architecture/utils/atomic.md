@@ -346,11 +346,11 @@ computed **from the live file on disk**, not from a source buffer.
 | Caller | Content | Temp prefix | Source |
 |--------|---------|-------------|--------|
 | `write_library_file` | library file content | caller's | `src/library/persistence.rs:16-20` |
-| `save_library_internal` | `toml::to_string_pretty` of the snippet library | library file stem, else `"snippets"` | `src/library/persistence.rs:286-290` |
-| `save_snippets` | `toml::to_string_pretty` of the config | config file stem, else `"config"` | `src/commands/mod.rs:227-231` |
-| `LibraryManager::save_config` | `toml::to_string_pretty` of `libraries.toml` | `"libraries"` | `src/library/manager.rs:772` |
+| `save_library_internal` | `toml::to_string_pretty` of the snippet library | library file stem, else `"snippets"` | `src/library/persistence.rs:327-331` |
+| `save_snippets` | `toml::to_string_pretty` of the config | config file stem, else `"config"` | `src/commands/mod.rs:269-273` |
+| `LibraryManager::save_config` | `toml::to_string_pretty` of `libraries.toml` | `"libraries"` | `src/library/manager.rs:803` |
 | Transaction journals | journal TOML | `"txn"` | `src/transaction.rs:1405`, `:1415` |
-| Sync settings | sync settings TOML | `"sync"` | `src/config/sync_settings.rs:488` |
+| Sync settings | sync settings TOML | `"sync"` | `src/config/sync_settings.rs:496` |
 | Import report | JSON report | `"import-report"` | `src/commands/import_cmd.rs:549` |
 | Backup manifest | manifest TOML | `"manifest"` | `src/commands/backup_archive.rs:318` |
 | Migration writes | minimal / updated config | `"migration"` | `src/migration.rs:160`, `:177` |
@@ -361,7 +361,7 @@ computed **from the live file on disk**, not from a source buffer.
 | Caller | Class | Source |
 |--------|-------|--------|
 | Transaction rollback — restore the original file bytes | `DurableUserData` | `src/transaction.rs:2250-2253` |
-| `snp select --output` — write the selected command | `DurableUserData` | `src/commands/select_cmd.rs:111-115` |
+| `snp select --output` — write the selected command | `DurableUserData` | `src/commands/select_cmd.rs:119-123` |
 | Sync recovery marker — record the pending sync intent | `DurableUserData` | `src/sync_commands.rs:58-62` |
 | Restore — install a staged library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:918` |
 | Restore — install a restored non-library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:1408`, `:1471` |

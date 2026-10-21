@@ -531,7 +531,7 @@ naming the real symbol:
 |------|-----|-----|
 | `src/auto_sync/execution_lock.rs:177,186` | `[`crate::utils::process`]` | `` `utils::process::is_process_alive` `` |
 | `src/commands/validate_cmd.rs:668` | `[`LibraryManager::new`]` | `` `LibraryManager::new` `` |
-| `src/selector.rs:618` | `[`crate::library::readonly_library_sources`]` | `` `library::readonly_library_sources` `` |
+| `src/selector.rs:640` | `[`crate::library::readonly_library_sources`]` | `` `library::readonly_library_sources` `` |
 
 Rule of thumb: `utils`, `library`, `commands`, and most other modules are
 `pub(crate)`, so **only items re-exported from `src/lib.rs` may be

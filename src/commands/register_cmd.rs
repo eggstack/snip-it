@@ -52,14 +52,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             }
 
             println!("Registration successful!");
-            let masked_key = if api_key.len() > 8 {
-                let chars: Vec<char> = api_key.chars().collect();
-                let prefix: String = chars.iter().take(4).collect();
-                let suffix: String = chars.iter().skip(chars.len() - 4).collect();
-                format!("{prefix}...{suffix}")
-            } else {
-                "****".to_string()
-            };
+            let masked_key = mask_api_key(&api_key);
             println!("API key: {masked_key}");
             println!("(Note: API key is stored in the OS keychain when available.)");
             println!("Device ID: {device_id}");
@@ -76,4 +69,70 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
         }
     }
     Ok(())
+}
+
+/// Masks an API key for display: the first 4 and last 4 characters.
+///
+/// The comparison and the arithmetic both use **character** counts, never
+/// byte counts. The API key is server-supplied and therefore arbitrary
+/// (`snp register --server <url>` accepts any server), so a short multibyte
+/// key used to slip past a byte-length guard while the character arithmetic
+/// printed the whole secret — or underflowed `chars.len() - 4` and panicked
+/// in debug builds.
+fn mask_api_key(api_key: &str) -> String {
+    let chars: Vec<char> = api_key.chars().collect();
+    if chars.len() > 8 {
+        let prefix: String = chars.iter().take(4).collect();
+        // `saturating_sub` keeps the arithmetic non-underflowing even if the
+        // guard above is ever relaxed.
+        let suffix: String = chars.iter().skip(chars.len().saturating_sub(4)).collect();
+        format!("{prefix}...{suffix}")
+    } else {
+        "****".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_api_key_keeps_shape_for_normal_keys() {
+        assert_eq!(mask_api_key("0123456789abcdef"), "0123...cdef");
+        // A real (UUID-shaped) key is unaffected by the fix.
+        let uuid = "6f1c2f0e-6b1a-4a6e-9a2f-1c2d3e4f5a6b";
+        assert_eq!(mask_api_key(uuid), "6f1c...5a6b");
+    }
+
+    #[test]
+    fn mask_api_key_never_reveals_a_short_multibyte_key() {
+        // 4 characters but 16 bytes: the byte-length guard used to pass while
+        // the character arithmetic printed the complete key.
+        let key = "🔑🔑🔑🔑";
+        let masked = mask_api_key(key);
+        assert_eq!(masked, "****");
+        assert!(!masked.contains(key), "mask leaked the full key: {masked}");
+
+        // 3 characters: the old code underflowed `chars.len() - 4`.
+        let key = "🔑🔑🔑";
+        let masked = mask_api_key(key);
+        assert_eq!(masked, "****");
+        assert!(!masked.contains(key), "mask leaked the full key: {masked}");
+    }
+
+    #[test]
+    fn mask_api_key_never_reveals_a_long_multibyte_key() {
+        // 9 characters: masked, but the full key must not appear.
+        let key = "🔑🔑🔑🔑🔑🔑🔑🔑🔑";
+        let masked = mask_api_key(key);
+        assert_eq!(masked, "🔑🔑🔑🔑...🔑🔑🔑🔑");
+        assert!(!masked.contains(key), "mask leaked the full key: {masked}");
+    }
+
+    #[test]
+    fn mask_api_key_masks_short_ascii_keys() {
+        assert_eq!(mask_api_key("short"), "****");
+        assert_eq!(mask_api_key(""), "****");
+        assert_eq!(mask_api_key("12345678"), "****");
+    }
 }

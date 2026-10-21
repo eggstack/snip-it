@@ -25,8 +25,8 @@ mutate (see *The delete shortcut* below).
 | `--favorites-first` | bool | `false` | Favorites rank first |
 
 No exact-selector flags (unlike `run`/`clip`/`get`/`edit`); no
-output-format flags — the detail block is fixed. `src/main.rs:586-599`
-passes `config: None` (`src/main.rs:595`); the `--config` derivation below
+output-format flags — the detail block is fixed. `src/main.rs:612-625`
+passes `config: None` (`src/main.rs:621`); the `--config` derivation below
 lives inside `run`.
 
 ## Flow / steps
@@ -72,7 +72,7 @@ true.
 
 For every other value, `search` passes the name straight into
 `run_snippet_selection`, which resolves it through the **mutating**
-`get_library_path` (`src/commands/mod.rs:364`, `src/commands/mod.rs:91`).
+`get_library_path` (`src/commands/mod.rs:467`, `src/commands/mod.rs:91`).
 
 ## Mutation vs read-only
 
@@ -88,20 +88,20 @@ of search itself.
 None of its own. `do_sync` flows into `run_snippet_selection`, which
 performs the trailing `run_explicit_sync` after a selection (and
 `notify_mutation(SnippetDelete, User)` after a delete when `do_sync`
-is false, `src/commands/mod.rs:444-448`). Search never notifies by
+is false, `src/commands/mod.rs:547-551`). Search never notifies by
 itself.
 
-`src/main.rs:955` classifies `Commands::Search(_)` as a mutation command
+`src/main.rs:992` classifies `Commands::Search(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`), because the
 delete shortcut can mutate.
 
 ## Tokio runtime
 
 `search` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:597` passes
+but only for `--sync`. `src/main.rs:623` passes
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
 `--sync` is set and `None` otherwise. `run_snippet_selection`
-(`src/commands/mod.rs:353-362`) errors with
+(`src/commands/mod.rs:456-465`) errors with
 `runtime_error("sync requested but no runtime")` if `do_sync` is true and
 the runtime is `None`.
 
@@ -143,7 +143,7 @@ mutate despite search itself being display-only — review UIs that wrap
   reports a library-not-found error.
 - `search` requires a tty. `ui::select_snippet` returns an
   `io::ErrorKind::Unsupported` error when stdin or stdout is not a
-  terminal (`src/ui/mod.rs:533-540`).
+  terminal (`src/ui/mod.rs:648-655`).
 
 ## Testing
 
@@ -163,11 +163,11 @@ alternatives.
 - `src/selector.rs` — `LibraryScope::from_filter_arg`, the owner of the
   `all` keyword.
 - `src/ui/mod.rs` — `select_snippet` and the tty guard.
-- `src/main.rs` — dispatch (`src/main.rs:586-599`).
+- `src/main.rs` — dispatch (`src/main.rs:612-625`).
 
 ## File / line references
 
 - `SearchArgs`: `src/commands/search_cmd.rs:7`; `run`: `:24`
 - `all` guard: `:37-44`; `--config` derivation: `:50-57`
-- Shared loop: `src/commands/mod.rs:338`
-- Dispatch: `src/main.rs:586-599`
+- Shared loop: `src/commands/mod.rs:399`
+- Dispatch: `src/main.rs:612-625`

@@ -26,8 +26,8 @@ pub struct CronArgs {
 }
 ```
 
-`snp cron` (alias `cr`) — `src/main.rs:114-116`, dispatched at
-`src/main.rs:724-725`.
+`snp cron` (alias `cr`) — `src/main.rs:140-142`, dispatched at
+`src/main.rs:761-762`.
 
 | Flag | Type | Default | Behavior |
 |------|------|---------|----------|
@@ -142,9 +142,9 @@ The crontab entry is not a snippet, so there is nothing to attribute an
 audit entry to — but the practical consequence is that **this clipboard
 write leaves no trace in the audit log and no usage-index entry**. The
 same is true of the other direct `copy_to_clipboard_auto` call site in
-the TUI's visual-range multi-select (`src/ui/mod.rs:1642`), which
+the TUI's visual-range multi-select (`src/ui/mod.rs:1733`), which
 additionally audit-logs only the *first* row of the range
-(`src/ui/mod.rs:1657`). See [keybindings_cmd.md](keybindings_cmd.md).
+(`src/ui/mod.rs:1748`). See [keybindings_cmd.md](keybindings_cmd.md).
 
 `copy_to_clipboard_auto` also consults `clipboard_auto_clear_seconds` from
 `sync.toml` and, when set, **schedules a clipboard wipe** after that
@@ -163,13 +163,13 @@ possible is the clipboard (plus a possible scheduled clipboard clear).
 ## Tokio runtime
 
 None. `snp cron` never touches the global `RUNTIME`
-(`src/main.rs:22-27`) — it is entirely synchronous. `AGENTS.md` lists the
+(`src/main.rs:29-35`) — it is entirely synchronous. `AGENTS.md` lists the
 runtime-owning commands as `run`, `clip`, `search`, `sync`, `register`,
 `premade`, and `update`; `cron` is not among them.
 
 Startup policy: `Commands::Cron(_)` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:970-972`) — generating a cron
+`StartupServices::Logging` (`src/main.rs:1007-1009`) — generating a cron
 entry does not reschedule pending auto-sync work.
 
 ## Auto-sync trigger
@@ -181,7 +181,7 @@ pending marker itself; it does not create a new pending intent.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1026-1032`).
+exit **1** (`src/main.rs:1063-1069`).
 
 | Situation | Result |
 |-----------|--------|
@@ -216,7 +216,7 @@ With a spaced install path, the binary field renders quoted:
 | Path | Role |
 |------|------|
 | `src/commands/cron_cmd.rs` | `CronArgs`, `shell_escape_path`, `binary_path`, `make_cron_entry`, `run` |
-| `src/main.rs:114-116`, `:724-725` | Clap wiring and dispatch |
+| `src/main.rs:140-142`, `:724-725` | Clap wiring and dispatch |
 | `src/clipboard.rs:166-169` | `copy_to_clipboard_auto` (auto-clear aware) |
 | `src/commands/clip_cmd.rs:40-49` | The auditing copy path that `cron` bypasses |
 | `src/commands/sync_cmd.rs:188-210` | The execution lock the generated entry contends for |

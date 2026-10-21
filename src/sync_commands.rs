@@ -1239,6 +1239,15 @@ fn overwritten_by_remote(local: &Snippets, server_snippets: &[ProtoSnippet]) -> 
     server_snippets
         .iter()
         .filter_map(|server_snip| {
+            // A remote tombstone is a deletion, not an overwrite: the merge
+            // keeps the record deleted, so nothing was replaced by another
+            // device. `choose_version` reports `Remote` for
+            // `(local live, remote deleted)`, so the tombstone has to be
+            // excluded here or every remote deletion is counted as a
+            // conflict.
+            if server_snip.deleted {
+                return None;
+            }
             let local_snip = local_by_id.get(&server_snip.id)?;
             matches!(
                 choose_version(local_snip, server_snip),
@@ -1782,6 +1791,22 @@ mod tests {
             folders: vec![],
         };
         let server = vec![make_server_snippet("9", "new", "echo 9", 900)];
+
+        assert!(overwritten_by_remote(&local, &server).is_empty());
+    }
+
+    #[test]
+    fn test_overwritten_by_remote_excludes_remote_tombstone() {
+        // A remote deletion wins the merge (no resurrection), but nothing was
+        // overwritten: the tombstone must not be reported as a conflict.
+        let local = Snippets {
+            snippets: vec![make_local_snippet("1", "local", "echo 1", 500)],
+            folders: vec![],
+        };
+        let server = vec![ProtoSnippet {
+            deleted: true,
+            ..make_server_snippet("1", "local", "echo 1", 200)
+        }];
 
         assert!(overwritten_by_remote(&local, &server).is_empty());
     }

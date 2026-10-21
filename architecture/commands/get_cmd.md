@@ -13,7 +13,7 @@ of four output modes. Shares `selector::searchable_text` parity with
 
 This is the machine-facing read path: it is the recommended spelling for
 scripts and CI, where the TUI is unavailable (see the tty guard in
-`src/ui/mod.rs:533-540`).
+`src/ui/mod.rs:648-655`).
 
 ## CLI surface
 
@@ -71,17 +71,17 @@ with `schema: 1`.
 
 ## Read-only guarantee
 
-`resolve_selector_readonly` (`src/selector.rs:623`) consumes
-`library::readonly_library_sources` (`src/selector.rs:629`), which performs
+`resolve_selector_readonly` (`src/selector.rs:645`) consumes
+`library::readonly_library_sources` (`src/selector.rs:651`), which performs
 no migration and creates no files or directories. It never calls
 `ensure_library_mode()` — contrast `resolve_selector`
-(`src/selector.rs:681`), which does (`src/selector.rs:683`) and is used
+(`src/selector.rs:703`), which does (`src/selector.rs:705`) and is used
 only by the exact-selector `run`/`clip`/`edit` paths.
 
 `get` never calls `gate_mutation_on_interrupted_transactions()`; it takes
 no lock and never saves.
 
-`src/main.rs:896` classifies `Commands::Get(_)` under
+`src/main.rs:933` classifies `Commands::Get(_)` under
 `StartupRecoveryPolicy::SuppressReadOnly` + `StartupServices::Minimal`, so
 startup recovery is suppressed and no network service is started.
 
@@ -89,24 +89,24 @@ startup recovery is suppressed and no network service is started.
 
 `--library all` is supported by `get`. The literal `"all"` is mapped by
 `LibraryScope::from_filter_arg` (`src/selector.rs:65`) inside
-`exact_selector` (`src/selector.rs:586`) — the keyword owner for the
+`exact_selector` (`src/selector.rs:608`) — the keyword owner for the
 selector paths — and `resolve_selector_readonly` then hands the same
 literal to `readonly_library_sources`
-(`src/library/manager.rs:278`), so it means the same thing as on
+(`src/library/manager.rs:291`), so it means the same thing as on
 `snp list`, exact-mode `run`/`clip`/`edit`, and MCP.
 
 Resolution semantics of `resolve_selector_readonly`
-(`src/selector.rs:623-674`):
+(`src/selector.rs:645-696`):
 
 | `--library` | Result |
 |-------------|--------|
-| absent (`Primary`) | primary library; if no visible source, `runtime_error("No primary library")` (`src/selector.rs:633-638`) |
-| `all` (`AllLibraries`) | every visible library; with none visible → `NotFound` (`src/selector.rs:639`) |
-| a name (`Named`) | that named library; unknown name → `library_not_found`; no visible libraries → `NotFound` (`src/selector.rs:640-644`) |
+| absent (`Primary`) | primary library; if no visible source, `runtime_error("No primary library")` (`src/selector.rs:655-660`) |
+| `all` (`AllLibraries`) | every visible library; with none visible → `NotFound` (`src/selector.rs:661`) |
+| a name (`Named`) | that named library; unknown name → `library_not_found`; no visible libraries → `NotFound` (`src/selector.rs:662-666`) |
 
 With more than one source, matches are collected per library under
 `ResolutionPolicy::All` and then aggregated with the caller's real policy
-(`src/selector.rs:654-673`).
+(`src/selector.rs:676-695`).
 
 A library actually *named* `all` can no longer be created:
 `validate_library_name` rejects the reserved name
@@ -129,7 +129,7 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - Usage errors (no selector, conflicting modes, bad `--var`) →
   `runtime_error` (exit 1/2 family).
 - JSON serialization failure → `runtime_error` (`get_cmd.rs:224-227`).
-- `src/main.rs:842-857` returns the `CliOutcome` directly.
+- `src/main.rs:879-894` returns the `CliOutcome` directly.
 
 ## Key invariants
 
@@ -170,7 +170,7 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - `src/library/manager.rs` — `readonly_library_sources`, the read-only
   scope resolver.
 - `src/outcome.rs` — `CliOutcome` and the exit-code table.
-- `src/main.rs` — dispatch (`src/main.rs:842-857`).
+- `src/main.rs` — dispatch (`src/main.rs:879-894`).
 
 ## File / line references
 

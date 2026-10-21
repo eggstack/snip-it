@@ -12,6 +12,7 @@
 //! - payload evidence is length, hash, and sentinel boolean only;
 //! - per-process record count is bounded.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 /// Maximum number of request records retained per server instance.
@@ -112,8 +113,10 @@ struct Inner {
     next_seq: u64,
     in_flight: usize,
     max_in_flight: usize,
-    starts: Vec<RequestStarted>,
-    finishes: Vec<RequestFinished>,
+    // `VecDeque` keeps eviction O(1): the oldest record is dropped from the
+    // front without shifting the remaining records under the lock.
+    starts: VecDeque<RequestStarted>,
+    finishes: VecDeque<RequestFinished>,
 }
 
 impl InMemoryObserver {
@@ -124,12 +127,18 @@ impl InMemoryObserver {
 
     /// Returns all recorded `RequestStarted` events.
     pub fn starts(&self) -> Vec<RequestStarted> {
-        self.inner.lock().unwrap().starts.clone()
+        self.inner.lock().unwrap().starts.iter().cloned().collect()
     }
 
     /// Returns all recorded `RequestFinished` events.
     pub fn finishes(&self) -> Vec<RequestFinished> {
-        self.inner.lock().unwrap().finishes.clone()
+        self.inner
+            .lock()
+            .unwrap()
+            .finishes
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Maximum number of concurrent in-flight requests observed.
@@ -164,7 +173,7 @@ impl InMemoryObserver {
             .lock()
             .unwrap()
             .starts
-            .first()
+            .front()
             .map(|e| e.started_at_unix_ms)
     }
 
@@ -174,7 +183,7 @@ impl InMemoryObserver {
             .lock()
             .unwrap()
             .finishes
-            .first()
+            .front()
             .map(|e| e.finished_at_unix_ms)
     }
 
@@ -228,9 +237,9 @@ impl TestRequestObserver for InMemoryObserver {
 
     fn request_started(&self, event: RequestStarted) {
         let mut inner = self.inner.lock().unwrap();
-        inner.starts.push(event);
+        inner.starts.push_back(event);
         if inner.starts.len() > MAX_OBSERVER_RECORDS {
-            inner.starts.remove(0);
+            inner.starts.pop_front();
         }
         inner.in_flight += 1;
         if inner.in_flight > inner.max_in_flight {
@@ -240,9 +249,9 @@ impl TestRequestObserver for InMemoryObserver {
 
     fn request_finished(&self, event: RequestFinished) {
         let mut inner = self.inner.lock().unwrap();
-        inner.finishes.push(event);
+        inner.finishes.push_back(event);
         if inner.finishes.len() > MAX_OBSERVER_RECORDS {
-            inner.finishes.remove(0);
+            inner.finishes.pop_front();
         }
         if inner.in_flight > 0 {
             inner.in_flight -= 1;
@@ -409,5 +418,49 @@ mod tests {
         // If the API ever changes to accept `Vec<u8>` here, the
         // `InMemoryObserver::request_started` signature above will
         // need a deliberate review and a sanitized conversion.
+    }
+
+    #[test]
+    fn observer_evicts_the_oldest_record_beyond_the_cap() {
+        let obs = InMemoryObserver::shared();
+        let total = MAX_OBSERVER_RECORDS + 1;
+
+        for index in 0..total {
+            let seq = obs.next_sequence();
+            obs.request_started(RequestStarted {
+                sequence: seq,
+                started_at_unix_ms: index as u64,
+                method: "push".to_string(),
+                operation: "push".to_string(),
+                authenticated_user_id: None,
+                authenticated_device_id: None,
+                target_library_id: None,
+                request_revision: None,
+                payload_len: 0,
+                payload_sha256: String::new(),
+                payload_contains_plaintext_sentinel: false,
+                concurrent_at_start: 0,
+            });
+            obs.request_finished(RequestFinished {
+                sequence: seq,
+                finished_at_unix_ms: index as u64,
+                success: true,
+                response_revision: None,
+            });
+        }
+
+        assert_eq!(obs.started_count(), MAX_OBSERVER_RECORDS);
+        assert_eq!(obs.finished_count(), MAX_OBSERVER_RECORDS);
+
+        let starts = obs.starts();
+        assert_eq!(starts.len(), MAX_OBSERVER_RECORDS);
+        // The newest record is retained, the oldest one was evicted.
+        assert_eq!(starts.last().map(|s| s.sequence), Some(total as u64));
+        assert_eq!(starts.first().map(|s| s.sequence), Some(2));
+
+        let finishes = obs.finishes();
+        assert_eq!(finishes.len(), MAX_OBSERVER_RECORDS);
+        assert_eq!(finishes.last().map(|f| f.sequence), Some(total as u64));
+        assert_eq!(finishes.first().map(|f| f.sequence), Some(2));
     }
 }

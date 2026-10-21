@@ -29,7 +29,7 @@ single-file checkout.
 | `--sort` | `SnippetSort` | `Relevance` | Sort mode for snippet ordering |
 | `--favorites-first` | bool | `false` | Favorites rank first |
 
-`src/main.rs:480-500` maps the json/csv flags to
+`src/main.rs:506-526` maps the json/csv flags to
 `ListFormat::{Json,Csv,Default}` and builds
 `SortOptions{mode, favorites_first}` (always `Some`).
 
@@ -70,7 +70,7 @@ single-file checkout.
 
 `list` resolves through `commands::load_readonly_snippets`
 (`list_cmd.rs:71`), which calls `library::readonly_library_sources`
-(`src/commands/mod.rs:133`). That resolver performs no migration and
+(`src/commands/mod.rs:175`). That resolver performs no migration and
 creates no files or directories.
 
 **This is a behavior change.** Before the fix, `list` resolved through
@@ -83,16 +83,16 @@ bumped the generation — a migration caused purely by a read.
 ## Library scope
 
 `--library all` is supported by `list`. The literal `"all"` is matched by
-`LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:278`),
+`LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:291`),
 which `load_readonly_snippets` reaches via
-`library::readonly_library_sources` (`src/commands/mod.rs:133`), so it means
+`library::readonly_library_sources` (`src/commands/mod.rs:175`), so it means
 the same thing here as on `snp get`, exact-mode `run`/`clip`/`edit`, and MCP.
 (The *selector* paths — `snp get`, exact-mode `run`/`clip`/`edit` — own the
 keyword in `LibraryScope::from_filter_arg`, `src/selector.rs:65`; both layers
 agree that `"all"` means "every visible library".)
 
 Scope semantics of `readonly_library_sources`
-(`src/library/manager.rs:784`):
+(`src/library/manager.rs:815`):
 
 | `--library` | Result |
 |-------------|--------|
@@ -109,7 +109,7 @@ A library actually *named* `all` can no longer be created:
 Read-only. No gate, no lock, no save, no clipboard, no runtime. The
 command does not call `gate_mutation_on_interrupted_transactions()`.
 
-`src/main.rs:892` classifies `Commands::List(_)` under
+`src/main.rs:929` classifies `Commands::List(_)` under
 `StartupRecoveryPolicy::SuppressReadOnly` + `StartupServices::Minimal`, so
 startup recovery is suppressed and no network service is started.
 
@@ -160,12 +160,12 @@ JSON serialization failure is a `runtime_error` (`list_cmd.rs:167-172`).
 - `src/sort.rs` — `rank_snippets` and `SnippetSort` ordering modes.
 - `src/library/manager.rs` — `readonly_library_sources` and
   `resolve_readonly_sources`, the scope resolver.
-- `src/main.rs` — dispatch (`src/main.rs:480-500`) and the read-only
-  startup classification (`src/main.rs:892`).
+- `src/main.rs` — dispatch (`src/main.rs:506-526`) and the read-only
+  startup classification (`src/main.rs:929`).
 
 ## File / line references
 
 - `ListArgs`: `src/commands/list_cmd.rs:9`; `ListFormat`: `:36`
 - `run`: `:51`; read-only load: `:71`; sort block: `:118`
 - renderers: `:150-215`; `csv_escape`: `:219`
-- dispatch: `src/main.rs:480-500`
+- dispatch: `src/main.rs:506-526`

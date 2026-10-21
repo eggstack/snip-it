@@ -29,7 +29,7 @@ oversight (see *Key invariants*).
 | `--description-exact` | `Option<String>` | – | Exact description bypass |
 | `--command-exact` | `Option<String>` | – | Exact command bypass |
 
-`src/main.rs:501-546` routes exact selectors through
+`src/main.rs:527-572` routes exact selectors through
 `resolve_exact_target` → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -41,7 +41,7 @@ allow_delete=true, sort_opts, runtime, process_snippet)` and maps
 `ExecutionFailed{exit_code} → CliOutcome::ExecutionFailed`,
 `Cancelled → Success` (run treats cancellation as exit 0,
 `run_cmd.rs:365`), `Selected → Success` (`run_cmd.rs:358-367`).
-`src/main.rs:542-543` turns `ExecutionFailed` into
+`src/main.rs:568-569` turns `ExecutionFailed` into
 `process::exit(child_code.unwrap_or(8))`.
 
 ### `run_exact()` (`run_cmd.rs:371`)
@@ -138,19 +138,19 @@ is the only library write on this path.
 ## Auto-sync trigger
 
 No direct `notify_mutation`. With `--sync`, the post-selection /
-post-`run_exact` `run_explicit_sync` (`src/commands/mod.rs:301`)
+post-`run_exact` `run_explicit_sync` (`src/commands/mod.rs:343`)
 performs a foreground sync under the `SyncExecutionLock` and clears
 pending. Without `--sync`, usage or execution leaves no sync intent.
 
-`src/main.rs:953` classifies `Commands::Run(_)` as a mutation command
+`src/main.rs:990` classifies `Commands::Run(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`).
 
 ## Tokio runtime
 
 `run` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:540` passes
+but only for `--sync`. `src/main.rs:566` passes
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
-`--sync` is set. `run_snippet_selection` (`src/commands/mod.rs:353-362`)
+`--sync` is set. `run_snippet_selection` (`src/commands/mod.rs:456-465`)
 and `run_exact` (`run_cmd.rs:376-385`) both error with
 `runtime_error("sync requested but no runtime")` if `do_sync` is true and
 the runtime is `None`.
@@ -158,7 +158,7 @@ the runtime is `None`.
 ## Error / exit mapping
 
 - Child nonzero → exit code passthrough (`ExecutionFailed`, exit 8
-  container or raw child code via `src/main.rs:518` / `src/main.rs:542`).
+  container or raw child code via `src/main.rs:544` / `src/main.rs:568`).
 - Spawn failure / timeout / signal death → `Failed{None}` → exit 8.
 - Output-path escape / parent race / timeout → `SnipError::runtime_error`
   (exit 1); timeout message reports the second count
@@ -207,7 +207,7 @@ the runtime is `None`.
 - `src/logging.rs` — `audit_log` and `log_command_execution`.
 - `src/usage.rs` — `UsageIndex` (use counts, last-used timestamps).
 - `src/outcome.rs` — `CliOutcome::ExecutionFailed` and the exit codes.
-- `src/main.rs` — dispatch (`src/main.rs:501-546`).
+- `src/main.rs` — dispatch (`src/main.rs:527-572`).
 
 ## File / line references
 
@@ -215,4 +215,4 @@ the runtime is `None`.
 - `shell_arg_flag`: `:103`; `get_shell`: `:107`
 - `spawn_and_wait_execution`: `:123`; `record_execution_result`: `:169`
 - `process_snippet`: `:194`; `run`: `:342`; `run_exact`: `:371`
-- Dispatch: `src/main.rs:501-546`
+- Dispatch: `src/main.rs:527-572`

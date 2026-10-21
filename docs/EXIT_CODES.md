@@ -49,7 +49,7 @@ pub enum CliOutcome {
 | `Success` | 0 | |
 | `NotFound` | 3 | |
 | `Ambiguous` | 5 | |
-| `Cancelled` | 4 | `select` returns `CliOutcome::Cancelled` (`src/commands/select_cmd.rs:102`); `main.rs` turns it into exit 4 via `outcome.exit_code()` |
+| `Cancelled` | 4 | `select` returns `CliOutcome::Cancelled` (`src/commands/select_cmd.rs:110`); `main.rs` turns it into exit 4 via `outcome.exit_code()` |
 | `ValidationFailed` | 6 | |
 | `PersistenceFailed` | 1 | Shares code with `GENERAL_ERROR` |
 | `SyncFailed` | 7 | **Reserved.** No command constructs this variant today — `main.rs` maps every command `Err` to `GENERAL_ERROR` (1). The code remains part of the stable contract. |
@@ -62,7 +62,7 @@ pub enum CliOutcome {
 The detached auto-sync worker's exit status is internal and is not part of the
 public CLI contract. `snp auto-sync-worker` exits 1 (`GENERAL_ERROR`) when the
 helper cycle fails, and exits 0 for successful and no-work outcomes
-(`src/main.rs:858-867`).
+(`src/main.rs:895-904`).
 
 Sync failure classification is recorded in `auto-sync-status.toml` by the helper
 (`src/auto_sync/status.rs:17`); there is no executor exit-code translation layer.
@@ -96,10 +96,10 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ## Exit-Code Mapping in `main.rs`
 
-The central exit-code mapper in `src/main.rs:1018-1033` handles two paths:
+The central exit-code mapper in `src/main.rs:1055-1070` handles two paths:
 
 1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1.
-2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (`src/main.rs:375-388`) — there is **no** `CliOutcome` variant for exit 10, so it cannot be produced by the mapper above. `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
+2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (`src/main.rs:401-414`) — there is **no** `CliOutcome` variant for exit 10, so it cannot be produced by the mapper above. `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
 
    `FindingsSafe` means the report-only invocation (no `--apply`, no
    `--dry-run`) found only `[auto]`-repairable issues. Those are *not* unsafe

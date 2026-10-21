@@ -114,6 +114,48 @@ pub fn get_library_path(library_name: Option<String>) -> SnipResult<Option<PathB
     Ok(path)
 }
 
+/// How a selection command resolves the library it browses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LibraryResolution {
+    /// Resolve through [`get_library_path`], which calls
+    /// `ensure_library_mode()` and can therefore migrate a legacy
+    /// single-file checkout into `libraries/`.
+    ///
+    /// Only for commands that are allowed to rewrite library state.
+    Mutable,
+    /// Resolve through the canonical read-only resolver: no migration, no
+    /// file or directory creation, no generation bump.
+    ReadOnly,
+}
+
+/// Resolves the path of the single library a selection command browses,
+/// without mutating any state.
+///
+/// Read-only counterpart of [`get_library_path`]. It reuses the canonical
+/// [`crate::library::readonly_library_sources`] resolver — the same one
+/// `snp list`, `snp get`, and `snp validate` use — so a legacy single-file
+/// checkout is read *in place*: no `libraries/` directory, no
+/// `libraries.toml`, no generation bump.
+///
+/// Returns `None` when no library is visible (the read-only counterpart of
+/// the "No library found" case). The canonical `all` scope selects several
+/// libraries at once and cannot be represented by a single path, so it is
+/// rejected the same way the mutating resolver rejects an unknown library.
+pub(crate) fn readonly_library_path(library: Option<&str>) -> SnipResult<Option<PathBuf>> {
+    if library == Some("all") {
+        return Err(crate::library::library_not_found("all"));
+    }
+    let sources = crate::library::readonly_library_sources(library)?;
+    match sources.as_slice() {
+        [] => Ok(None),
+        [source] => Ok(Some(source.path.clone())),
+        _ => Err(SnipError::runtime_error(
+            "Multiple libraries selected",
+            Some("This command browses exactly one library"),
+        )),
+    }
+}
+
 /// Loads snippets for a read-only command across the resolved library scope.
 ///
 /// Uses [`crate::library::readonly_library_sources`], which performs no
@@ -327,17 +369,71 @@ pub fn run_explicit_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
     }
 }
 
+/// Resolves the library a selection command browses.
+///
+/// Read-only resolution reuses [`readonly_library_path`], so a legacy
+/// single-file checkout is read in place instead of being migrated.
+fn resolve_selection_library_path(
+    library: Option<&str>,
+    resolution: LibraryResolution,
+) -> SnipResult<Option<PathBuf>> {
+    match resolution {
+        LibraryResolution::Mutable => get_library_path(library.map(str::to_string)),
+        LibraryResolution::ReadOnly => readonly_library_path(library),
+    }
+}
+
 /// Opens the TUI snippet selector and runs the given processing function on selection.
 ///
 /// Handles loading the library, extracting snippet data, and optionally running
 /// a background sync after processing. The `process_fn` callback is invoked with
 /// the selected snippet and any copy flag from the TUI.
 ///
+/// The browsed library is resolved through the mutating resolver, which may
+/// migrate a legacy single-file checkout. Read-only callers must use
+/// [`run_snippet_selection_with_resolution`] with
+/// [`LibraryResolution::ReadOnly`] instead.
+///
 /// Returns `SelectionOutcome::Selected` when a snippet was selected and processed,
 /// or `SelectionOutcome::Cancelled` when the user cancelled the primary selector.
 pub fn run_snippet_selection<F>(
     filter: Option<String>,
     library: Option<String>,
+    do_sync: bool,
+    allow_delete: bool,
+    sort_opts: Option<SortOptions>,
+    runtime: Option<&tokio::runtime::Runtime>,
+    process_fn: F,
+) -> crate::error::SnipResult<crate::SelectionOutcome>
+where
+    F: FnMut(
+        &crate::library::Snippet,
+        Option<String>,
+    ) -> crate::error::SnipResult<crate::ProcessResult>,
+{
+    run_snippet_selection_with_resolution(
+        filter,
+        library,
+        LibraryResolution::Mutable,
+        do_sync,
+        allow_delete,
+        sort_opts,
+        runtime,
+        process_fn,
+    )
+}
+
+/// Same as [`run_snippet_selection`], with an explicit library-resolution mode.
+///
+/// `resolution` selects how the browsed library is resolved:
+/// [`LibraryResolution::ReadOnly`] never creates or rewrites library state
+/// (used by `snp select`, which is classified read-only), while
+/// [`LibraryResolution::Mutable`] keeps the historical behaviour of
+/// `ensure_library_mode()`.
+pub(crate) fn run_snippet_selection_with_resolution<F>(
+    filter: Option<String>,
+    library: Option<String>,
+    resolution: LibraryResolution,
     do_sync: bool,
     allow_delete: bool,
     sort_opts: Option<SortOptions>,
@@ -350,6 +446,13 @@ where
         Option<String>,
     ) -> crate::error::SnipResult<crate::ProcessResult>,
 {
+    if resolution == LibraryResolution::ReadOnly && allow_delete {
+        return Err(SnipError::runtime_error(
+            "Read-only selection cannot delete snippets",
+            Some("allow_delete must be false for a read-only library resolution"),
+        ));
+    }
+
     let runtime = if do_sync {
         Some(runtime.ok_or_else(|| {
             SnipError::runtime_error(
@@ -361,7 +464,7 @@ where
         None
     };
 
-    let lib_path = match get_library_path(library)? {
+    let lib_path = match resolve_selection_library_path(library.as_deref(), resolution)? {
         Some(p) => p,
         None => {
             eprintln!("No library found. Create one with 'snp library create <name>'");
@@ -637,5 +740,24 @@ command = "echo hello"
             Ok(_) => panic!("sync selection without a runtime should fail"),
         };
         assert!(error.to_string().contains("no runtime"));
+    }
+
+    #[test]
+    fn test_read_only_selection_refuses_delete() {
+        let result = run_snippet_selection_with_resolution(
+            None,
+            None,
+            LibraryResolution::ReadOnly,
+            false,
+            true,
+            None,
+            None,
+            |_snippet, _| Ok(crate::ProcessResult::Continue),
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a read-only selection must not allow deletion"),
+        };
+        assert!(error.to_string().contains("cannot delete"));
     }
 }

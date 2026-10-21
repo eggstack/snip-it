@@ -224,7 +224,7 @@ pub fn run_migrations(
                     }
                     Err(e) => {
                         if let Some(bp) = &backup_path {
-                            if fs::copy(bp, path).is_ok() {
+                            if restore_from_backup(bp, path).is_ok() {
                                 tracing::error!(
                                     error = %e,
                                     file = %path.display(),
@@ -251,6 +251,17 @@ pub fn run_migrations(
     }
 
     Ok(total_output)
+}
+
+/// Restore `path` from `backup` through the atomic write layer.
+///
+/// `fs::copy` truncates the destination and writes in place, so an
+/// interrupted rollback could leave the file truncated at an intermediate
+/// schema version — exactly what the pre-migration backup exists to prevent.
+fn restore_from_backup(backup: &Path, path: &Path) -> SnipResult<()> {
+    let content = fs::read_to_string(backup)
+        .map_err(|e| SnipError::io_error("read pre-migration backup", backup.to_path_buf(), e))?;
+    crate::utils::atomic::write_private_atomic(path, &content, "migration")
 }
 
 #[cfg(test)]
@@ -625,5 +636,76 @@ updated_at = 1700000000
         let version = get_schema_version(&path).unwrap();
         assert_eq!(version, SchemaVersion::LEGACY);
         assert!(needs_migration(&path).unwrap());
+    }
+
+    /// A migration whose apply step mutates the file and then fails, so the
+    /// rollback path has to restore the pre-migration backup.
+    struct FailingMigration;
+
+    impl Migration for FailingMigration {
+        fn source(&self) -> SchemaVersion {
+            SchemaVersion::LEGACY
+        }
+
+        fn target(&self) -> SchemaVersion {
+            SchemaVersion(1)
+        }
+
+        fn analyze(&self, _path: &Path) -> SnipResult<MigrationPlan> {
+            Ok(MigrationPlan {
+                source: self.source(),
+                target: self.target(),
+                operations: vec![MigrationOperation::Transform {
+                    description: "half-applied change".to_string(),
+                }],
+            })
+        }
+
+        fn apply(&self, _plan: &MigrationPlan, path: &Path) -> SnipResult<MigrationOutput> {
+            // Leave the file half-migrated, then fail.
+            fs::write(
+                path,
+                "schema_version = 1\nsnippets = [{ description = \"half-applied\" }]\n",
+            )
+            .unwrap();
+            Err(SnipError::runtime_error(
+                "migration failed",
+                Some("half-applied change"),
+            ))
+        }
+    }
+
+    /// The rollback must restore the pre-migration content through the atomic
+    /// write layer, not through an in-place `fs::copy` (bugs.md #18).
+    #[test]
+    fn test_run_migrations_rollback_restores_file_atomically() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rollback.toml");
+        let original = "snippets = []\n";
+        fs::write(&path, original).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let migrations: Vec<Box<dyn Migration>> = vec![Box::new(FailingMigration)];
+        let result = run_migrations(&path, &migrations);
+        assert!(
+            result.is_err(),
+            "the failing migration must report an error"
+        );
+
+        // The pre-migration content is back.
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+        // The atomic layer writes private files. An in-place `fs::copy`
+        // rollback would have carried the backup's 0o644 mode over instead.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "restored file must be written privately");
+        }
     }
 }

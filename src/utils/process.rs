@@ -10,9 +10,14 @@ use std::path::Path;
 ///
 /// PID 0 is never a valid lock owner: `kill(0, 0)` targets the caller's
 /// process group and would always succeed, so it is treated as dead.
+///
+/// PIDs above `i32::MAX` are rejected for the same reason: the `pid as i32`
+/// cast wraps them to negative values, and `kill(-1, 0)` signals every
+/// process the caller may signal, which always succeeds and would report a
+/// corrupt lock file as owned by a live process.
 #[cfg(unix)]
 pub(crate) fn is_process_alive(pid: u32) -> bool {
-    if pid == 0 {
+    if pid == 0 || pid > i32::MAX as u32 {
         return false;
     }
     let rc = unsafe { libc::kill(pid as i32, 0) };
@@ -115,6 +120,23 @@ pub(crate) fn remove_owned_lock_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn is_process_alive_rejects_out_of_range_pids() {
+        // `0xFFFF_FFFF as i32 == -1`: `kill(-1, 0)` would signal every
+        // process the caller may signal and report success.
+        assert!(!is_process_alive(u32::MAX));
+        assert!(!is_process_alive(i32::MAX as u32 + 1));
+        // `kill(0, 0)` targets the caller's process group.
+        assert!(!is_process_alive(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_process_alive_detects_the_current_process() {
+        assert!(is_process_alive(std::process::id()));
+    }
 
     fn sample_record(start_token: Option<&str>) -> String {
         let token_line = match start_token {

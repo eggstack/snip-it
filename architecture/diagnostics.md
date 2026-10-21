@@ -67,7 +67,7 @@ pub enum PrimaryState {
 }
 ```
 
-`LibraryManager::inspect_library_index()` (`src/library/manager.rs:297`) is the
+`LibraryManager::inspect_library_index()` (`src/library/manager.rs:310`) is the
 single fact source. It is **side-effect-free** — it inspects the index and the
 `libraries/` directory without creating, migrating, or rewriting anything.
 Each consumer maps the *same* view into *its own* semantics:
@@ -375,7 +375,7 @@ Import mirrors it with `PetImportReport::new(source, dest, dry_run, strict)`
 - `src/commands/pet_analysis.rs:109`, `:213`, `:318` — pet field/entry analysis and duplicate detection
 - `src/commands/import_cmd.rs:203` — import report construction
 - `src/status_snapshot.rs:18`, `:123`, `:131`, `:144` — the snapshot feeding both `snp status` and doctor's sync section
-- `src/library/manager.rs:297`, `src/library/model.rs:123`, `:141` — `inspect_library_index` and its view types
+- `src/library/manager.rs:310`, `src/library/model.rs:123`, `:141` — `inspect_library_index` and its view types
 
 ## Invariants
 

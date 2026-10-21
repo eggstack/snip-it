@@ -30,8 +30,8 @@ pub struct RegisterArgs {
 }
 ```
 
-`snp register` (alias `reg`) — `src/main.rs:117-119`, dispatched at
-`src/main.rs:726-728`.
+`snp register` (alias `reg`) — `src/main.rs:143-145`, dispatched at
+`src/main.rs:763-765`.
 
 | Flag | Type | Default | Behavior |
 |------|------|---------|----------|
@@ -62,7 +62,7 @@ group).
    (`:40`). The client opens a TLS channel (a transport failure becomes
    `sync_failure(ConnectFailed)`) and issues the `Register` RPC through
    `retry_grpc_unified!` with `None::<SyncRunLimits>` (unbounded) and
-   `RetryBackoff::Standard` (`src/sync.rs:922-951`). A response with
+   `RetryBackoff::Standard` (`src/sync.rs:1047-1076`). A response with
    `success == false` becomes `sync_failure(RegistrationFailed)` carrying
    the server message.
 4. **Persist.** On success the handler builds a **fresh** `SyncSettings`
@@ -85,7 +85,7 @@ group).
 touching the wire:
 
 ```rust
-// src/sync.rs:800-808
+// src/sync.rs:900-908
 fn require_api_key(&self) -> SnipResult<()> {
     if self.settings.api_key.is_empty() {
         return Err(SnipError::runtime_error(
@@ -103,12 +103,12 @@ headerless legacy config parses cleanly with an empty key. Checking only
 retry/backoff ladder on requests that can only ever come back
 `Unauthenticated`.
 
-`require_api_key` is called by: `list_libraries` (`src/sync.rs:955`),
+`require_api_key` is called by: `list_libraries` (`src/sync.rs:1080`),
 `create_library` (`:1016`), `list_premade_libraries` (`:1051`),
 `get_premade_library` (`:1083`), and `search_premade_libraries`
 (`:1127`).
 
-The underlying `add_api_key_metadata` (`src/sync.rs:291-299`) no longer
+The underlying `add_api_key_metadata` (`src/sync.rs:306-314`) no longer
 asserts — it logs `refusing to attach an empty API key to a sync request`
 and returns without attaching a header:
 
@@ -140,11 +140,11 @@ be enabled).
 
 `run` takes `&tokio::runtime::Runtime` and uses `runtime.block_on(...)`
 for the `Register` RPC. `RUNTIME` is the global `LazyLock` runtime in
-`src/main.rs:22-27`, passed in at `src/main.rs:727`.
+`src/main.rs:29-35`, passed in at `src/main.rs:764`.
 
 Startup policy: `Commands::Register(_)` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:970-972`) — a registration does
+`StartupServices::Logging` (`src/main.rs:1007-1009`) — a registration does
 not reschedule pending auto-sync work.
 
 ## Auto-sync trigger
@@ -156,7 +156,7 @@ with their stored IDs.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1026-1032`).
+exit **1** (`src/main.rs:1063-1069`).
 
 | Situation | Result |
 |-----------|--------|
@@ -166,7 +166,7 @@ exit **1** (`src/main.rs:1026-1032`).
 | `save_sync_settings` fails | printed + propagated → exit 1 |
 
 > The typed sync-failure kind does **not** survive the command boundary:
-> `register_cmd.rs:71-76` converts every client error into
+> `register_cmd.rs:64-69` converts every client error into
 > `SnipError::runtime_error("Registration failed", Some(&e.to_string()))`,
 > so `SyncFailureKind::ConnectFailed` / `RegistrationFailed` never reach the
 > CLI outcome mapping. The exit code is still 1 and the original message is
@@ -203,10 +203,10 @@ in tests requires `unsafe` (edition 2024).
 | Path | Role |
 |------|------|
 | `src/commands/register_cmd.rs` | `RegisterArgs` + the `run` handler |
-| `src/main.rs:117-119`, `:726-728` | Clap wiring and dispatch |
-| `src/sync.rs:922-951` | `SyncClient::register` — TLS channel + `Register` RPC |
-| `src/sync.rs:800-808` | `require_api_key` — typed missing-key error |
-| `src/sync.rs:291-299` | `add_api_key_metadata` — refuses an empty key |
+| `src/main.rs:143-145`, `:726-728` | Clap wiring and dispatch |
+| `src/sync.rs:1047-1076` | `SyncClient::register` — TLS channel + `Register` RPC |
+| `src/sync.rs:900-908` | `require_api_key` — typed missing-key error |
+| `src/sync.rs:306-314` | `add_api_key_metadata` — refuses an empty key |
 | `src/config/sync_settings.rs` | `SyncSettings`, `save`/`load`, keychain migration, `DEFAULT_SERVER_URL` |
 | `src/utils/config.rs:220` | `get_sync_config_path` (re-exported as `config::get_sync_config_path`) |
 | `src/error.rs` | `SnipError` — carries no credentials |

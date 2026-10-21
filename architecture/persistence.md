@@ -223,9 +223,9 @@ The mutation gate runs *before* either lock is taken. The gate itself may acquir
 
 | Call site | Gate | `LocalDataLock` | `TransactionLock` |
 |-----------|------|-----------------|-------------------|
-| `library::persistence::save_library` | Yes (`persistence.rs:225-228`) | Yes (`persistence.rs:233`) | — |
+| `library::persistence::save_library` | Yes (`persistence.rs:266-269`) | Yes (`persistence.rs:274`) | — |
 | `commands::save_snippets` | Yes (`commands/mod.rs:212-215`) | Yes (`commands/mod.rs:218`) | — |
-| `LibraryManager` mutators | Yes (`manager.rs:636-642`) | Yes (`manager.rs:627-630`) | — |
+| `LibraryManager` mutators | Yes (`manager.rs:666-672`) | Yes (`manager.rs:657-660`) | — |
 | `commands::edit_cmd` | Yes (`edit_cmd.rs:73`) | Yes (`edit_cmd.rs:101`) | — |
 | `commands::restore_cmd` | Yes (`restore_cmd.rs:1142-1145`) | Yes (`restore_cmd.rs:1146`) | Yes (`restore_cmd.rs:1147`) |
 | `commands::backup_cmd` | — | Yes (`backup_cmd.rs:78`) | — |
@@ -233,17 +233,17 @@ The mutation gate runs *before* either lock is taken. The gate itself may acquir
 | `config::sync_settings` | — | Yes (`config/sync_settings.rs:473`) | — |
 | `transaction::recover_transaction_by_id` | — | — | Yes, first (`transaction.rs:782`) |
 
-Every `LibraryManager` mutator follows the same shape — `gate_mutation()` then `acquire_local_data_lock()` — at `manager.rs:182-183, 364/378, 430-431, 500-501, 524-525, 537-538, 556-557, 571-572, 585-586, 612-613, 653-654`. `gate_mutation()` runs *before* any in-memory mutation so a refused call leaves the manager clean for a retry after `snp repair` (`manager.rs:632-642`). Two mutators deviate: `create_library` takes the lock at `:378`, after `ensure_library_mode()` at `:376` (gate at `:364`), and `save_premade_library` takes the local-data lock only, with no gate (`manager.rs:717-718`).
+Every `LibraryManager` mutator follows the same shape — `gate_mutation()` then `acquire_local_data_lock()` — at `manager.rs:184-185, 364/378, 430-431, 500-501, 524-525, 537-538, 556-557, 571-572, 585-586, 612-613, 653-654`. `gate_mutation()` runs *before* any in-memory mutation so a refused call leaves the manager clean for a retry after `snp repair` (`manager.rs:662-672`). Two mutators deviate: `create_library` takes the lock at `:378`, after `ensure_library_mode()` at `:376` (gate at `:364`), and `save_premade_library` takes the local-data lock only, with no gate (`manager.rs:747-749`).
 
 Two commands acquire no lock of their own and inherit the table's rows **transitively**, so look them up here before concluding they are unlocked:
 - `snp repair` takes the transaction lock only inside `recover_transaction_by_id` (`transaction.rs:782`) and the local-data lock only inside `UsageIndex::save()` (`usage.rs:74`).
-- `snp import` reaches both through `save_library` (`persistence.rs:217-238`) and, for a new library, `add_existing_library` (`manager.rs:585-586`).
+- `snp import` reaches both through `save_library` (`persistence.rs:258-279`) and, for a new library, `add_existing_library` (`manager.rs:602-603`).
 
 `snp edit` is the one deliberate exception to "gate, then lock": the gate runs at `edit_cmd.rs:73`, the editor session runs unlocked, and the local-data lock is taken only for the short post-editor observe-and-notify window (`edit_cmd.rs:97-101`). The interactive session cannot hold the lock; only the read-compare-notify critical section needs to be serialized against other writers.
 
 ### Why the Local-Data Lock Exists
 
-`LocalDataLock` is the *snapshot-consistency* lock, not the *mutation* lock. Backup captures a set of files while they may be being rewritten; holding the local-data lock for the duration of the snapshot guarantees backup sees either the complete before-state or the complete after-state, never a mixed one (`backup_cmd.rs:74-78`, `persistence.rs:230-233`).
+`LocalDataLock` is the *snapshot-consistency* lock, not the *mutation* lock. Backup captures a set of files while they may be being rewritten; holding the local-data lock for the duration of the snapshot guarantees backup sees either the complete before-state or the complete after-state, never a mixed one (`backup_cmd.rs:74-78`, `persistence.rs:271-274`).
 
 ---
 
@@ -468,7 +468,7 @@ Quarantine files are named `local-data.lock.quarantine.<uuid>` and pruned by `pr
 
 ### Relationship to Backup Snapshot Capture
 
-`snp backup` acquires the local-data lock for the duration of snapshot capture (`backup_cmd.rs:74-78`), reading the library generation before and after the copy so a concurrent mutation is detected as a torn snapshot. The mirror-image rule holds on the write side: `save_library` (`persistence.rs:230-233`), `save_snippets` (`commands/mod.rs:217-218`), and every `LibraryManager` mutator (`manager.rs:627-630`) take the same lock, so backup sees either the complete before-state or the complete after-state of all local data, never a mixed state.
+`snp backup` acquires the local-data lock for the duration of snapshot capture (`backup_cmd.rs:74-78`), reading the library generation before and after the copy so a concurrent mutation is detected as a torn snapshot. The mirror-image rule holds on the write side: `save_library` (`persistence.rs:271-274`), `save_snippets` (`commands/mod.rs:217-218`), and every `LibraryManager` mutator (`manager.rs:657-660`) take the same lock, so backup sees either the complete before-state or the complete after-state of all local data, never a mixed state.
 
 ---
 
@@ -810,7 +810,7 @@ Each migration is **analyzed first**; the plan is only applied when it has opera
 
 ### ID Assignment Points
 
-1. **`load_library()`** — assigns deterministic `legacy-<sha256hex>` IDs to empty IDs and deduplicates on load
+1. **`load_library()`** — assigns deterministic `legacy-<sha256hex>` IDs to empty IDs and makes duplicate IDs unique on load
 2. **`commands::import_cmd`** — assigns UUID for imported snippets
 3. **`doctor_cmd`** — reports planned ID regeneration (diagnostic only)
 
@@ -818,7 +818,7 @@ Note: `Snippet::new()` creates a snippet with an empty `id`. The deterministic I
 
 ### Deterministic Legacy IDs
 
-For legacy snippets with missing IDs, `load_library()` generates deterministic provisional IDs using SHA-256 (`src/library/persistence.rs:87-116`). The hashed preimage is:
+For legacy snippets with missing IDs, `load_library()` generates deterministic provisional IDs using SHA-256 (`src/library/persistence.rs:128-157`). The hashed preimage is:
 
 ```
 "snip-it-legacy-id-v1\0"
@@ -832,7 +832,7 @@ For legacy snippets with missing IDs, `load_library()` generates deterministic p
 + occurrence.to_le_bytes()
 ```
 
-For a **duplicate explicit ID** the preimage is (`persistence.rs:119-149`):
+For a **duplicate explicit ID** the preimage is (`persistence.rs:160-190`):
 
 ```
 "snip-it-duplicate-id-v1\0"
@@ -848,6 +848,14 @@ For a **duplicate explicit ID** the preimage is (`persistence.rs:119-149`):
 ```
 
 Both are rendered as `legacy-<64 lowercase hex chars>`. Note that `folders`, `favorite`, and `device_id` participate in the digest even though they are local-only / sync-metadata fields — see [library.md](library.md) for the local-only vs synced split.
+
+**Every ID the file already carries is reserved before any provisional ID is
+minted.** A snippet that already holds `legacy-<hash(content, 0)>` does not
+consume occurrence index 0 for its content, so without the reservation a later
+sibling with the same content and an empty ID would be handed the very same
+ID — two snippets sharing one identity, one of them unreachable by ID and
+collapsed into a single row on the server. The reservation pass makes the
+outcome independent of the order the two appear in the file.
 
 This ensures repeated loads of identical file content produce identical IDs without rewriting the user's TOML file.
 
@@ -927,7 +935,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 
 ## Invariants
 
-1. **The save path never post-processes `toml::to_string_pretty` output.** There is exactly one serialization-then-write site and nothing runs between them (`persistence.rs:208-216`).
+1. **The save path never post-processes `toml::to_string_pretty` output.** There is exactly one serialization-then-write site and nothing runs between them (`persistence.rs:249-257`).
 2. **`write_schema_version` uses `toml::Table`, never `toml::Value`** (`migration.rs:165`) — `toml::Value` collapses array-of-tables.
 3. **Every local mutation is gated** by `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`, and the gate receives *both* directories.
 4. **One interrupted journal → auto-rollback; multiple or incomplete journals → refuse** and direct the user to `snp repair` (`transaction.rs:2593-2613`).
@@ -955,4 +963,4 @@ This ensures repeated loads of identical file content produce identical IDs with
 - **Adding a cleanup/normalization pass after `toml::to_string_pretty` silently corrupts user data.** The serializer already picks correct quoting and escaping for tabs, trailing whitespace, and CRLF.
 - **`quote_strings_containing_backslashes` must never touch serialized output.** It cannot distinguish a triple-quoted multi-line string from an ordinary double-quoted one, and its single-quoted output preserves `\t` as a literal two-character pair. It survives only for callers that hand-write TOML.
 - **Reading is not the same as resolving.** `resolve_selector_readonly` never migrates; `resolve_selector` calls `ensure_library_mode()` and can rewrite metadata. Picking the wrong one reintroduces recovery side effects — see [library.md](library.md).
-- **Unit tests must not write to the real `~/.config/snp/`.** `save_library` derives its gate and local-data-lock paths from the *config directory*, not from the target library path (`persistence.rs:223-224`), and `ScopedConfigDir` (`src/utils/config.rs:35-57`, `#[cfg(any(test, feature = "test-support"))]`) binds a per-test, thread-local config directory.
+- **Unit tests must not write to the real `~/.config/snp/`.** `save_library` derives its gate and local-data-lock paths from the *config directory*, not from the target library path (`persistence.rs:264-265`), and `ScopedConfigDir` (`src/utils/config.rs:35-57`, `#[cfg(any(test, feature = "test-support"))]`) binds a per-test, thread-local config directory.

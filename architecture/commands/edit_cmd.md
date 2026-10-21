@@ -8,7 +8,7 @@
 opens the whole library TOML in the user's editor (whole-file mutation
 with byte-change detection). `run_edit_output()` /
 `run_edit_output_by_id()` mutate only the local-only `output`/notes
-field of one snippet. `src/main.rs:615-673` selects the mode.
+field of one snippet. `src/main.rs:641-710` selects the mode.
 
 This command does not cover editing any other field: the whole-file mode
 lets the user change anything the editor can, but the *targeted* mode can
@@ -30,15 +30,15 @@ only touch `output`.
 | `--command-exact` | `Option<String>` | – | Exact bypass → `run_edit_output_by_id` |
 
 Without output flags, `run(library)` opens the editor regardless of
-filter/exact flags (`src/main.rs:670-672`).
+filter/exact flags (`src/main.rs:707-709`).
 
-### Mode selection (`src/main.rs:615-673`)
+### Mode selection (`src/main.rs:641-710`)
 
 - Any of `--output` / `--output-stdin` / `--clear-output` present →
   the **output-field** mode.
   - An exact selector (`--id` / `--description-exact` / `--command-exact`)
-    → `run_edit_output_by_id` (`src/main.rs:638-660`).
-  - Otherwise `--filter` is **required**: `src/main.rs:662-667` returns
+    → `run_edit_output_by_id` (`src/main.rs:676-698`).
+  - Otherwise `--filter` is **required**: `src/main.rs:700-704` returns
     `--filter is required when using --output, --output-stdin, or --clear-output`
     when it is absent. The exact selectors are the alternative to
     `--filter`, not an addition to it.
@@ -93,7 +93,7 @@ filter/exact flags (`src/main.rs:670-672`).
 
 Mutating in all modes. The whole-file edit gates **before** the editor
 and locks after; the output edits ride `save_library`'s internal gate +
-lock (`src/library/persistence.rs:225-233`).
+lock (`src/library/persistence.rs:266-274`).
 
 `edit` calls `gate_mutation_on_interrupted_transactions()` directly in
 the whole-file mode (`edit_cmd.rs:73`) and indirectly through
@@ -106,9 +106,9 @@ checkout.
 
 The exact-selector path is mutating too, by a different route: `main.rs`
 resolves it with `selector::resolve_exact_target`
-(`src/main.rs:640`), which calls `resolve_selector`
-(`src/selector.rs:681`) → `ensure_library_mode()`
-(`src/selector.rs:683`). So `snp edit --id …` can rewrite library metadata
+(`src/main.rs:678`), which calls `resolve_selector`
+(`src/selector.rs:703`) → `ensure_library_mode()`
+(`src/selector.rs:705`). So `snp edit --id …` can rewrite library metadata
 even though the targeted edit itself only touches `output`.
 
 ## Auto-sync trigger
@@ -120,7 +120,7 @@ even though the targeted edit itself only touches `output`.
 - Output-field edits: **no notification** — `output` is local-only,
   excluded from the sync fingerprint and absent from `ProtoSnippet`.
 
-`src/main.rs:956` classifies `Commands::Edit(_)` as a mutation command
+`src/main.rs:993` classifies `Commands::Edit(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`).
 
 ## Error / exit mapping
@@ -128,7 +128,7 @@ even though the targeted edit itself only touches `output`.
 `SnipResult<()>`: library-not-found, editor-not-found / spawn /
 nonzero exit (with changed/unchanged detail), no-match, ambiguous
 filter (exit 1 family with remediation text). Output-value intake
-(stdin read) errors are I/O errors (`src/main.rs:623-633`).
+(stdin read) errors are I/O errors (`src/main.rs:661-671`).
 
 ## Key invariants
 
@@ -137,7 +137,7 @@ filter (exit 1 family with remediation text). Output-value intake
 - Notify on byte change even when the editor reports failure — the
   bytes on disk are the source of truth, not the exit status.
 - `output` edits require `--filter` **or** an exact selector; the
-  CLI contract in `src/main.rs:662-667` enforces it.
+  CLI contract in `src/main.rs:700-704` enforces it.
 - Whole-file edit never parses or normalizes TOML itself — the editor
   writes the bytes and snip-it only compares them.
 - `output` is local-only: it is excluded from the sync fingerprint, so
@@ -168,11 +168,11 @@ filter (exit 1 family with remediation text). Output-value intake
   atomic-write path.
 - `src/selector.rs` — `contains_ignore_ascii_case`, the output-mode
   filter match.
-- `src/main.rs` — dispatch and mode selection (`src/main.rs:615-673`).
+- `src/main.rs` — dispatch and mode selection (`src/main.rs:641-710`).
 
 ## File / line references
 
 - `EditArgs`: `src/commands/edit_cmd.rs:9`; `run`: `:36` (gate `:73`,
   lock `:101`)
 - `run_edit_output`: `:143`; `run_edit_output_by_id`: `:233`
-- Dispatch: `src/main.rs:615-673`
+- Dispatch: `src/main.rs:641-710`

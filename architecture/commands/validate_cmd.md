@@ -148,9 +148,9 @@ Rendering into `ValidationDiagnostic` stays local to `validate`, which preserves
 
 The second sentence is **aspirational, not actual** — `LibraryManager::new()`
 (`validate_cmd.rs:671`) runs the macOS config-directory migration
-(`src/library/manager.rs:43` → `src/utils/config.rs:166-206`) and creates
+(`src/library/manager.rs:45` → `src/utils/config.rs:166-206`) and creates
 `libraries.toml.corrupt` when the index fails to parse
-(`src/library/manager.rs:60-75`). See the side-effect table below.
+(`src/library/manager.rs:62-77`). See the side-effect table below.
 
 Concretely, for snippet data:
 
@@ -166,9 +166,9 @@ The one nuance: `validate_usage` calls `crate::library::load_library(&source.pat
 
 | Side effect | Trigger | Site |
 |-------------|---------|------|
-| `libraries.toml.corrupt` | `libraries.toml` exists but does not parse — the file is copied to a backup and the constructor returns an error | `src/library/manager.rs:60` (reached via `LibraryManager::new()`, `validate_cmd.rs:671`) |
-| `<library>.toml.corrupt.bak` | A library file fails to parse — `load_library` copies it to `<name>.toml.corrupt.bak` before returning the parse error | `src/library/persistence.rs:175` (reached via `load_library`, `validate_cmd.rs:474`) |
-| Config-directory migration | The legacy macOS config directory is moved into the XDG location | `src/library/manager.rs:43` → `src/utils/config.rs:166-206` |
+| `libraries.toml.corrupt` | `libraries.toml` exists but does not parse — the file is copied to a backup and the constructor returns an error | `src/library/manager.rs:62` (reached via `LibraryManager::new()`, `validate_cmd.rs:671`) |
+| `<library>.toml.corrupt.bak` | A library file fails to parse — `load_library` copies it to `<name>.toml.corrupt.bak` before returning the parse error | `src/library/persistence.rs:216` (reached via `load_library`, `validate_cmd.rs:474`) |
+| Config-directory migration | The legacy macOS config directory is moved into the XDG location | `src/library/manager.rs:45` → `src/utils/config.rs:166-206` |
 
 All three are **best-effort diagnostics / one-time migration**: no snippet data
 is modified, and the original files are left in place.
@@ -221,7 +221,7 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 
 ## Gotchas
 
-- `snp validate` and `snp data validate` are the same command (`src/main.rs:258`, `:825-827`).
+- `snp validate` and `snp data validate` are the same command (`src/main.rs:284`, `:825-827`).
 - `--library` takes a library **name**, resolved by `readonly_library_sources`. An unknown name surfaces as "Library not found" (`validate_cmd.rs:679-685`).
 - **`snp validate` is not strictly read-only.** It can create `libraries.toml.corrupt` and `<library>.toml.corrupt.bak`, and it migrates the legacy macOS config directory (via `LibraryManager::new()`). See [Mutation vs read-only](#mutation-vs-read-only--not-strictly-read-only).
 - `W-CORRUPT-BAK` is reported for a **leftover** `.toml.corrupt.bak` file. It is a historical signal, not a live parse failure — the live failure would be `E-TOML-PARSE`.

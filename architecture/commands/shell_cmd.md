@@ -20,8 +20,8 @@ check).
 
 ## CLI surface
 
-`snp shell init <bash|zsh|fish>` (alias `i`) — `src/main.rs:159-163` and
-`src/main.rs:228-236`; dispatched at `src/main.rs:770-772`.
+`snp shell init <bash|zsh|fish>` (alias `i`) — `src/main.rs:185-189` and
+`src/main.rs:254-262`; dispatched at `src/main.rs:807-809`.
 
 ```rust
 // src/commands/shell_cmd.rs:7-15
@@ -173,11 +173,11 @@ snippet and notifies `SnippetCreate/User`.
 ## Tokio runtime
 
 None. `snp shell init` never touches the global `RUNTIME`
-(`src/main.rs:22-27`).
+(`src/main.rs:29-35`).
 
 Startup policy: `Commands::Shell { .. }` uses
 `StartupRecoveryPolicy::SuppressConfiguration` with
-`StartupServices::Logging` (`src/main.rs:982-992`).
+`StartupServices::Logging` (`src/main.rs:1019-1029`).
 
 ## Auto-sync trigger
 
@@ -201,9 +201,9 @@ they cannot fail the `snp shell init` process.
 | Path | Role |
 |------|------|
 | `src/commands/shell_cmd.rs` | `ShellIntegration`, `ShellType`, the three generators, `run` |
-| `src/main.rs:159-163`, `:228-236`, `:770-772` | Clap wiring and dispatch |
+| `src/main.rs:185-189`, `:228-236`, `:770-772` | Clap wiring and dispatch |
 | `src/commands/doctor_cmd.rs:1084-1225` | `check_shell_init` — the syntax validation |
-| `src/commands/select_cmd.rs:61-115` | `snp select --output-file` — the lossless transport contract |
+| `src/commands/select_cmd.rs:61-123` | `snp select --output-file` — the lossless transport contract |
 | `src/commands/new_cmd.rs` | `snp new --command-stdin` — the stdin creation contract |
 
 ## Invariants

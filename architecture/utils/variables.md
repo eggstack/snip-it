@@ -173,7 +173,7 @@ pub fn extract_variables_for_display(command: &str) -> Vec<String>
 
 Formats each variable for display: `"name (prompt)"` for `Required`,
 `"name = default"` for `DefaultValue`, `"name = [a | b | c]"` for `Choices`.
-Used by the TUI preview (`src/ui/mod.rs:374`).
+Used by the TUI preview (`src/ui/mod.rs:489`).
 
 ## Expansion
 
@@ -306,10 +306,10 @@ hands a command to the shell or the clipboard therefore strips first:
 
 | Surface | Site |
 |---------|------|
-| TUI snippet preview panel | `src/ui/mod.rs:390`, `src/ui/mod.rs:398` |
-| TUI **visual-range multi-select copy** | `src/ui/mod.rs:1639` — the selected range is mapped through `strip_escape_sequences` before being joined with newlines and written to the clipboard |
+| TUI snippet preview panel | `src/ui/mod.rs:505`, `src/ui/mod.rs:513` |
+| TUI **visual-range multi-select copy** | `src/ui/mod.rs:1730` — the selected range is mapped through `strip_escape_sequences` before being joined with newlines and written to the clipboard |
 | `snp get` output (default, `--field command`) | `src/commands/get_cmd.rs:238`, `:251`, `:282`, `:329` |
-| Interactive run path with no variables | `src/commands/mod.rs:280` |
+| Interactive run path with no variables | `src/commands/mod.rs:322` |
 
 The multi-select case is the one that matters most: the user selects a range
 of snippets, presses copy, and the clipboard must contain the *executable*
@@ -324,7 +324,7 @@ pub fn has_unmatched_angle_bracket(command: &str) -> bool
 
 Nesting- and escape-aware detector for an unclosed `<`. It is used by the
 TUI preview to append a "unmatched '<' found — will be treated as literal"
-warning (`src/ui/mod.rs:386`, `:394`).
+warning (`src/ui/mod.rs:501`, `:394`).
 
 ## Edge Cases
 
@@ -377,10 +377,10 @@ An odd number of backslashes before `<` escapes it; an even number does not.
 | File | Role |
 |------|------|
 | `src/utils/variables.rs` | The whole grammar: parsing, expansion, escape stripping, diagnostics |
-| `src/commands/mod.rs:274-293` | `expand_snippet_command` — parse → prompt → expand (interactive path) |
+| `src/commands/mod.rs:316-335` | `expand_snippet_command` — parse → prompt → expand (interactive path) |
 | `src/commands/get_cmd.rs:279-330` | `expand_without_prompt` — the non-interactive `--var` path (does **not** use `expand_command`) |
 | `src/ui/variables.rs:78` | `prompt_variables` — the TUI prompt dialog |
-| `src/ui/mod.rs:374-398`, `:1639` | Preview rendering and the visual-range multi-select copy |
+| `src/ui/mod.rs:489-513`, `:1639` | Preview rendering and the visual-range multi-select copy |
 | `src/commands/import_cmd.rs:216-222` | Detects snippets that contain variables on import |
 | `src/commands/doctor_cmd.rs:309-315` | Reports snippets that contain variables |
 

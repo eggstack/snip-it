@@ -16,7 +16,7 @@ modals in raw mode. It is the machine-facing endpoint behind the
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
 | `-f/--filter` | `Option<String>` | – | Initial TUI filter |
-| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:601`) |
+| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:627`) |
 | `-l/--library` | `Option<String>` | – | Library scope |
 | `--raw` | bool | `false` | Emit stored bytes verbatim (conflicts with `--expanded`) |
 | `--expanded` | bool | `false` | Prompt for variables, emit expanded text (conflicts with `--raw`) |
@@ -38,14 +38,14 @@ unused (`select_cmd.rs:72`); the mode is derived from `expanded` alone.
    (`select_cmd.rs:82-83`).
 2. `run_snippet_selection(filter, library, do_sync=false,
    allow_delete=false, sort_opts, runtime=None, closure)`
-   (`select_cmd.rs:85-99`). No deleting, no sync, no runtime — this call
+   (`select_cmd.rs:85-107`). No deleting, no sync, no runtime — this call
    can never init Tokio.
 3. Closure: `Raw → Done(command.clone())`; `Expanded →`
    `expand_snippet_command` (`Cancel` sets the cancelled cell and
    returns `Cancel`; `Skip → Continue`; `Expanded(cmd) → Done(cmd)`,
    `select_cmd.rs:40-59`). `Done` payloads are stashed in
    `selected_command`.
-4. Match `(outcome, cancelled, command)` (`select_cmd.rs:101-127`):
+4. Match `(outcome, cancelled, command)` (`select_cmd.rs:109-135`):
    - `Cancelled` or cancelled flag → `CliOutcome::Cancelled` (exit 4).
    - `ExecutionFailed` → internal contract error (unreachable: no
      execution branch exists here).
@@ -54,7 +54,7 @@ unused (`select_cmd.rs:72`); the mode is derived from `expanded` alone.
 
 File output uses `atomic_replace` with
 `Durability::DurableUserData` (temp-file + atomic rename,
-`select_cmd.rs:110-117`): a cancelled selection preserves a pre-existing
+`select_cmd.rs:118-125`): a cancelled selection preserves a pre-existing
 caller file, and a racing symlink cannot redirect the write — the final
 `fs::rename` replaces the destination directory entry and never follows a
 link (`src/utils/atomic.rs:412`). Note that `DurableUserData` does *not*
@@ -71,32 +71,32 @@ persists.
 `select` never calls `gate_mutation_on_interrupted_transactions()`.
 
 Note that the shared loop still resolves its library through the
-**mutating** `get_library_path` (`src/commands/mod.rs:364`), so a legacy
+**mutating** `get_library_path` (`src/commands/mod.rs:467`), so a legacy
 single-file checkout is migrated by opening the selector. That is a
 resolution side effect, not a snippet mutation.
 
 ## Auto-sync trigger
 
-None. `do_sync=false` is hardcoded (`select_cmd.rs:88`); no
+None. `do_sync=false` is hardcoded (`select_cmd.rs:96`); no
 `notify_mutation`, no explicit sync, no pending marker. Selection is
 invisible to the sync subsystem.
 
 ## Tokio runtime
 
 `select` is a local-only command: it never initializes the global Tokio
-runtime. `src/main.rs:606-613` does not pass `&RUNTIME`, and
+runtime. `src/main.rs:632-639` does not pass `&RUNTIME`, and
 `run_snippet_selection` is called with `runtime=None`
-(`select_cmd.rs:91`).
+(`select_cmd.rs:99`).
 
 ## Error / exit mapping
 
 - `Cancelled` → exit 4 (shell helpers restore `READLINE_LINE` on 4 —
   `src/commands/shell_cmd.rs:96-99`).
 - `Success` → exit 0 with the command on stdout (plus trailing
-  newline via `println!`, `select_cmd.rs:119`) or atomically in the file.
+  newline via `println!`, `select_cmd.rs:127`) or atomically in the file.
 - Contract violations → `runtime_error` (exit 1), signaling a bug, not
   user error. Atomic-write I/O errors propagate as `io_error`.
-- `src/main.rs:606-613` returns the `CliOutcome` directly.
+- `src/main.rs:632-639` returns the `CliOutcome` directly.
 
 ## Key invariants
 
@@ -117,7 +117,7 @@ runtime. `src/main.rs:606-613` does not pass `&RUNTIME`, and
   (`select_cmd.rs:72`, `select_cmd.rs:77-81`).
 - `select` requires a tty. `ui::select_snippet` returns
   `io::ErrorKind::Unsupported` when stdin or stdout is not a terminal
-  (`src/ui/mod.rs:533-540`).
+  (`src/ui/mod.rs:648-655`).
 - The `ExecutionFailed` and `Selected + None` arms are unreachable
   contract violations, not user-facing errors — treat a hit there as a
   bug, not a bad invocation.
@@ -132,11 +132,11 @@ runtime. `src/main.rs:606-613` does not pass `&RUNTIME`, and
 - `src/commands/shell_cmd.rs` — the `__snp_select` bash/zsh/fish
   consumers of `--output-file`.
 - `src/outcome.rs` — `CliOutcome` and the exit-code table.
-- `src/main.rs` — dispatch (`src/main.rs:600-614`).
+- `src/main.rs` — dispatch (`src/main.rs:626-640`).
 
 ## File / line references
 
 - `SelectArgs`: `src/commands/select_cmd.rs:11`; `OutputMode`: `:35`
 - `process_snippet`: `:40`; `run`: `:69`
-- Shared loop: `src/commands/mod.rs:338`; atomic write: `src/utils/atomic.rs:350`
-- Dispatch: `src/main.rs:600-614`; consumers: `src/commands/shell_cmd.rs:74-123`
+- Shared loop: `src/commands/mod.rs:399`; atomic write: `src/utils/atomic.rs:350`
+- Dispatch: `src/main.rs:626-640`; consumers: `src/commands/shell_cmd.rs:74-123`

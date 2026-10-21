@@ -23,10 +23,10 @@ narrow questions those callers need.
 
 | Item | Kind | Line | Visibility | Role |
 |------|------|------|------------|------|
-| `is_process_alive` | fn (unix) | `src/utils/process.rs:14` | `pub(crate)` | `kill(pid, 0)` liveness probe |
-| `classify_kill_zero_error` | fn (unix) | `src/utils/process.rs:23` | `pub(crate)` | Maps an errno to "still alive" |
-| `is_process_alive` | fn (windows) | `src/utils/process.rs:32` | `pub(crate)` | `OpenProcess` + `GetExitCodeProcess` liveness probe |
-| `remove_owned_lock_file` | fn | `src/utils/process.rs:60` | `pub(crate)` | Unlink a lock file only if it still holds our ownership record |
+| `is_process_alive` | fn (unix) | `src/utils/process.rs:19` | `pub(crate)` | `kill(pid, 0)` liveness probe |
+| `classify_kill_zero_error` | fn (unix) | `src/utils/process.rs:28` | `pub(crate)` | Maps an errno to "still alive" |
+| `is_process_alive` | fn (windows) | `src/utils/process.rs:37` | `pub(crate)` | `OpenProcess` + `GetExitCodeProcess` liveness probe |
+| `remove_owned_lock_file` | fn | `src/utils/process.rs:65` | `pub(crate)` | Unlink a lock file only if it still holds our ownership record |
 
 ---
 
@@ -42,7 +42,7 @@ pub(crate) fn is_process_alive(pid: u32) -> bool {
     rc == 0 || classify_kill_zero_error(std::io::Error::last_os_error().raw_os_error())
 }
 ```
-— `src/utils/process.rs:13-20`
+— `src/utils/process.rs:18-25`
 
 ### Unix semantics — `kill(pid, 0)`
 
@@ -51,10 +51,10 @@ without delivering a signal. The result is interpreted as follows:
 
 | Result | Meaning | Source |
 |--------|---------|--------|
-| `rc == 0` | the process exists and is signalable → **alive** | `src/utils/process.rs:19` |
-| `rc != 0`, errno `ESRCH` | no such process → **dead** | `src/utils/process.rs:24` |
-| `rc != 0`, errno `EPERM` | the process exists but is not ours to signal → **alive** | `src/utils/process.rs:24` |
-| `rc != 0`, any other / unknown errno | cannot prove absence → **alive** | `src/utils/process.rs:24` |
+| `rc == 0` | the process exists and is signalable → **alive** | `src/utils/process.rs:24` |
+| `rc != 0`, errno `ESRCH` | no such process → **dead** | `src/utils/process.rs:29` |
+| `rc != 0`, errno `EPERM` | the process exists but is not ours to signal → **alive** | `src/utils/process.rs:29` |
+| `rc != 0`, any other / unknown errno | cannot prove absence → **alive** | `src/utils/process.rs:29` |
 
 ```rust
 #[cfg(unix)]
@@ -62,7 +62,7 @@ pub(crate) fn classify_kill_zero_error(errno: Option<i32>) -> bool {
     !matches!(errno, Some(libc::ESRCH))
 }
 ```
-— `src/utils/process.rs:22-25`
+— `src/utils/process.rs:27-30`
 
 **Only `ESRCH` proves absence. `EPERM` and unknown errnos mean the process is
 live.** The function is deliberately conservative: it never reports a process
@@ -96,14 +96,14 @@ pub(crate) fn is_process_alive(pid: u32) -> bool {
     }
 }
 ```
-— `src/utils/process.rs:31-50`
+— `src/utils/process.rs:36-55`
 
 | Step | Result | Source |
 |------|--------|--------|
-| `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)` returns a null handle | reported **dead** | `src/utils/process.rs:42-44` |
-| `GetExitCodeProcess` fails | reported **dead** | `src/utils/process.rs:48` |
-| `GetExitCodeProcess` succeeds and the exit code is `STILL_ACTIVE` (259) | reported **alive** | `src/utils/process.rs:48` |
-| `GetExitCodeProcess` succeeds with any other exit code | reported **dead** | `src/utils/process.rs:48` |
+| `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)` returns a null handle | reported **dead** | `src/utils/process.rs:47-49` |
+| `GetExitCodeProcess` fails | reported **dead** | `src/utils/process.rs:53` |
+| `GetExitCodeProcess` succeeds and the exit code is `STILL_ACTIVE` (259) | reported **alive** | `src/utils/process.rs:53` |
+| `GetExitCodeProcess` succeeds with any other exit code | reported **dead** | `src/utils/process.rs:53` |
 
 ### Platform difference (important)
 
@@ -116,7 +116,7 @@ The two platforms are **not** equally conservative:
 | Platform cannot determine the answer | **alive** | **dead** |
 
 On Windows the null-handle branch collapses "no such process" and "access
-denied" into the same answer (`src/utils/process.rs:42-44`), and `GetLastError`
+denied" into the same answer (`src/utils/process.rs:47-49`), and `GetLastError`
 is never inspected. A live but protected process is therefore reported as
 **dead** on Windows while it is reported as **alive** on Unix. This is the
 reason the Windows liveness result must not be used to authorize stealing a
@@ -131,7 +131,7 @@ running process.
 ### PID 0 is never a valid owner
 
 Both implementations short-circuit `pid == 0` to `false`
-(`src/utils/process.rs:15-17`, `:33-35`). On Unix, `kill(0, 0)` targets the
+(`src/utils/process.rs:20-22`, `:33-35`). On Unix, `kill(0, 0)` targets the
 caller's **process group** and would always succeed, so a lock record with
 PID `0` would read as permanently alive. Treating PID 0 as dead removes that
 trap.
@@ -159,7 +159,7 @@ pub(crate) fn remove_owned_lock_file(
     owner_start_token: Option<&str>,
 ) -> bool
 ```
-— `src/utils/process.rs:60-65`
+— `src/utils/process.rs:65-70`
 
 Removes a lock file **only if it still holds our ownership record**. It
 returns `true` only when this call actually removed the file.
@@ -167,20 +167,20 @@ returns `true` only when this call actually removed the file.
 ### Algorithm
 
 1. **Open the file** and read the content *through that handle*
-   (`src/utils/process.rs:70-76`). A read failure aborts with `false`.
+   (`src/utils/process.rs:75-81`). A read failure aborts with `false`.
 2. **Parse as `toml::Table`**, not `toml::Value`
-   (`src/utils/process.rs:81-83`). A lock record is a top-level TOML
+   (`src/utils/process.rs:86-88`). A lock record is a top-level TOML
    *document* with several keys; `toml::Value` only accepts a single
    standalone value and would reject it. A parse failure aborts with
    `false`.
-3. **Compare all three identity fields** (`src/utils/process.rs:85-93`):
+3. **Compare all three identity fields** (`src/utils/process.rs:90-98`):
    `nonce` (string), `pid` (integer), and `start_token` (string or `None`).
    Any mismatch aborts with `false`.
 4. **Confirm the file at `path` is still the file we verified** — on Unix,
    compare the opened handle's `(dev, ino)` against a fresh stat of `path`
-   (`src/utils/process.rs:97-104`). A mismatch aborts with `false`.
+   (`src/utils/process.rs:102-109`). A mismatch aborts with `false`.
 5. **Unlink** — `fs::remove_file(path).is_ok()`
-   (`src/utils/process.rs:112`).
+   (`src/utils/process.rs:117`).
 
 ### The TOCTOU window it closes
 
@@ -196,7 +196,7 @@ removal is skipped.
 
 On Windows there is no stable file-id API in `std`, so the handle-based
 content check is the strongest verification available
-(`src/utils/process.rs:105-110`). The same trade-off applies.
+(`src/utils/process.rs:110-115`). The same trade-off applies.
 
 ### When it is safe to use
 
@@ -237,17 +237,17 @@ already replaced it.
 ## Invariants
 
 1. **Only `ESRCH` proves a process is absent.** `EPERM` and unknown errnos
-   are reported as alive (`src/utils/process.rs:23-25`).
+   are reported as alive (`src/utils/process.rs:28-30`).
 2. **PID 0 is never a valid lock owner** and is reported dead on every
-   platform (`src/utils/process.rs:15-17`, `:33-35`).
+   platform (`src/utils/process.rs:20-22`, `:33-35`).
 3. **A lock file is removed only when nonce, PID, and start token all match**
-   (`src/utils/process.rs:85-93`).
+   (`src/utils/process.rs:90-98`).
 4. **Removal additionally requires that the file at `path` is the same
-   inode that was verified** on Unix (`src/utils/process.rs:97-104`).
+   inode that was verified** on Unix (`src/utils/process.rs:102-109`).
 5. **An unparseable or empty lock file is never removed by this helper** —
-   it is left for the quarantine path (`src/utils/process.rs:81-83`).
+   it is left for the quarantine path (`src/utils/process.rs:86-88`).
 6. **`remove_owned_lock_file` returns `true` only on an actual removal**
-   (`src/utils/process.rs:112`).
+   (`src/utils/process.rs:117`).
 
 ---
 
@@ -257,7 +257,7 @@ already replaced it.
   `src/auto_sync/execution_lock.rs:180` rather than widening this module's
   visibility.
 - **Do not treat `false` as proof of death on Windows.** The null-handle
-  branch (`src/utils/process.rs:42-44`) also fires for access-denied. The
+  branch (`src/utils/process.rs:47-49`) also fires for access-denied. The
   Unix path is the conservative one; the Windows path is not.
 - **Do not use `is_process_alive` to authorize reclaiming a lock.** It is
   used for reclaim decisions only in combination with the start-token
@@ -265,11 +265,11 @@ already replaced it.
   (`src/transaction.rs:62-70`, `:1225-1227`), and for display/status in the
   kernel-backed family.
 - **Do not replace `toml::Table` with `toml::Value`** in
-  `remove_owned_lock_file` (`src/utils/process.rs:60`). A lock record has
+  `remove_owned_lock_file` (`src/utils/process.rs:65`). A lock record has
   multiple top-level keys and `toml::Value` cannot parse it — the helper
   would silently stop removing anything.
 - **Do not skip the `(dev, ino)` check** on Unix
-  (`src/utils/process.rs:97-104`); it is the guard against unlinking a
+  (`src/utils/process.rs:102-109`); it is the guard against unlinking a
   concurrently re-acquired lock.
 - **Do not call `remove_owned_lock_file` on a lock file you did not create.**
   It will refuse, but relying on the refusal rather than the ownership

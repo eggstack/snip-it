@@ -203,7 +203,7 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 
 | Property | Detail | Source |
 |---|---|---|
-| Scheme check | TLS enabled when URL scheme is `https`. `http://` is rejected for non-loopback hosts in `create_tls_channel`; `SNIP_SYNC_ALLOW_HTTP=true` overrides the loopback check. | `src/sync.rs:1066-1106` (`create_tls_channel`) |
+| Scheme check | TLS enabled when URL scheme is `https`. `http://` is rejected for non-loopback hosts in `create_tls_channel`; `SNIP_SYNC_ALLOW_HTTP=true` overrides the loopback check. | `src/sync.rs:1191-1231` (`create_tls_channel`) |
 | HTTP dev mode | `SNIP_SYNC_ALLOW_HTTP` env var bypasses the loopback check (loopback hosts are always allowed) | Documented in sync module |
 | Default server | `http://localhost:50051` (loopback, HTTP allowed) | `src/config.rs:27` |
 
@@ -211,16 +211,16 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 
 | Property | Detail | Source |
 |---|---|---|
-| Root certificates | `webpki-roots` — Mozilla's bundled root CA store | `ClientTlsConfig::with_enabled_roots()` (`src/sync.rs:523`) |
-| Hostname verification | `domain_name()` on TLS config | `src/sync.rs:525` |
-| HTTP/2 | `assume_http2(true)` for h2 ALPN | `src/sync.rs:526` |
+| Root certificates | `webpki-roots` — Mozilla's bundled root CA store | `ClientTlsConfig::with_enabled_roots()` (`src/sync.rs:623`) |
+| Hostname verification | `domain_name()` on TLS config | `src/sync.rs:625` |
+| HTTP/2 | `assume_http2(true)` for h2 ALPN | `src/sync.rs:626` |
 
 ### F.3 Authentication
 
 | Property | Detail | Source |
 |---|---|---|
-| Mechanism | Bearer token in gRPC `authorization` metadata | `src/sync.rs:132-139` |
-| Body field | `api_key` field in protobuf messages is intentionally left empty to avoid wire-level leakage | `src/sync.rs:200` — `api_key: String::new()` |
+| Mechanism | Bearer token in gRPC `authorization` metadata | `src/sync.rs:147-154` |
+| Body field | `api_key` field in protobuf messages is intentionally left empty to avoid wire-level leakage | `src/sync.rs:215` — `api_key: String::new()` |
 | Server extraction | Server extracts API key from metadata first, falls back to body | Server-side (`snip-sync`) |
 
 ### F.4 Size Limits
@@ -235,19 +235,19 @@ The `validate_target` function (`src/utils/atomic.rs:107-161`) rejects:
 
 | Timeout | Default | Configurable | Source |
 |---|---|---|---|
-| Connect | 10s | `SNP_SYNC_CONNECT_TIMEOUT` env var | `src/sync.rs:509-511` |
-| Request | 30s | `SNP_SYNC_REQUEST_TIMEOUT` env var | `src/sync.rs:513-516` |
+| Connect | 10s | `SNP_SYNC_CONNECT_TIMEOUT` env var | `src/sync.rs:609-611` |
+| Request | 30s | `SNP_SYNC_REQUEST_TIMEOUT` env var | `src/sync.rs:613-616` |
 | Executor sync | 30s | `auto_sync_timeout_seconds` in config | `src/config.rs:37`, `src/config.rs:329-335` |
 
 ### F.6 Retry Behavior
 
 | Property | Detail | Source |
 |---|---|---|
-| Strategy | Exponential backoff with jitter | `src/sync.rs:84-115` |
+| Strategy | Exponential backoff with jitter | `src/sync.rs:99-130` |
 | Max retries | 3 (4 total attempts) | `src/sync.rs:32` |
 | Initial delay | 100ms | `src/sync.rs:33` |
-| Max delay | 5s (normal); 120s (rate-limited) | `src/sync.rs:34`, `src/sync.rs:310-314` |
-| Rate limiting | 4x backoff multiplier on `ResourceExhausted` | `src/sync.rs:309` |
+| Max delay | 5s (normal); 120s (rate-limited) | `src/sync.rs:34`, `src/sync.rs:392-403` |
+| Rate limiting | 4x backoff multiplier on `ResourceExhausted` | `src/sync.rs:391` |
 | Non-retryable | `InvalidArgument`, `NotFound`, `AlreadyExists`, `PermissionDenied`, `Unauthenticated` | `src/sync.rs:58-67` |
 
 ### F.7 Server-Side Security

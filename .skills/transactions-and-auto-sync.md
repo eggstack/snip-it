@@ -17,7 +17,7 @@ this before changing either.
 - `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)` needs BOTH.
 - `transaction_dir` has a dedicated helper — `local_data::transaction_dir()`
   (`src/local_data.rs:398-400`) — which is `config::derive_sync_state_dir().join(".transaction")`.
-  `src/commands/mod.rs:210-211` uses that helper. **But not every call site does**:
+  `src/commands/mod.rs:252-253` uses that helper. **But not every call site does**:
   `src/commands/restore_cmd.rs:1140-1141` derives the same two directories by
   hand (`notification::derive_state_dir()` + `.join(".transaction")`). The two
   are currently equivalent (`notification::derive_state_dir()` delegates to

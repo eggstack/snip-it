@@ -55,15 +55,24 @@ use tonic::{Request, Response, Status};
 
 /// Extract the API key from a gRPC request's `authorization` metadata.
 /// Falls back to the body `api_key` field for backward compatibility.
+///
+/// The auth-scheme token is case-insensitive (RFC 9110 §11.1), so `Bearer`,
+/// `bearer`, and `BEARER` are all accepted. Only the scheme is matched
+/// leniently; the credential itself is used verbatim (minus surrounding
+/// whitespace) and compared exactly by the authentication path.
 pub fn extract_api_key<T>(request: &Request<T>, body_api_key: &str) -> String {
     request
         .metadata()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|v| {
+            let (scheme, credential) = v.split_once(' ')?;
+            scheme
+                .eq_ignore_ascii_case("bearer")
+                .then(|| credential.trim().to_owned())
+        })
         .filter(|v| !v.is_empty())
-        .unwrap_or(body_api_key)
-        .to_string()
+        .unwrap_or_else(|| body_api_key.to_string())
 }
 
 fn strip_port(addr: &str) -> String {
@@ -621,9 +630,13 @@ pub struct SnipSyncService {
     /// sanitized events to the observer.
     #[cfg(any(test, feature = "test-helpers"))]
     pub test_observer: Option<Arc<dyn crate::test_observer::TestRequestObserver>>,
-    /// Test-only: fail `PushSnippets` after this many successful calls.
-    /// Each successful push decrements the counter; when it reaches zero
-    /// the next push returns an internal error. Set to `None` to disable.
+    /// Test-only: failure-injection threshold for `PushSnippets`.
+    ///
+    /// The value is the 1-indexed push call that must fail: once
+    /// `push_fail_counter` reaches it, the push is rejected with an
+    /// internal error. `u32::MAX` (the default) disables injection. This
+    /// field is only read — the call counter is tracked separately in
+    /// `push_fail_counter`.
     #[cfg(any(test, feature = "test-helpers"))]
     pub push_fail_after: Arc<std::sync::atomic::AtomicU32>,
     /// Test-only: internal counter for push failure injection.
@@ -709,6 +722,14 @@ impl SnipSyncService {
 
     pub fn record_auth_failure(&self) {
         self.metrics.auth_failures.inc();
+    }
+
+    /// Record a database failure (for example an upsert that failed inside a
+    /// write transaction). Database failures are infrastructure errors, not
+    /// content-level skips, so they are counted separately from the
+    /// `skipped_count` a client sees.
+    pub fn record_db_error(&self) {
+        self.metrics.db_errors_total.inc();
     }
 
     pub fn record_sync(&self, direction: &str) {
@@ -1251,6 +1272,12 @@ impl SnippetSync for SnipSyncService {
         let mut accepted = 0;
         let mut rejected = 0;
 
+        // The write transaction deliberately spans every upsert of the
+        // request: a push is all-or-nothing, and a failed upsert rolls the
+        // whole batch back (see the error arm below). Committing in batches
+        // would shorten the SQLite write-lock window, but it would also turn
+        // a mid-batch failure into a partially applied upload — a contract
+        // change that needs its own design decision, not a silent tweak.
         let mut tx = self.db.pool().begin().await.map_err(|e| {
             self.record_request_duration("push_snippets", start);
             self.record_request_finished("push_snippets", false);
@@ -1305,6 +1332,7 @@ impl SnippetSync for SnipSyncService {
                         reason = %e,
                         "Snippet upsert failed"
                     );
+                    self.record_db_error();
                     // Rollback failure must not leak a dirty connection back
                     // into the pool. sqlx 0.9 guarantees this on release: a
                     // returned PoolConnection is pinged, which flushes any
@@ -1413,6 +1441,12 @@ impl SnippetSync for SnipSyncService {
 
         let mut skipped_ids = Vec::new();
 
+        // The write transaction deliberately spans every upsert of the
+        // request, for the same reason as `push_snippets`: a sync is
+        // all-or-nothing and a failed upsert rolls the whole batch back.
+        // Batching the commits would shorten the SQLite write-lock window
+        // but would turn a mid-batch failure into a partially applied
+        // upload, which needs its own design decision.
         let mut tx = self.db.pool().begin().await.map_err(|e| {
             self.record_request_duration("sync", start);
             self.record_request_finished("sync", false);
@@ -1464,13 +1498,31 @@ impl SnippetSync for SnipSyncService {
                     skipped_ids.push(snippet.id.clone());
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    // A database error is an infrastructure failure, not a
+                    // content-level skip. Reporting it as a skip would tell
+                    // the client the sync succeeded while the snippet was
+                    // never stored. Roll the transaction back and answer
+                    // with an internal error so the client retries.
+                    tracing::error!(
                         request_id = %request_id,
                         snippet_id = %snippet.id,
                         reason = %e,
-                        "Snippet skipped: upsert failed"
+                        "Snippet upsert failed: rolling back the sync transaction"
                     );
-                    skipped_ids.push(snippet.id.clone());
+                    self.record_db_error();
+                    // Rollback failure must not leak a dirty connection back
+                    // into the pool (sqlx hard-closes a connection whose
+                    // rollback cannot be flushed).
+                    if let Err(rollback_error) = tx.rollback().await {
+                        tracing::error!(
+                            request_id = %request_id,
+                            error = %rollback_error,
+                            "Failed to roll back sync transaction"
+                        );
+                    }
+                    self.record_request_duration("sync", start);
+                    self.record_request_finished("sync", false);
+                    return Err(Status::internal("Internal error"));
                 }
             }
         }
@@ -1490,9 +1542,13 @@ impl SnippetSync for SnipSyncService {
 
         let offset = if req.offset > 0 { req.offset } else { 0 };
 
-        let (snippets, total) = self
+        // One page plus a `LIMIT limit + 1` probe row: `has_more` is derived
+        // from the rows themselves, so the common single-page sync no longer
+        // pays for a second `COUNT(*)` scan over the same range. `total`
+        // keeps its exact meaning (see `Database::get_snippets_page`).
+        let page = self
             .db
-            .get_snippets(
+            .get_snippets_page(
                 &user_id,
                 &library_id,
                 req.last_sync_timestamp,
@@ -1508,9 +1564,11 @@ impl SnippetSync for SnipSyncService {
                 Status::internal("Internal error")
             })?;
 
-        let has_more_by_rows = offset.saturating_add(snippets.len() as i32) < total;
+        let total = page.total;
+        let has_more_by_rows = page.has_more;
 
-        let mut proto_snippets: Vec<ProtoSnippet> = snippets
+        let mut proto_snippets: Vec<ProtoSnippet> = page
+            .snippets
             .into_iter()
             .map(|s| ProtoSnippet {
                 id: s.id,
@@ -3060,5 +3118,211 @@ mod tests {
         assert_eq!(config.max_device_id_length, 1);
         assert_eq!(config.max_api_key_length, 1);
         assert_eq!(config.rate_limit_per_minute, 1);
+    }
+
+    #[test]
+    fn authorization_scheme_is_matched_case_insensitively() {
+        for scheme in ["Bearer", "bearer", "BEARER", "BeArEr"] {
+            let mut request = Request::new(HealthRequest {});
+            request.metadata_mut().insert(
+                "authorization",
+                format!("{scheme} secret-key").parse().unwrap(),
+            );
+            assert_eq!(
+                extract_api_key(&request, ""),
+                "secret-key",
+                "scheme {scheme} must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_falls_back_to_the_body_key_for_other_schemes() {
+        let mut request = Request::new(HealthRequest {});
+        request
+            .metadata_mut()
+            .insert("authorization", "Basic dXNlcjpwYXNz".parse().unwrap());
+        assert_eq!(extract_api_key(&request, "body-key"), "body-key");
+
+        let request = Request::new(HealthRequest {});
+        assert_eq!(extract_api_key(&request, "body-key"), "body-key");
+    }
+
+    fn snippet(id: &str, updated_at: i64) -> ProtoSnippet {
+        ProtoSnippet {
+            id: id.to_string(),
+            description: format!("description {id}"),
+            command: format!("echo {id}"),
+            tags: vec![],
+            created_at: updated_at,
+            updated_at,
+            device_id: "device".to_string(),
+            deleted: false,
+            encrypted: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_reports_a_database_failure_as_an_internal_error() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        // Fail the second insert only: if the transaction were committed the
+        // first snippet would survive the failed sync.
+        sqlx::query(
+            "CREATE TRIGGER fail_second_insert BEFORE INSERT ON snippets \
+             WHEN NEW.id = 'boom' BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(service.db.pool())
+        .await
+        .unwrap();
+
+        let request = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![snippet("ok-1", 100), snippet("boom", 101)],
+            last_sync_timestamp: 0,
+            library_id: String::new(),
+            limit: 100,
+            offset: 0,
+        });
+
+        let status = service
+            .sync(request)
+            .await
+            .expect_err("a database failure must not be reported as a successful sync");
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(
+            service.metrics.db_errors_total.get(),
+            1,
+            "the database failure must be counted"
+        );
+
+        let stored: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM snippets")
+            .fetch_one(service.db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.0, 0,
+            "the failed sync must not leave a partial write behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_reports_a_database_failure_without_a_skip_count() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        sqlx::query(
+            "CREATE TRIGGER fail_every_insert BEFORE INSERT ON snippets \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+        )
+        .execute(service.db.pool())
+        .await
+        .unwrap();
+
+        let request = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![snippet("only", 100)],
+            last_sync_timestamp: 0,
+            library_id: String::new(),
+            limit: 100,
+            offset: 0,
+        });
+
+        let status = service
+            .sync(request)
+            .await
+            .expect_err("expected an internal error");
+        assert_eq!(status.code(), tonic::Code::Internal);
+        // The failure is not reported as a content-level skip: the response
+        // carries no snippet list at all.
+        assert!(status.message().contains("Internal error"));
+    }
+
+    #[tokio::test]
+    async fn sync_total_and_has_more_are_unchanged_for_a_known_dataset() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let library_id = service
+            .create_library(Request::new(CreateLibraryRequest {
+                api_key: api_key.clone(),
+                name: "paging".to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let local_snippets: Vec<ProtoSnippet> = (0..5)
+            .map(|index| snippet(&format!("row-{index}"), 100 + index))
+            .collect();
+
+        // First page: two of five rows, more pages follow.
+        let first = service
+            .sync(Request::new(SyncRequest {
+                api_key: api_key.clone(),
+                local_snippets,
+                last_sync_timestamp: 0,
+                library_id: library_id.clone(),
+                limit: 2,
+                offset: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(first.snippets.len(), 2);
+        assert!(first.has_more);
+        assert_eq!(first.total_count, 5);
+
+        // Last page: the exact total is still reported.
+        let last = service
+            .sync(Request::new(SyncRequest {
+                api_key: api_key.clone(),
+                local_snippets: vec![],
+                last_sync_timestamp: 0,
+                library_id: library_id.clone(),
+                limit: 2,
+                offset: 4,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(last.snippets.len(), 1);
+        assert!(!last.has_more);
+        assert_eq!(last.total_count, 5);
+
+        // A single page covers the whole range.
+        let whole = service
+            .sync(Request::new(SyncRequest {
+                api_key: api_key.clone(),
+                local_snippets: vec![],
+                last_sync_timestamp: 0,
+                library_id: library_id.clone(),
+                limit: 100,
+                offset: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(whole.snippets.len(), 5);
+        assert!(!whole.has_more);
+        assert_eq!(whole.total_count, 5);
+
+        // `GetSnippets` keeps its exact total as well.
+        let listed = service
+            .get_snippets(Request::new(GetSnippetsRequest {
+                api_key,
+                library_id,
+                limit: 2,
+                offset: 0,
+                since: 0,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(listed.snippets.len(), 2);
+        assert_eq!(listed.total_count, 5);
+        assert!(listed.has_more);
     }
 }

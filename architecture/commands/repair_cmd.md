@@ -192,7 +192,7 @@ pub enum RepairExitStatus {
 
 (`src/commands/repair_cmd.rs:146-161`; `FindingsSafe` is declared at `:158`.) The human report is written to **stderr** (`emit_human_report`, `:929-983`); the JSON report is written to **stdout** (`emit_json_report`, `:986-…`).
 
-`snp repair` uses the dedicated `exit_on_repair_status` mapping (`src/main.rs:375-388`), **not** the generic `CliOutcome` table:
+`snp repair` uses the dedicated `exit_on_repair_status` mapping (`src/main.rs:401-414`), **not** the generic `CliOutcome` table:
 
 | `RepairExitStatus` | Exit code | Meaning |
 |---|---|---|
@@ -203,7 +203,7 @@ pub enum RepairExitStatus {
 | `PartialFailure` | `1` (`GENERAL_ERROR`) | Some repairs failed. |
 | `UnsafeOnly` | `10` (`UNSAFE_REPAIRS`) | Issues found but no safe repair was available. |
 
-`10` deliberately does **not** reuse `2` (`USAGE_ERROR`): a valid invocation that found unsafe repairs awaiting an operator decision is not a usage error (`src/main.rs:369-374`, `src/outcome.rs:69-71`).
+`10` deliberately does **not** reuse `2` (`USAGE_ERROR`): a valid invocation that found unsafe repairs awaiting an operator decision is not a usage error (`src/main.rs:395-400`, `src/outcome.rs:69-71`).
 
 ## Interaction with the transaction journal and locks
 
@@ -238,7 +238,7 @@ pub enum RepairExitStatus {
 - **`--apply` never attempts the library-level categories.** `RepairSnippetIds`, `RepairTimestamps`, and `RepairLibraryIndex` items are pushed with `safe: false` (`repair_cmd.rs:335`, `:348`, `:367`, `:399`, `:416`, `:425`), so `--apply` filters them out and `apply_repair`'s `"Auto-repair not implemented for this category"` branch (`repair_cmd.rs:829-841`) is **unreachable from the item inventory**. Treat `ids` / `timestamps` / `primary` findings as *advisory*: reported, never auto-fixed.
 - **`--apply` wins over `--dry-run`.** With both flags, the apply branch runs first (`repair_cmd.rs:199`), so repairs are really applied — but the closing `(dry run — no changes made)` line is still printed (`repair_cmd.rs:255-257`).
 - The `safe` **field on the item** is what `--apply` filters on (`repair_cmd.rs:200`); `RepairAction::is_safe()` is a separate, unused helper (`:98-110`). Do not assume the enum method drives the filter.
-- **`FindingsSafe` is not `UnsafeOnly`.** A report-only run whose findings are all safe exits `0` with `FindingsSafe`; only a run that finds at least one unsafe finding exits `10` (`repair_cmd.rs:243-252`, `src/main.rs:375-388`).
+- **`FindingsSafe` is not `UnsafeOnly`.** A report-only run whose findings are all safe exits `0` with `FindingsSafe`; only a run that finds at least one unsafe finding exits `10` (`repair_cmd.rs:243-252`, `src/main.rs:401-414`).
 - `snp repair` does **not** hold the local-data lock for the whole run, and it takes no transaction lock for the non-transaction actions. It can therefore run concurrently with a `snp backup` snapshot; only the individual actions take their own locks.
 - The pre-repair backup is **not** a `snp backup` snapshot: it has no `manifest.toml` and cannot be restored with `snp restore`.
 - `libraries.toml` / `usage.toml` copy failures in the pre-repair backup are swallowed (`repair_cmd.rs:895`, `:901`).

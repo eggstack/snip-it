@@ -18,8 +18,8 @@ can run a snippet), library mutation, the user-facing protocol contract
 
 **Sources**: `src/mcp/mod.rs` (28 lines), `src/mcp/protocol.rs` (479),
 `src/mcp/tools.rs` (307), `src/mcp/client_install.rs` (269).
-CLI wiring: `McpCommands` (`src/main.rs:239`), classified `SuppressReadOnly` +
-`Minimal` (`src/main.rs:895`).
+CLI wiring: `McpCommands` (`src/main.rs:265`), classified `SuppressReadOnly` +
+`Minimal` (`src/main.rs:932`).
 
 ## Module Map
 
@@ -147,7 +147,7 @@ Constants at `src/mcp/protocol.rs:17-21`.
 All three take an optional `library` (name or `all`); unknown names surface as
 MCP `invalid_params` (`src/mcp/tools.rs:253-261`). Deleted snippets are always
 filtered out (`src/mcp/tools.rs:67`, `:88`; the selector also excludes them at
-`src/selector.rs:363`).
+`src/selector.rs:385`).
 
 | Tool | Arguments | Behavior |
 |------|-----------|----------|
@@ -224,7 +224,7 @@ The exact schemas returned by `tools/list` (`src/mcp/protocol.rs:250-302`):
   the same ranking path as the CLI.
 - The optional `tags[]` argument pre-filters with `matches_required_tags()`:
   a snippet is kept only if it carries **every** listed tag, compared
-  case-insensitively (`src/mcp/tools.rs:91`; `src/selector.rs:202`).
+  case-insensitively (`src/mcp/tools.rs:91`; `src/selector.rs:224`).
 - An empty `query` matches everything (up to `limit`) with no scores
   (`src/mcp/tools.rs:95-98`).
 
@@ -283,9 +283,9 @@ These are enforced by construction, not by convention:
   `OpenOptions`. Snippets are read through `crate::library::load_library()`,
   which parses and returns; it never writes.
 - **No recovery / no migration.** The read path uses the **side-effect-free**
-  resolver: `resolve_selector_readonly()` (`src/selector.rs:623`) and
-  `library::readonly_library_sources()` (`src/library/manager.rs:784`), never
-  `resolve_selector()` (`src/selector.rs:681`), which calls
+  resolver: `resolve_selector_readonly()` (`src/selector.rs:645`) and
+  `library::readonly_library_sources()` (`src/library/manager.rs:815`), never
+  `resolve_selector()` (`src/selector.rs:703`), which calls
   `LibraryManager::ensure_library_mode()` and can migrate a legacy
   single-file checkout, create `libraries/`, copy the legacy file, write
   `libraries.toml`, and bump the generation. MCP never calls the mutating
@@ -299,17 +299,17 @@ These are enforced by construction, not by convention:
   returns `NotFound` / `One` / `Many` / `Ambiguous` as data; there is no TUI,
   no stdin prompt, and no auto-expand of variables.
 - **No background work.** `snp mcp …` is classified `SuppressReadOnly` +
-  `Minimal` (`src/main.rs:895`), so no auto-sync worker is spawned, no network
+  `Minimal` (`src/main.rs:932`), so no auto-sync worker is spawned, no network
   connection is opened, and no recovery runs at startup.
 
 ## Search Parity
 
 All three search surfaces share `selector::searchable_text()`
-(`src/selector.rs:135`) and the `SearchFields` flags (`src/selector.rs:91`):
+(`src/selector.rs:142`) and the `SearchFields` flags (`src/selector.rs:91`):
 
 | Surface | Entry point | Fields |
 |---------|-------------|--------|
-| `snp get --query` | `SnippetSelector::resolve` → `score_fuzzy_matches(..., SearchFields::fuzzy_default())` (`src/selector.rs:419`) | description + command + tags |
+| `snp get --query` | `SnippetSelector::resolve` → `score_fuzzy_matches(..., SearchFields::fuzzy_default())` (`src/selector.rs:441`) | description + command + tags |
 | `snp list --filter` | `src/commands/list_cmd.rs:93` with `SearchFields { include_tags: true, include_output: search_output }` (`src/commands/list_cmd.rs:80`) | description + command + tags (+ output/notes with `--search-output`) |
 | MCP `snippets_search` | `src/mcp/tools.rs:99` with the same two flags | description + command + tags (+ output/notes with `search_output: true`) |
 
@@ -318,7 +318,7 @@ All three search surfaces share `selector::searchable_text()`
   additionally supports the explicit `tags[]` must-carry-every-tag filter.
 - `output`/notes participate only opt-in (`include_output`), bounded to a
   512-char `OutputPresentation::for_scoring()` summary
-  (`src/selector.rs:152`) — the same contract as `snp list --search-output` and
+  (`src/selector.rs:171`) — the same contract as `snp list --search-output` and
   MCP `search_output: true`.
 - `folders`, `favorite`, sync metadata, credentials, and keychain data are
   **never** searchable.
@@ -337,14 +337,14 @@ through the normal library loader (`tests/mcp_integration.rs:309-331`).
 ## `snippet_get` Identity Contract
 
 Mirrors `snp get` exactly (`src/mcp/tools.rs:129-206`; matching rules at
-`src/selector.rs:354-414`):
+`src/selector.rs:376-436`):
 
 - `id` — exact match, **case-sensitive** (`s.id == id.as_str()`,
-  `src/selector.rs:369`).
+  `src/selector.rs:391`).
 - `description` — exact match, case-insensitive
-  (`eq_ignore_ascii_case`, `src/selector.rs:400`), must be unique in scope.
+  (`eq_ignore_ascii_case`, `src/selector.rs:422`), must be unique in scope.
 - `command` — exact match, case-insensitive (`eq_ignore_ascii_case`,
-  `src/selector.rs:410`), must be unique in scope.
+  `src/selector.rs:432`), must be unique in scope.
 - Exactly one of the three must be supplied (`oneOf` in the input schema,
   `src/mcp/protocol.rs:292-296`, enforced again in `tools::get`).
 - Zero matches → `not_found`; multiple → `ambiguous` with identities.
@@ -387,17 +387,17 @@ Mirrors `snp get` exactly (`src/mcp/tools.rs:129-206`; matching rules at
 
 ## CLI Surface
 
-`McpCommands` (`src/main.rs:239`) exposes three subcommands, all classified
-`SuppressReadOnly` + `Minimal` (`src/main.rs:895`) so agent reads never spawn
+`McpCommands` (`src/main.rs:265`) exposes three subcommands, all classified
+`SuppressReadOnly` + `Minimal` (`src/main.rs:932`) so agent reads never spawn
 workers, open network connections, or create log/config state:
 
 - `snp mcp serve` — run the stdio server until EOF (`mcp::serve()`,
-  `src/mcp/mod.rs:14`, `src/main.rs:821`).
+  `src/mcp/mod.rs:14`, `src/main.rs:858`).
 - `snp mcp instructions <client>` — print the absolute-path setup block for one
-  of the six supported clients (`src/main.rs:822`).
+  of the six supported clients (`src/main.rs:859`).
 - `snp mcp install <client>` — invoke the official noninteractive registration
   when one exists, else print manual setup without changing anything
-  (`src/main.rs:823`).
+  (`src/main.rs:860`).
 
 ## Tests
 
@@ -422,10 +422,10 @@ discards oversized lines).
 - `src/mcp/protocol.rs` — JSON-RPC framing, handshake, `tools/list`, dispatch, error codes
 - `src/mcp/tools.rs` — the three read-only tools and their argument schemas
 - `src/mcp/client_install.rs` — `McpClient`, official-CLI gate, manual setup blocks
-- `src/selector.rs:135` — `searchable_text`, the shared search contract
-- `src/selector.rs:623` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
-- `src/library/manager.rs:784` — `readonly_library_sources`, the read-only library resolver
-- `src/main.rs:239` — `McpCommands`; `src/main.rs:895` — read-only service classification
+- `src/selector.rs:142` — `searchable_text`, the shared search contract
+- `src/selector.rs:645` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
+- `src/library/manager.rs:815` — `readonly_library_sources`, the read-only library resolver
+- `src/main.rs:265` — `McpCommands`; `src/main.rs:932` — read-only service classification
 - `tests/mcp_integration.rs` — end-to-end protocol contract
 
 ## Invariants
@@ -444,12 +444,12 @@ discards oversized lines).
 ## Gotchas
 
 - **The read-only resolver is a hard requirement, not a preference.**
-  `resolve_selector()` (`src/selector.rs:681`) calls `ensure_library_mode()`,
+  `resolve_selector()` (`src/selector.rs:703`) calls `ensure_library_mode()`,
   which migrates a legacy single-file checkout and rewrites metadata. MCP uses
-  `resolve_selector_readonly()` (`src/selector.rs:623`) instead. Swapping them
+  `resolve_selector_readonly()` (`src/selector.rs:645`) instead. Swapping them
   reintroduces recovery side effects into an agent-facing read path.
 - **`readonly_library_sources` avoids *library* migration, not *every* write.**
-  `LibraryManager::new()` (`src/library/manager.rs:41`) can still move a legacy
+  `LibraryManager::new()` (`src/library/manager.rs:43`) can still move a legacy
   macOS config directory and can write a best-effort `libraries.toml.corrupt`
   backup when the index is malformed. Neither migrates or rewrites library
   metadata; the point is that no `ensure_library_mode()` runs.

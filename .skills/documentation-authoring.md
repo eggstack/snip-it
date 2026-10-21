@@ -99,7 +99,7 @@ A new subcommand touches more than the dispatch arm. The full set:
    commands (`sync_cmd`, `import_cmd`, `library_cmd`, `premade_cmd`,
    `shell_cmd`) keep their schema in `src/main.rs` rather than in
    `src/commands/`; the other modules define a canonical `*Args` struct.
-2. **`src/main.rs:887`** — a `command_behavior()` arm. Every new subcommand
+2. **`src/main.rs:924`** — a `command_behavior()` arm. Every new subcommand
    needs one; it declares the startup-recovery policy (whether the command
    triggers interrupted-transaction recovery before it runs).
 3. **`src/outcome.rs`** — a `CliOutcome` variant and its exit-code mapping,

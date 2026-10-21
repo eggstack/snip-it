@@ -469,6 +469,14 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
         ));
     }
 
+    // Refuse the write while an interrupted transaction awaits recovery:
+    // `sync.toml` must not land in a config tree that a pending restore is
+    // about to roll back.
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &crate::config::derive_sync_state_dir(),
+        &crate::local_data::transaction_dir(),
+    )?;
+
     let state_dir = crate::local_data::transaction_dir();
     let _local_lock = crate::local_data::acquire_local_data_lock(&state_dir)?;
 

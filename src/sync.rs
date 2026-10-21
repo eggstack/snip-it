@@ -73,6 +73,21 @@ impl SyncRunLimits {
     }
 }
 
+/// Check the remaining budget of a bounded (automatic) sync run.
+///
+/// `limits = None` is an unbounded manual sync and never fails this check.
+/// An expired or exhausted deadline yields the typed timeout failure, which
+/// classifies as [`crate::sync_failure::FailureClass::Transient`].
+fn ensure_budget_for(limits: Option<SyncRunLimits>, context: &str) -> SnipResult<()> {
+    if limits.is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero())) {
+        return Err(SnipError::sync_failure(
+            SyncFailureKind::Timeout,
+            Some(context),
+        ));
+    }
+    Ok(())
+}
+
 /// Configuration for gRPC retry behavior with exponential backoff.
 #[derive(Debug, Clone)]
 pub struct SyncRetryConfig {
@@ -305,27 +320,95 @@ struct EncryptedSnippetData {
     tags: Vec<String>,
 }
 
+/// gRPC path of the `Sync` RPC (mirrors the generated client).
+const SYNC_RPC_PATH: &str = "/snip_proto.SnippetSync/Sync";
+
+/// gRPC codec that encodes a *shared* `SyncRequest`.
+///
+/// `tonic::Request::from_shared` does not exist in tonic 0.14 and the
+/// generated client consumes an owned message, so the retry loop used to
+/// deep-clone the whole request — up to 3.5 MiB of ciphertext — on every
+/// attempt. This codec encodes an `Arc<SyncRequest>` by reference instead:
+/// the message is built once and every attempt shares it.
+///
+/// The bytes on the wire are identical to `tonic_prost::ProstCodec`'s
+/// output: prost encodes the same message value to the same bytes, and the
+/// gRPC framing is applied by tonic's request body either way.
+struct SharedSyncRequestCodec;
+
+struct SharedSyncRequestEncoder;
+
+impl tonic::codec::Encoder for SharedSyncRequestEncoder {
+    type Item = std::sync::Arc<SyncRequest>;
+    type Error = tonic::Status;
+
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        buf: &mut tonic::codec::EncodeBuf<'_>,
+    ) -> Result<(), Self::Error> {
+        // Same encoding call as `tonic_prost::ProstEncoder`, but on a shared
+        // reference: no deep copy of the payload.
+        item.as_ref()
+            .encode(buf)
+            .expect("Message only errors if not enough space");
+        Ok(())
+    }
+}
+
+struct SyncResponseDecoder;
+
+impl tonic::codec::Decoder for SyncResponseDecoder {
+    type Item = crate::proto::SyncResponse;
+    type Error = tonic::Status;
+
+    fn decode(
+        &mut self,
+        buf: &mut tonic::codec::DecodeBuf<'_>,
+    ) -> Result<Option<Self::Item>, Self::Error> {
+        crate::proto::SyncResponse::decode(buf)
+            .map(Some)
+            .map_err(|error| tonic::Status::internal(error.to_string()))
+    }
+}
+
+impl tonic::codec::Codec for SharedSyncRequestCodec {
+    type Encode = std::sync::Arc<SyncRequest>;
+    type Decode = crate::proto::SyncResponse;
+    type Encoder = SharedSyncRequestEncoder;
+    type Decoder = SyncResponseDecoder;
+
+    fn encoder(&mut self) -> Self::Encoder {
+        SharedSyncRequestEncoder
+    }
+
+    fn decoder(&mut self) -> Self::Decoder {
+        SyncResponseDecoder
+    }
+}
+
 /// Client for syncing snippets with a remote server.
 ///
 /// Wraps a gRPC client with encryption handling for secure sync operations.
 pub struct SyncClient {
     client: SnippetSyncClient<Channel>,
+    /// Raw gRPC handle used for the `Sync` RPC.
+    ///
+    /// The generated client consumes an owned request message, which forced a
+    /// deep clone of the whole payload on every retry attempt. This handle
+    /// encodes an `Arc<SyncRequest>` instead (see
+    /// [`SharedSyncRequestCodec`]), so the request is built once and shared.
+    sync_grpc: tonic::client::Grpc<Channel>,
     settings: SyncSettings,
     limits: Option<SyncRunLimits>,
 }
 
 impl SyncClient {
     fn ensure_budget(&self) -> SnipResult<()> {
-        if self
-            .limits
-            .is_some_and(|limits| limits.remaining().is_none_or(|duration| duration.is_zero()))
-        {
-            return Err(SnipError::sync_failure(
-                crate::error::SyncFailureKind::Timeout,
-                Some("automatic sync deadline expired before network operation"),
-            ));
-        }
-        Ok(())
+        ensure_budget_for(
+            self.limits,
+            "automatic sync deadline expired before network operation",
+        )
     }
 
     /// Creates a new sync client connected to the server specified in settings.
@@ -349,7 +432,8 @@ impl SyncClient {
             })?;
 
         Ok(Self {
-            client: SnippetSyncClient::new(channel),
+            client: SnippetSyncClient::new(channel.clone()),
+            sync_grpc: tonic::client::Grpc::new(channel),
             settings,
             limits,
         })
@@ -419,8 +503,24 @@ impl SyncClient {
     ) -> SnipResult<crate::proto::SyncResponse> {
         let _key_cache_guard = encryption::key_cache_guard();
         self.ensure_budget()?;
-        let api_key = self.settings.api_key.as_str();
-        let (encrypted_snippets, encrypt_failed_ids) = encrypt_snippets(api_key, &local_snippets);
+        // The encryption phase is synchronous and dominated by Argon2id
+        // (~67 ms per snippet with the shipped parameters). Running it on the
+        // runtime thread would block the only worker thread of the
+        // auto-sync runtime (`new_current_thread`), so the batch runs on the
+        // blocking pool instead. The failure types are unchanged: an
+        // exhausted budget still yields the typed timeout failure.
+        let api_key = Zeroizing::new(self.settings.api_key.clone());
+        let limits = self.limits;
+        let (encrypted_snippets, encrypt_failed_ids) = tokio::task::spawn_blocking(move || {
+            encrypt_snippets(api_key.as_str(), &local_snippets, limits)
+        })
+        .await
+        .map_err(|error| {
+            SnipError::sync_failure(
+                SyncFailureKind::EncryptionFailed,
+                Some(&format!("snippet encryption task failed: {error}")),
+            )
+        })??;
 
         self.sync_prepared_encrypted_inner(
             encrypted_snippets,
@@ -860,6 +960,28 @@ impl SyncClient {
         Ok(rejected)
     }
 
+    /// Send the `Sync` RPC with a shared request message.
+    ///
+    /// Mirrors the generated `SnippetSyncClient::sync` call — same path, same
+    /// readiness check, same method extension — but encodes the shared
+    /// `Arc<SyncRequest>` instead of an owned clone.
+    async fn sync_rpc(
+        &mut self,
+        request: tonic::Request<std::sync::Arc<SyncRequest>>,
+    ) -> Result<tonic::Response<crate::proto::SyncResponse>, tonic::Status> {
+        self.sync_grpc
+            .ready()
+            .await
+            .map_err(|error| tonic::Status::unknown(format!("Service was not ready: {error}")))?;
+        let codec = SharedSyncRequestCodec;
+        let path = tonic::codegen::http::uri::PathAndQuery::from_static(SYNC_RPC_PATH);
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(tonic::GrpcMethod::new("snip_proto.SnippetSync", "Sync"));
+        self.sync_grpc.unary(request, path, codec).await
+    }
+
     /// Retry logic for sync requests via the unified executor.
     ///
     /// `api_key` is passed explicitly rather than read from `request.api_key` so
@@ -877,13 +999,16 @@ impl SyncClient {
                 Some("No API key is configured. Run 'snp register --force' to provision one."),
             ));
         }
+        // The request message is built once and shared by every attempt: the
+        // codec encodes the `Arc` by reference, so a retry no longer deep
+        // clones up to 3.5 MiB of ciphertext.
         let request = std::sync::Arc::new(request);
         let response = retry_grpc_unified!(
             self.limits,
             async {
-                let mut grpc_req = tonic::Request::new((*request).clone());
+                let mut grpc_req = tonic::Request::new(std::sync::Arc::clone(&request));
                 add_api_key_metadata(&mut grpc_req, api_key);
-                self.client.sync(grpc_req).await
+                self.sync_rpc(grpc_req).await
             },
             "Sync request",
             RetryBackoff::RateLimitAware
@@ -1295,11 +1420,17 @@ pub fn encrypt_snippet(
 
 /// Encrypt a batch of snippets, returning the successfully encrypted
 /// snippets and the IDs that failed encryption.
+///
+/// The remaining budget is re-checked before every snippet: the encryption
+/// phase is synchronous and dominated by Argon2id, so an over-budget batch
+/// must fail fast with the typed timeout failure instead of running to
+/// completion and only then timing out on the RPC.
 fn encrypt_snippets(
     api_key: &str,
     snippets: &[crate::proto::Snippet],
-) -> (Vec<crate::proto::Snippet>, Vec<String>) {
-    encrypt_snippets_with(snippets, |s| encrypt_snippet(api_key, s))
+    limits: Option<SyncRunLimits>,
+) -> SnipResult<(Vec<crate::proto::Snippet>, Vec<String>)> {
+    encrypt_snippets_with(snippets, limits, |s| encrypt_snippet(api_key, s))
 }
 
 /// Encrypt a batch of snippets using the provided encrypt function,
@@ -1307,11 +1438,16 @@ fn encrypt_snippets(
 /// failed. Used by tests to inject encryption failures.
 fn encrypt_snippets_with(
     snippets: &[crate::proto::Snippet],
+    limits: Option<SyncRunLimits>,
     encrypt_fn: impl Fn(&crate::proto::Snippet) -> SnipResult<crate::proto::Snippet>,
-) -> (Vec<crate::proto::Snippet>, Vec<String>) {
+) -> SnipResult<(Vec<crate::proto::Snippet>, Vec<String>)> {
     let mut encrypted = Vec::new();
     let mut failed_ids = Vec::new();
     for s in snippets {
+        ensure_budget_for(
+            limits,
+            "automatic sync deadline expired during snippet encryption",
+        )?;
         match encrypt_fn(s) {
             Ok(es) => encrypted.push(es),
             Err(e) => {
@@ -1320,7 +1456,7 @@ fn encrypt_snippets_with(
             }
         }
     }
-    (encrypted, failed_ids)
+    Ok((encrypted, failed_ids))
 }
 
 /// Decrypts a snippet's encrypted fields received from the sync server.
@@ -1532,7 +1668,7 @@ mod tests {
         {
             self.ensure_budget()?;
             let (encrypted_snippets, encrypt_failed_ids) =
-                encrypt_snippets_with(&local_snippets, encrypt_fn);
+                encrypt_snippets_with(&local_snippets, self.limits, encrypt_fn)?;
             self.sync_prepared_encrypted_inner(
                 encrypted_snippets,
                 encrypt_failed_ids,
@@ -2570,6 +2706,187 @@ mod tests {
     }
 
     const TEST_BYTE_CEILING: usize = 100 * 1024; // 100 KiB
+
+    // ── Encryption budget tests ─────────────────────────────────────
+
+    fn expired_limits() -> SyncRunLimits {
+        SyncRunLimits {
+            deadline: std::time::Instant::now(),
+            request_timeout: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn encryption_budget_exhaustion_fails_with_the_typed_timeout() {
+        let snippets = vec![make_encrypted_snippet("budget-1", 8)];
+
+        let error = encrypt_snippets("api-key", &snippets, Some(expired_limits()))
+            .expect_err("an exhausted budget must abort the encryption batch");
+
+        match &error {
+            SnipError::SyncFailure { kind, detail } => {
+                assert!(
+                    matches!(kind, SyncFailureKind::Timeout),
+                    "expected the typed timeout failure, got {kind:?}"
+                );
+                assert!(
+                    detail
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("during snippet encryption"),
+                    "unexpected failure detail: {detail:?}"
+                );
+            }
+            other => panic!("expected a SyncFailure, got {other:?}"),
+        }
+        assert_eq!(
+            crate::sync_failure::FailureClass::from_error(&error),
+            crate::sync_failure::FailureClass::Transient,
+            "the timeout must keep its transient classification"
+        );
+    }
+
+    #[test]
+    fn encryption_budget_stops_before_any_derivation() {
+        use std::cell::Cell;
+
+        let derivations = Cell::new(0usize);
+        let snippets = vec![
+            make_encrypted_snippet("budget-1", 8),
+            make_encrypted_snippet("budget-2", 8),
+        ];
+
+        let result = encrypt_snippets_with(&snippets, Some(expired_limits()), |snippet| {
+            derivations.set(derivations.get() + 1);
+            Ok(snippet.clone())
+        });
+
+        assert!(
+            result.is_err(),
+            "the batch must fail once the budget is gone"
+        );
+        assert_eq!(
+            derivations.get(),
+            0,
+            "no snippet may be encrypted once the budget is exhausted"
+        );
+    }
+
+    #[test]
+    fn encryption_with_a_live_or_unbounded_budget_encrypts_every_snippet() {
+        let snippets = vec![
+            make_encrypted_snippet("live-1", 8),
+            make_encrypted_snippet("live-2", 8),
+        ];
+
+        let live = SyncRunLimits {
+            deadline: std::time::Instant::now() + Duration::from_secs(30),
+            request_timeout: Duration::from_secs(30),
+        };
+        let (encrypted, failed) =
+            encrypt_snippets_with(&snippets, Some(live), |snippet| Ok(snippet.clone()))
+                .expect("a live budget must not abort the batch");
+        assert_eq!(encrypted.len(), 2);
+        assert!(failed.is_empty());
+
+        let (encrypted, failed) =
+            encrypt_snippets_with(&snippets, None, |snippet| Ok(snippet.clone()))
+                .expect("an unbounded manual sync must not abort the batch");
+        assert_eq!(encrypted.len(), 2);
+        assert!(failed.is_empty());
+    }
+
+    // ── Shared request codec tests ──────────────────────────────────
+
+    #[test]
+    fn shared_request_codec_encodes_the_same_bytes_as_prost() {
+        let request = SyncRequest {
+            api_key: String::new(),
+            local_snippets: vec![make_encrypted_snippet("shared-1", 128)],
+            last_sync_timestamp: 42,
+            library_id: "library".to_string(),
+            limit: 100,
+            offset: 7,
+        };
+
+        // Drive the shared encoder through tonic's own request body so the
+        // gRPC framing is included.
+        let body = tonic::codec::EncodeBody::new_client(
+            SharedSyncRequestEncoder,
+            tonic::codegen::tokio_stream::iter(vec![Ok(std::sync::Arc::new(request.clone()))]),
+            None,
+            None,
+        );
+        let mut body = std::pin::pin!(body);
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        let frame = match tonic::codegen::Body::poll_frame(body.as_mut(), &mut context) {
+            std::task::Poll::Ready(Some(Ok(frame))) => frame,
+            other => panic!("unexpected poll result: {other:?}"),
+        };
+        let framed = frame.into_data().expect("the frame must carry data");
+        let framed: &[u8] = framed.as_ref();
+
+        let expected_message = prost::Message::encode_to_vec(&request);
+        // gRPC framing: one compression flag byte plus a big-endian length.
+        assert_eq!(framed[0], 0, "the message must not be compressed");
+        let length = u32::from_be_bytes([framed[1], framed[2], framed[3], framed[4]]) as usize;
+        assert_eq!(length, expected_message.len());
+        assert_eq!(
+            &framed[5..],
+            expected_message.as_slice(),
+            "the shared codec must produce the same bytes as the standard prost encoding"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sync_rpc_delivers_the_uploaded_payload() {
+        let service = snip_sync::test_helpers::build_test_service().await;
+        let (addr, server_task, _captured) =
+            snip_sync::test_helpers::start_test_server(service).await;
+        let server_url = format!("http://{addr}");
+
+        let (api_key, device_id) = SyncClient::register(server_url.clone())
+            .await
+            .expect("register should succeed");
+        let mut client = build_sync_client(&server_url, &api_key).await;
+
+        let now = chrono::Utc::now().timestamp();
+        let local_snippets: Vec<crate::proto::Snippet> = (0..3)
+            .map(|index| crate::proto::Snippet {
+                id: format!("shared-{index}"),
+                description: format!("shared snippet {index}"),
+                command: format!("echo shared-{index}"),
+                tags: vec!["tag".to_string()],
+                created_at: now,
+                updated_at: now,
+                device_id: device_id.clone(),
+                deleted: false,
+                encrypted: false,
+            })
+            .collect();
+
+        let response = client
+            .sync_encrypted(local_snippets, 0, "")
+            .await
+            .expect("sync through the shared-request codec must succeed");
+
+        // The server stored and returned the uploaded snippets, so the
+        // request was framed and encoded exactly like the generated
+        // client's.
+        for index in 0..3 {
+            let id = format!("shared-{index}");
+            let snippet = response
+                .snippets
+                .iter()
+                .find(|snippet| snippet.id == id)
+                .unwrap_or_else(|| panic!("the server must return the uploaded snippet {id}"));
+            assert_eq!(snippet.description, format!("shared snippet {index}"));
+            assert_eq!(snippet.command, format!("echo shared-{index}"));
+        }
+
+        server_task.abort();
+    }
 
     async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {
         use crate::config::{AutoSyncFailureMode, SyncDirection, SyncSettings};

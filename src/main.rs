@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -19,12 +20,37 @@ use snip_it::outcome::CliOutcome;
 
 mod update;
 
+/// Number of times the shared Tokio runtime has been constructed.
+///
+/// The runtime is created lazily; the counter makes "was it constructed?"
+/// observable without forcing it.
+static RUNTIME_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    RUNTIME_INIT_COUNT.fetch_add(1, Ordering::Relaxed);
     tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("Failed to create async runtime: {e}. Ensure no other process is consuming excessive system resources.");
         std::process::exit(1);
     })
 });
+
+/// Returns the shared runtime, but only when a sync was requested.
+///
+/// The closure form is deliberate. `bool::then_some(&RUNTIME)` takes its
+/// argument **by value**, so `&RUNTIME` was evaluated unconditionally; the
+/// `&LazyLock<Runtime>` → `&Runtime` coercion forces the lazy runtime, and
+/// `Runtime::new()` is the multi-threaded runtime. Local-only commands
+/// (`run`, `clip`, `search` without `--sync`) therefore built a runtime they
+/// never used. A closure argument is only evaluated when the condition is
+/// true, so the runtime stays uninitialized for local-only commands.
+fn runtime_for_sync(sync: bool) -> Option<&'static tokio::runtime::Runtime> {
+    sync.then(|| &*RUNTIME)
+}
+
+/// Error message for `snp edit` output flags used without `--filter` and
+/// without an exact selector (`--id`, `--description-exact`, `--command-exact`).
+const EDIT_OUTPUT_FILTER_REQUIRED: &str =
+    "--filter is required when using --output, --output-stdin, or --clear-output";
 
 #[cfg(unix)]
 fn setup_signal_handler() {
@@ -512,7 +538,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                         let outcome = commands::run_cmd::run_exact(
                             &m.snippet,
                             args.sync,
-                            args.sync.then_some(&RUNTIME),
+                            runtime_for_sync(args.sync),
                         )?;
                         match outcome {
                             CliOutcome::ExecutionFailed { child_code } => {
@@ -537,7 +563,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     args.sync,
                     args.library,
                     Some(sort_opts),
-                    args.sync.then_some(&RUNTIME),
+                    runtime_for_sync(args.sync),
                 )?;
                 if let CliOutcome::ExecutionFailed { child_code } = outcome {
                     std::process::exit(child_code.unwrap_or(8));
@@ -558,7 +584,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                         commands::clip_cmd::run_exact(
                             &m.snippet,
                             args.sync,
-                            args.sync.then_some(&RUNTIME),
+                            runtime_for_sync(args.sync),
                         )?;
                         snip_it::outcome::CliOutcome::Success
                     }
@@ -579,7 +605,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     args.library,
                     None,
                     Some(sort_opts),
-                    args.sync.then_some(&RUNTIME),
+                    runtime_for_sync(args.sync),
                 )?;
             }
         }
@@ -594,7 +620,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 args.library,
                 None,
                 Some(sort_opts),
-                args.sync.then_some(&RUNTIME),
+                runtime_for_sync(args.sync),
             )?;
         }
         Some(Commands::Select(args)) => {
@@ -618,6 +644,18 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 || args.description_exact.is_some()
                 || args.command_exact.is_some();
             if has_output_flags {
+                // The `--filter` requirement is checked *before* stdin is read:
+                // an invalid invocation must fail fast instead of blocking
+                // until EOF (and discarding the piped input on the way).
+                // `--id`, `--description-exact`, and `--command-exact` satisfy
+                // the requirement on their own.
+                let filter_str = if has_exact {
+                    None
+                } else {
+                    Some(args.filter.clone().ok_or_else(|| {
+                        snip_it::error::SnipError::runtime_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
+                    })?)
+                };
                 let output_value = if args.clear_output {
                     Some(String::new())
                 } else if args.output_stdin {
@@ -659,11 +697,10 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     };
                     return Ok(outcome);
                 } else {
-                    let filter_str = args.filter.ok_or_else(|| {
-                        snip_it::error::SnipError::runtime_error(
-                            "--filter is required when using --output, --output-stdin, or --clear-output",
-                            None,
-                        )
+                    // `filter_str` is `Some` here: the requirement above
+                    // already rejected the missing-`--filter` case.
+                    let filter_str = filter_str.ok_or_else(|| {
+                        snip_it::error::SnipError::runtime_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
                     })?;
                     commands::edit_cmd::run_edit_output(args.library, filter_str, output_value)?;
                 }
@@ -1048,6 +1085,30 @@ mod tests {
     #[test]
     fn cli_schema_is_valid() {
         <Cli as clap::CommandFactory>::command().debug_assert();
+    }
+
+    // ── Tokio runtime construction ───────────────────────────────────
+
+    #[test]
+    fn runtime_for_sync_does_not_construct_the_runtime() {
+        // A local-only command (`run`/`clip`/`search` without `--sync`)
+        // must never initialize the multi-threaded Tokio runtime.
+        let before = RUNTIME_INIT_COUNT.load(Ordering::Relaxed);
+        assert!(runtime_for_sync(false).is_none());
+        assert_eq!(
+            RUNTIME_INIT_COUNT.load(Ordering::Relaxed),
+            before,
+            "a local-only command must not initialize the Tokio runtime"
+        );
+    }
+
+    #[test]
+    fn runtime_for_sync_constructs_the_runtime_on_demand() {
+        assert!(runtime_for_sync(true).is_some());
+        assert!(
+            RUNTIME_INIT_COUNT.load(Ordering::Relaxed) >= 1,
+            "a sync command must initialize the Tokio runtime"
+        );
     }
 
     // ── Read-only commands ──────────────────────────────────────────

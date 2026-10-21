@@ -44,7 +44,7 @@ multi-device sync against a self-hosted server.
 > **On "end-to-end encryption":** snippet *bodies* are encrypted with
 > AES-256-GCM under an Argon2id-derived key, and the server stores only
 > ciphertext it cannot read. But the API key is sent as a `Bearer` token on
-> every request (`src/sync.rs:291-299`), so anything that observes that token
+> every request (`src/sync.rs:306-314`), so anything that observes that token
 > can re-derive the key. The guarantee is transport + at-rest protection, not
 > server-blindness. See [encryption.md](encryption.md).
 
@@ -503,7 +503,7 @@ in `src/sync_commands.rs`) carries only `id`, `description`, `command`, `tags`,
 **This is the CLIENT rule, and it is the only place it holds.** The server
 uses a *different* rule: a SQL last-write-wins upsert on
 `(updated_at, device_id, command, description)` with no SHA-256, where
-`deleted` is an ordinary column (`snip-sync/src/db.rs:646-650`). A newer live
+`deleted` is an ordinary column (`snip-sync/src/db.rs:729-733`). A newer live
 row therefore **overwrites a tombstone on the server** — the server does not
 guarantee no resurrection. The no-resurrection guarantee lives in the client's
 `choose_version` (`src/sync_commands.rs:1199`), so it only holds if the client
@@ -516,7 +516,7 @@ is guarded by `WHERE excluded.user_id = snippets.user_id AND excluded.library_id
 = snippets.library_id`, so pushing the same content-derived ID under a
 different library updates nothing and inserts nothing — the snippet is dropped
 for that library. The server probes the scope to tell this apart from a normal
-last-write-wins dedupe (`snip-sync/src/db.rs:666-687`) and reports it as
+last-write-wins dedupe (`snip-sync/src/db.rs:749-770`) and reports it as
 `UpsertOutcome::ForeignScope` — rejected on the push path, `skipped_ids` on
 the sync path. The write is still discarded, and because `last_sync` only
 advances when `skipped_count == 0`, **a library that contains a content-copy
@@ -541,6 +541,14 @@ trailing spaces, CRLF) must survive save/load. `write_schema_version` uses
 
 `legacy-<sha256 hex>` derived from content + occurrence index — **not** UUID
 v4. See `docs/IDENTITY_CONTRACT.md`.
+
+Every ID a library file already carries is **reserved** before any
+provisional ID is minted, so an ID that is already persisted is never handed
+out again — not to a later snippet and not to an earlier one. Without that
+reservation a snippet holding `legacy-<hash(content, 0)>` would not consume
+occurrence index 0, and a sibling with the same content and an empty ID
+would be handed the very same ID: two snippets sharing one identity, one of
+them unreachable by ID and collapsed into a single row on the server.
 
 ### Tokio is initialized only where it is needed
 

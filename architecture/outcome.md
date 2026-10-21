@@ -80,7 +80,7 @@ The constants live in `outcome::exit_code` (`src/outcome.rs:48-72`).
 ## Exit code 10 — the one code without an outcome
 
 
-`exit_on_repair_status()` (`src/main.rs:375-388`) maps
+`exit_on_repair_status()` (`src/main.rs:401-414`) maps
 `commands::repair_cmd::RepairExitStatus` straight to a process exit code and
 calls `std::process::exit` **inside** the handler:
 
@@ -93,10 +93,10 @@ calls `std::process::exit` **inside** the handler:
 `UnsafeOnly` deliberately does **not** reuse 2 (`USAGE_ERROR`): a valid
 invocation that found unsafe repairs awaiting an operator decision is not a
 usage error, and scripts must be able to distinguish the two
-(`src/main.rs:369-374`).
+(`src/main.rs:395-400`).
 
 Because the exit happens inside the handler, `handle_repair`
-(`src/main.rs:432-436`) never returns and there is deliberately **no**
+(`src/main.rs:458-462`) never returns and there is deliberately **no**
 `CliOutcome` variant for it. A reviewer looking for "the variant that maps to
 10" in `src/outcome.rs` will not find one — that is by design, not an
 omission.
@@ -119,13 +119,13 @@ impl CliOutcome {
 }
 ```
 
-`main()` performs the final conversion (`src/main.rs:1018-1033`):
+`main()` performs the final conversion (`src/main.rs:1055-1070`):
 
 | Handler result | Behavior | Source |
 |----------------|----------|--------|
-| `Ok(CliOutcome::Success)` | fall through, exit 0 | `src/main.rs:1019` |
-| `Ok(other)` | `std::process::exit(other.exit_code())` | `src/main.rs:1024` |
-| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1026-1032` |
+| `Ok(CliOutcome::Success)` | fall through, exit 0 | `src/main.rs:1056` |
+| `Ok(other)` | `std::process::exit(other.exit_code())` | `src/main.rs:1061` |
+| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1063-1069` |
 
 There is no `From<SnipError> for CliOutcome`. A handler that wants code 3, 4,
 5, 6, 7, or 9 returns the matching `CliOutcome` variant instead of
@@ -137,12 +137,12 @@ Two command paths bypass `CliOutcome` entirely and call `std::process::exit`
 themselves:
 
 - `repair` / `data repair` — exit 1 or 10 via `exit_on_repair_status`
-  (`src/main.rs:375-388`, `src/main.rs:432-436`).
+  (`src/main.rs:401-414`, `src/main.rs:458-462`).
 - `run` (exact and TUI) — exit the child's code (fallback 8) after a failed
-  execution (`src/main.rs:519`, `src/main.rs:543`).
+  execution (`src/main.rs:545`, `src/main.rs:569`).
 
 `snp clip` does **not** propagate the child's exit code: the exact path
-returns `CliOutcome::Success` unconditionally (`src/main.rs:563`) and the TUI
+returns `CliOutcome::Success` unconditionally (`src/main.rs:589`) and the TUI
 path returns `SnipResult<()>`, so a clipboard failure surfaces as
 `Err(SnipError)` → exit 1, not as the child's code.
 
@@ -345,7 +345,7 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
   should return `ValidationFailed` (6), not try to produce 2.
 - **`ExecutionFailed { child_code: None }` is 8**, but the `run` paths bypass
   `CliOutcome` and exit directly with the child's code
-  (`src/main.rs:519`, `src/main.rs:543`). `snp clip` never propagates a
+  (`src/main.rs:545`, `src/main.rs:569`). `snp clip` never propagates a
   child's code — it exits 1 on error.
 - **JSON output has no shared envelope.** `list --json` is a bare array;
   `get --json` is a bare object; `repair --json` is an object with an

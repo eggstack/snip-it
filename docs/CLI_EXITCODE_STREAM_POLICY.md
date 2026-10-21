@@ -32,7 +32,7 @@ Selection semantics: `run_snippet_selection()` returns `SelectionOutcome`
 (`Selected`, `Cancelled`, or `ExecutionFailed`). For `run`, `clip`, and
 `search`, cancellation is treated as normal completion (exit 0). For
 `snp select`, cancellation maps to exit 4 via `CliOutcome::Cancelled`
-(`src/commands/select_cmd.rs:102`), and `main.rs` turns that outcome into the
+(`src/commands/select_cmd.rs:110`), and `main.rs` turns that outcome into the
 process exit code.
 
 ### Stream Usage (stdout vs stderr)
@@ -100,7 +100,7 @@ flags. Without flags, output uses the default relevance ordering.
 - **Exit**: 0 on success, 4 on user cancellation (`q`/`Esc` or variable prompt
   cancel), 1 on `SnipError` (all error variants).
 - **Output file**: Written through an atomic temp-file + rename
-  (`src/commands/select_cmd.rs:110-117`). A directory target is rejected with
+  (`src/commands/select_cmd.rs:118-125`). A directory target is rejected with
   exit 1; a symlink target is *replaced*, not followed, so the write cannot be
   redirected elsewhere. A pre-existing output file is preserved when the
   selection is cancelled — it is never removed on cancellation.
@@ -275,7 +275,7 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
    goes to stdout.
 
 7. **Error messages** always go to stderr via `eprintln!` in the main error
-   handler (`src/main.rs:1027`), or via `eprintln!` in individual commands before
+   handler (`src/main.rs:1064`), or via `eprintln!` in individual commands before
    returning `Ok(())` (graceful degradation pattern).
 
 8. **`new` prompts** go to stdout, not stderr. Piping `snp new` would see the

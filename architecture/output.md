@@ -127,12 +127,12 @@ user's terminal when the field is rendered.
 
 | Consumer | Line | Rendering |
 |---|---|---|
-| TUI detail pane | `src/ui/mod.rs:404`, `:1178` | `OutputPresentation::new(output).display()` — **sanitized**, full content, below a `--- Output / Notes ---` separator |
+| TUI detail pane | `src/ui/mod.rs:519`, `:1178` | `OutputPresentation::new(output).display()` — **sanitized**, full content, below a `--- Output / Notes ---` separator |
 | `snp list` (default format) | `src/commands/list_cmd.rs:199-207` | `summary(80)` — **sanitized**, first line, 80 chars; the `Output:` line is omitted entirely when the field is empty |
 | `snp list --json` | `src/commands/list_cmd.rs:158` | **raw** `s.output`, verbatim |
 | `snp list --csv` | `src/commands/list_cmd.rs:184` | **raw** `s.output`, CSV-escaped |
 | `snp search` | `src/commands/search_cmd.rs:68` | **raw** `println!("Output: {}", snippet.output)` — **not sanitized** |
-| Fuzzy-search scoring | `src/selector.rs:151-155` | `OutputPresentation::for_scoring()` — sanitized and bounded |
+| Fuzzy-search scoring | `src/selector.rs:170-177` | `OutputPresentation::for_scoring()` — sanitized and bounded |
 | `snp edit` | `src/commands/edit_cmd.rs:209`, `:275` | Writes the new value; confirmation goes to **stderr** (`edit_cmd.rs:218,220,284,286`) |
 
 ### Surfaces that deliberately do **not** show `output`
@@ -163,14 +163,14 @@ would reach the terminal unmodified.
 **Targeting rule.** `snp edit --output` / `--output-stdin` / `--clear-output`
 require `--filter` **unless** an exact selector is given
 (`--id`, `--description-exact`, `--command-exact`)
-(`src/main.rs:615-673`):
+(`src/main.rs:641-710`):
 
 - With an exact selector, the snippet is resolved through
   `selector::resolve_exact_target()` and edited by ID
-  (`src/main.rs:638-660`, `src/commands/edit_cmd.rs:233-290`).
+  (`src/main.rs:676-698`, `src/commands/edit_cmd.rs:233-290`).
 - Without one, `--filter` is mandatory; otherwise the command fails with
   `--filter is required when using --output, --output-stdin, or --clear-output`
-  (`src/main.rs:661-669`).
+  (`src/main.rs:699-706`).
 
 The reason is the ambiguity risk recorded in the changelog: a substring
 filter can match more than one snippet, and the fuzzy match's first hit was
@@ -191,7 +191,7 @@ previously influenced by the local-only `output` field.
   created_at, updated_at, device_id, and deleted — **no `output`**, and no
   `folders` or `favorite` either.
 - The merge **preserves the local value** when the remote side wins:
-  `output: local_snip.output.clone()` (`src/sync_commands.rs:1268`, `:1289`,
+  `output: local_snip.output.clone()` (`src/sync_commands.rs:1277`, `:1289`,
   `:1302`), alongside `folders` and `favorite`.
 - Because the field is local-only, **output-only edits do not trigger sync**
   (see `CHANGELOG.md`).
@@ -242,17 +242,17 @@ Consequences:
 | `src/output.rs:49-64` | `summary()` — first line, sanitized, char-truncated |
 | `src/output.rs:93-110` | `for_scoring()` — the 512-byte, char-boundary-safe bound |
 | `src/library/model.rs:35-36` | `Snippet::output` — the field and its serde aliases |
-| `src/ui/mod.rs:404`, `:1178` | TUI detail pane — sanitized `display()` under a `--- Output / Notes ---` separator |
+| `src/ui/mod.rs:519`, `:1178` | TUI detail pane — sanitized `display()` under a `--- Output / Notes ---` separator |
 | `src/commands/list_cmd.rs:199-207` | `snp list` default — sanitized `summary(80)` |
 | `src/commands/list_cmd.rs:158`, `:184` | `snp list --json` / `--csv` — raw export |
 | `src/commands/search_cmd.rs:68` | `snp search` — raw print (not sanitized) |
 | `src/commands/edit_cmd.rs:143-290` | Set / replace / clear the field, by filter or by ID |
-| `src/main.rs:615-673` | The `--filter`-or-exact-selector gate for output edits |
+| `src/main.rs:641-710` | The `--filter`-or-exact-selector gate for output edits |
 | `src/commands/run_cmd.rs:208-216`, `:261-323` | The stdout-redirect branch that also reads this field |
-| `src/selector.rs:151-155` | The opt-in scoring input |
+| `src/selector.rs:170-177` | The opt-in scoring input |
 | `src/sync_commands.rs:425-435` | `ProtoSnippet` — proof `output` is not on the wire |
 | `src/sync_commands.rs:1140-1163` | `fingerprint()` — proof `output` is not in the conflict key |
-| `src/sync_commands.rs:1268`, `:1289`, `:1302` | Merge — local `output` preserved |
+| `src/sync_commands.rs:1277`, `:1289`, `:1302` | Merge — local `output` preserved |
 
 ---
 

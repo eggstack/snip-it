@@ -13,7 +13,7 @@
 ### 2. Security: Rate Limiting
 - Rate limit check BEFORE the database auth lookup (cheaper operation first); only the local empty-key and max-length checks precede it
 - Use server-controlled keys (IP address) not client-controlled (device_id): the key comes from `peer_rate_limit_key` (`snip-sync/src/lib.rs`), which honours `x-forwarded-for` only from a configured trusted proxy
-- Pattern: `rate_limiter.allow(&key, max_requests, window).await` (`snip-sync/src/rate_limiter.rs:45` takes `&self, key: &str, max_requests: usize, window: Duration -> bool`); canonical entry is `authenticate_and_rate_limit[_with_duration]` (`snip-sync/src/lib.rs`)
+- Pattern: `rate_limiter.allow(&key, max_requests, window).await` (`snip-sync/src/rate_limiter.rs:46` takes `&self, key: &str, max_requests: usize, window: Duration -> bool`); canonical entry is `authenticate_and_rate_limit[_with_duration]` (`snip-sync/src/lib.rs`)
 
 ### 3. Security: CORS Configuration
 - EggServe leaf service only — do NOT reintroduce Axum/Tower-HTTP `CorsLayer`. HTTP policy lives in `snip-sync/src/http.rs` (`CorsPolicy`, `service()`); `CORS_ALLOW_ALL` is strictly parsed at startup (`snip-sync/src/main.rs`) and ignored on non-loopback binds. Keep `Vary: origin` / `Allow: GET, HEAD` wire parity (locked in `tests/snip_sync_lifetime.rs`).

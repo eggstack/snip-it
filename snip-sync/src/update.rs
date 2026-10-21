@@ -532,9 +532,33 @@ fn replace_installed_executable(
         let parent = destination
             .parent()
             .ok_or_else(|| "installed executable has no parent directory".to_string())?;
-        let staged = parent.join(format!(".snip-sync.update-{}", std::process::id()));
-        let _ = fs::remove_file(&staged);
-        if let Err(error) = fs::copy(candidate, &staged) {
+        // The staging name is unguessable and the file is created with
+        // `O_EXCL` (`create_new`), so a symlink planted at the staging path
+        // is never followed. The previous `fs::copy` opened the destination
+        // with `O_WRONLY|O_CREAT|O_TRUNC`, which follows symlinks — an
+        // unprivileged local user able to write to the install directory
+        // could have won the race and turned the update into an arbitrary
+        // file write.
+        let staged = parent.join(format!(".snip-sync.update-{}", uuid::Uuid::new_v4()));
+        let mut staged_file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                return Err(format!(
+                    "could not stage candidate beside installed executable: {error}"
+                ));
+            }
+        };
+        let copy_result = (|| -> std::io::Result<()> {
+            let mut source = File::open(candidate)?;
+            std::io::copy(&mut source, &mut staged_file)?;
+            Ok(())
+        })();
+        if let Err(error) = copy_result {
+            drop(staged_file);
             let _ = fs::remove_file(&staged);
             return Err(format!(
                 "could not stage candidate beside installed executable: {error}"
@@ -542,6 +566,7 @@ fn replace_installed_executable(
         }
         if let Ok(permissions) = fs::metadata(destination).map(|m| m.permissions()) {
             if let Err(error) = fs::set_permissions(&staged, permissions) {
+                drop(staged_file);
                 let _ = fs::remove_file(&staged);
                 return Err(format!(
                     "could not preserve executable permissions: {error}"
@@ -549,26 +574,26 @@ fn replace_installed_executable(
             }
         } else {
             if let Err(error) = make_executable(&staged) {
+                drop(staged_file);
                 let _ = fs::remove_file(&staged);
                 return Err(error);
             }
         }
-        let file = match OpenOptions::new().read(true).open(&staged) {
-            Ok(file) => file,
-            Err(error) => {
-                let _ = fs::remove_file(&staged);
-                return Err(format!("could not open staged executable: {error}"));
-            }
-        };
-        if let Err(error) = file.sync_all() {
+        if let Err(error) = staged_file.sync_all() {
+            drop(staged_file);
             let _ = fs::remove_file(&staged);
             return Err(format!("could not durably stage executable: {error}"));
         }
-        drop(file);
+        drop(staged_file);
         fs::rename(&staged, destination).map_err(|e| {
             let _ = fs::remove_file(&staged);
             format!("could not replace installed executable: {e}")
         })?;
+        // The file's data was fsynced before the rename, but the rename
+        // itself is only durable once the containing directory is fsynced:
+        // without this a power loss right after the rename can leave the
+        // install directory pointing at the old binary.
+        sync_parent_dir_durable(parent)?;
         Ok(())
     }
     #[cfg(windows)]
@@ -580,6 +605,29 @@ fn replace_installed_executable(
         let _ = (candidate, destination, _workdir, _lifecycle);
         Err("executable replacement is not supported on this platform".into())
     }
+}
+
+/// Make a directory entry durable by fsyncing the directory that contains it.
+///
+/// Unix only; other platforms cannot fsync a directory through std. A
+/// failure is fatal: the replacement already happened, but without the
+/// directory fsync it can be lost by a power failure.
+fn sync_parent_dir_durable(parent: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .open(parent)
+            .map_err(|e| format!("could not open install directory for fsync: {e}"))?;
+        directory
+            .sync_all()
+            .map_err(|e| format!("could not fsync install directory: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -774,5 +822,85 @@ mod tests {
         run_self_replace_helper(&candidate, &destination, false, false).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"new executable");
         assert!(!candidate.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_update_staging_never_follows_a_planted_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("candidate");
+        let destination = directory.path().join("snip-sync");
+        let victim = directory.path().join("victim");
+        fs::write(&candidate, b"new executable").unwrap();
+        fs::write(&destination, b"old executable").unwrap();
+        fs::write(&victim, b"victim contents").unwrap();
+
+        // The staging name used to be derived from the process id. Plant a
+        // symlink at that path: an update must not follow it and truncate
+        // the symlink's target.
+        let planted = directory
+            .path()
+            .join(format!(".snip-sync.update-{}", std::process::id()));
+        symlink(&victim, &planted).unwrap();
+
+        replace_installed_executable(
+            &candidate,
+            &destination,
+            directory.path(),
+            snip_sync::startup::UpdateLifecycle::NotRunning,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"new executable");
+        assert_eq!(
+            fs::read(&victim).unwrap(),
+            b"victim contents",
+            "the planted symlink target must not be overwritten"
+        );
+        assert!(
+            planted.exists(),
+            "the planted symlink must be left untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_update_leaves_no_staging_file_behind() {
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("candidate");
+        let destination = directory.path().join("snip-sync");
+        fs::write(&candidate, b"new executable").unwrap();
+        fs::write(&destination, b"old executable").unwrap();
+
+        replace_installed_executable(
+            &candidate,
+            &destination,
+            directory.path(),
+            snip_sync::startup::UpdateLifecycle::NotRunning,
+        )
+        .unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".snip-sync.update-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staging files must not survive the replacement: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn parent_directory_fsync_surfaces_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        // The replacement path fsyncs the install directory so the rename
+        // survives a crash.
+        sync_parent_dir_durable(directory.path()).unwrap();
+        let missing = directory.path().join("missing");
+        assert!(sync_parent_dir_durable(&missing).is_err());
     }
 }

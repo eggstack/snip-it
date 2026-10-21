@@ -28,7 +28,7 @@ sites outside it — see *Direct clipboard call sites* below.
 | `--description-exact` | `Option<String>` | – | Exact description bypass |
 | `--command-exact` | `Option<String>` | – | Exact command bypass |
 
-`src/main.rs:547-585` routes exact selectors through
+`src/main.rs:573-611` routes exact selectors through
 `resolve_exact_target` → `run_exact`, else `run`.
 
 ## Flow / steps
@@ -127,11 +127,11 @@ module, and both are recorded here because they behave differently:
 
 | Call site | Audits? | Usage index? |
 |-----------|---------|--------------|
-| `src/ui/mod.rs:1642` — TUI visual-range multi-select (`y` in visual mode) | Audits **only the first snippet** of the range (`src/ui/mod.rs:1657-1668`) | No |
+| `src/ui/mod.rs:1733` — TUI visual-range multi-select (`y` in visual mode) | Audits **only the first snippet** of the range (`src/ui/mod.rs:1748-1759`) | No |
 | `src/commands/cron_cmd.rs:89` — cron-entry copy prompt | **No audit at all** | No |
 
 The TUI multi-select joins the selected commands with `\n`
-(`src/ui/mod.rs:1635-1641`) after `strip_escape_sequences`, so a
+(`src/ui/mod.rs:1726-1732`) after `strip_escape_sequences`, so a
 multi-snippet copy is a single clipboard write with a single audit
 entry — the other snippets in the range are copied but not audited.
 
@@ -151,7 +151,7 @@ Without `--sync`, copying leaves no sync intent.
 ## Tokio runtime
 
 `clip` is one of the commands that may initialize the global runtime —
-but only for `--sync`. `src/main.rs:561` and `src/main.rs:582` pass
+but only for `--sync`. `src/main.rs:587` and `src/main.rs:608` pass
 `args.sync.then_some(&RUNTIME)`, so the runtime is `Some` only when
 `--sync` is set. `run_exact` (`clip_cmd.rs:73-82`) errors with
 `runtime_error("sync requested but no runtime")` if `do_sync` is true and
@@ -199,7 +199,7 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 - `src/ui/mod.rs` — the visual-range multi-select direct call site.
 - `src/commands/cron_cmd.rs` — the second direct call site.
 - `src/logging.rs` — `audit_log`.
-- `src/main.rs` — dispatch (`src/main.rs:547-585`).
+- `src/main.rs` — dispatch (`src/main.rs:573-611`).
 
 ## File / line references
 
@@ -207,4 +207,4 @@ Cancel/skip in exact mode is silent success. `run_exact` with
 - `copy_to_clipboard`: `:40`; `process_snippet`: `:51`
 - `run_exact`: `:68`; `run`: `:99`
 - Clipboard primitives: `src/clipboard.rs:151-205`
-- Dispatch: `src/main.rs:547-585`
+- Dispatch: `src/main.rs:573-611`

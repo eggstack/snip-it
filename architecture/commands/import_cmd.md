@@ -10,7 +10,7 @@ The currently supported external format is the **Pet TOML** export — a file co
 
 ## CLI arguments
 
-The import command is a subcommand group with exactly one member, `pet` (`src/main.rs:337-367`):
+The import command is a subcommand group with exactly one member, `pet` (`src/main.rs:363-393`):
 
 ```rust
 #[derive(Debug, Subcommand)]
@@ -49,7 +49,7 @@ enum ImportSubcommands {
 | `--report <FORMAT>` | `ReportFormat` | `human` | `human` (stderr) or `json` (stdout). |
 | `--report-file <PATH>` | `Option<PathBuf>` | `None` | Additionally write the JSON report to this file (skipped in dry-run). |
 
-Mode resolution happens in the dispatcher (`src/main.rs:786-792`): `--replace` → `Replace`, else `--merge` → `Merge`, else `Create`.
+Mode resolution happens in the dispatcher (`src/main.rs:823-829`): `--replace` → `Replace`, else `--merge` → `Merge`, else `Create`.
 
 ```rust
 pub enum ImportMode {
@@ -185,7 +185,7 @@ pub struct PetImportReport {
 
 ## Exit codes
 
-`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:775-804`). Failures map through the canonical table in `src/outcome.rs:48-72`:
+`snp import` returns `SnipResult<()>` and the dispatcher returns `CliOutcome::Success` (`src/main.rs:812-841`). Failures map through the canonical table in `src/outcome.rs:48-72`:
 
 | Outcome | Exit code |
 |---|---|
@@ -206,15 +206,15 @@ crate::transaction::gate_mutation_on_interrupted_transactions(&sync_state_dir, &
 let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 ```
 
-(`src/library/persistence.rs:217-238`.) Two consequences worth auditing:
+(`src/library/persistence.rs:258-279`.) Two consequences worth auditing:
 
 - The gate and the local-data lock are derived from the **config directory**, not from the target library path (`:223-224`). This is what makes the gate effective for every library, including ones outside the default config root.
 - Import therefore takes the **local-data lock only** — no transaction lock, no journal. The lock hierarchy position is *below* `snp restore`, which takes both.
 
-`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:636-642`), so two more import paths are covered:
+`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:666-672`), so two more import paths are covered:
 
-- `mgr.ensure_library_mode()` (`import_cmd.rs:192`) reaches the gate only when a single-file migration is actually needed, via `migrate_from_single_file` (`src/library/manager.rs:163-168`, `:181-183`, which takes the gate and the local-data lock).
-- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:585-586`).
+- `mgr.ensure_library_mode()` (`import_cmd.rs:192`) reaches the gate only when a single-file migration is actually needed, via `migrate_from_single_file` (`src/library/manager.rs:165-170`, `:181-183`, which takes the gate and the local-data lock).
+- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:602-603`).
 
 `backup_library` (used in merge and replace) is a plain copy, not a journaled operation.
 
@@ -243,13 +243,13 @@ let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 
 ## Gotchas
 
-- `snp import` is `snp import pet <PATH>`; the subcommand alias is `p` (`src/main.rs:340`).
+- `snp import` is `snp import pet <PATH>`; the subcommand alias is `p` (`src/main.rs:366`).
 - The default mode is `Create`, which **fails** if the destination library already exists. This is the most common first-run failure.
 - Import calls `mgr.ensure_library_mode()` (`:192`) — unlike `validate`, it **can migrate** legacy state. It is a mutating command even before it writes a library.
 - The `id` field of an imported snippet is **discarded and regenerated** (`:144-145`). A Pet export that carried snip-it IDs does not preserve them.
 - Imported snippet IDs are UUID v4 here, which differs from the deterministic `legacy-<sha256 hex>` IDs used elsewhere (see `docs/IDENTITY_CONTRACT.md`).
 - The `device_id` and `deleted` fields are **cleared** (`:156-158`). A `deleted = true` entry in the source is imported as a live snippet.
 - `--strict` aborts the whole import on the first empty-command entry (`:263-268`); without it, the entry is skipped and the rest is imported.
-- `--merge` and `--replace` are mutually exclusive at the clap level (`src/main.rs:349`, `:352`), so clap rejects both together with exit `2`.
+- `--merge` and `--replace` are mutually exclusive at the clap level (`src/main.rs:375`, `:352`), so clap rejects both together with exit `2`.
 - `--report-file` is ignored in dry-run mode (`:543-545`).
 - `had_fatal_error` in the JSON report records that at least one entry was skipped; it does **not** change the exit code.

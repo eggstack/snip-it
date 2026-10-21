@@ -21,16 +21,16 @@ Deep dive: [`../architecture/cli.md`](../architecture/cli.md),
 ## The dispatch chain
 
 ```
-clap parse → Commands (src/main.rs:65)
-            → command_behavior(cmd)          (src/main.rs:887)  startup recovery policy
-            → dispatch_command(cli)          (src/main.rs:444)  returns SnipResult<CliOutcome>
+clap parse → Commands (src/main.rs:91)
+            → command_behavior(cmd)          (src/main.rs:924)  startup recovery policy
+            → dispatch_command(cli)          (src/main.rs:470)  returns SnipResult<CliOutcome>
             → CliOutcome::exit_code()        (src/outcome.rs:76) → stable exit code
 ```
 
 `dispatch_command` returns `SnipResult<CliOutcome>`. **`Ok(...)` carries the
 outcome; `Err(...)` is an unclassified operational failure and maps to exit 1.**
 A `CliOutcome` becomes a process exit in exactly one place
-(`src/main.rs:1024`) — do not call `std::process::exit` from a command
+(`src/main.rs:1061`) — do not call `std::process::exit` from a command
 module.
 
 ### Exit codes are a stable public contract
@@ -54,7 +54,7 @@ pre-existing and frozen; 2–10 are additive and documented in
 ### `repair` is the one command outside `CliOutcome`
 
 `snp repair` uses `RepairExitStatus` (`src/commands/repair_cmd.rs:146`) and
-`exit_on_repair_status()` (`src/main.rs:375`): `UnsafeOnly` → exit 10,
+`exit_on_repair_status()` (`src/main.rs:401`): `UnsafeOnly` → exit 10,
 `PartialFailure` → exit 1. Exit 10 means "the invocation was valid, but every
 repair found was unsafe" — it is **not** a usage error.
 
@@ -62,9 +62,9 @@ repair found was unsafe" — it is **not** a usage error.
 
 ## Startup recovery classification — one table, two axes
 
-`command_behavior()` (`src/main.rs:887`) returns a `CommandBehavior` holding
+`command_behavior()` (`src/main.rs:924`) returns a `CommandBehavior` holding
 **both** a `StartupRecoveryPolicy` and a `StartupServices` level
-(`src/main.rs:874`) in a single `match`, so the two cannot drift.
+(`src/main.rs:911`) in a single `match`, so the two cannot drift.
 
 | Policy | Commands |
 |--------|----------|
@@ -85,7 +85,7 @@ Two easy-to-miss entries:
 are the one flag-sensitive exception: `restore --mode dry-run`,
 `repair --dry-run`, and `import pet --dry-run` are matched **before** the
 generic arms and get `SuppressReadOnly` + `StartupServices::Minimal`
-(`src/main.rs:908-925`); only their non-dry-run spellings fall through to
+(`src/main.rs:945-962`); only their non-dry-run spellings fall through to
 `Allow`.
 
 Adding a command means editing `command_behavior()`. Adding a *subcommand* to an
@@ -123,11 +123,11 @@ a description.
 
 ## `snp data` is a mirror, not a second implementation
 
-`snp data <subcommand>` (`DataCommands`, `src/main.rs:255`) is a **mirror
+`snp data <subcommand>` (`DataCommands`, `src/main.rs:281`) is a **mirror
 spelling** of `validate`, `status`, `backup`, `restore`, and `repair`. It has
 no independent behavior:
 
-- It dispatches to the same handlers (`src/main.rs:825-841`).
+- It dispatches to the same handlers (`src/main.rs:862-878`).
 - It shares the same argument schema and the same startup-recovery
   classification.
 - `tests/cli_surface_compat.rs` asserts both spellings succeed with the same

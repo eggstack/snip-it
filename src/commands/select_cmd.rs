@@ -1,5 +1,5 @@
 use crate::SelectionOutcome;
-use crate::commands::run_snippet_selection;
+use crate::commands::{LibraryResolution, run_snippet_selection_with_resolution};
 use crate::error::SnipResult;
 use crate::library::Snippet;
 use crate::outcome::CliOutcome;
@@ -82,9 +82,17 @@ pub fn run(
     let cancelled = Cell::new(false);
     let selected_command = Cell::new(None);
 
-    let selection_outcome = run_snippet_selection(
+    let selection_outcome = run_snippet_selection_with_resolution(
         filter,
         library,
+        // `snp select` is classified read-only (`command_behavior()` →
+        // `StartupRecoveryPolicy::SuppressReadOnly`), so it must resolve the
+        // library through the side-effect-free resolver: routing through the
+        // mutating one called `ensure_library_mode()`, which migrated a
+        // legacy single-file checkout (creating `libraries/`, copying the
+        // legacy file, writing `libraries.toml`, bumping the generation)
+        // from a plain read-only command.
+        LibraryResolution::ReadOnly,
         false,
         false,
         sort_opts,

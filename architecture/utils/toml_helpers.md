@@ -9,9 +9,9 @@ the two functions built on top of it. Their single job is to repair **legacy**
 snippet files that were written with escapes TOML does not allow — `\<` and
 `\>` inside double-quoted strings — so that such files can still be parsed.
 
-**File**: `src/utils/toml_helpers.rs` (456 lines — the scanner at `:34-172`,
-the two entry points at `:190-209`, and the unit-test tail that starts at
-`src/utils/toml_helpers.rs:211`).
+**File**: `src/utils/toml_helpers.rs` (682 lines — the scanner at `:40-191`,
+the decode/encode helpers at `:205-314`, the two entry points at `:330-353`,
+and the unit-test tail that starts at `src/utils/toml_helpers.rs:357`).
 
 **Not covered here:** TOML *serialization* fidelity (the save path — see
 [persistence.md](../persistence.md) and
@@ -25,7 +25,7 @@ corpus in `.skills/persistence-and-toml-fidelity.md` guards against.
 ## The Scanner
 
 ```rust
-// src/utils/toml_helpers.rs:34
+// src/utils/toml_helpers.rs:40
 fn fix_toml_strings(toml_str: &str, needs_fix: impl Fn(&str) -> bool) -> String
 ```
 
@@ -39,27 +39,30 @@ Token classes it recognises:
 
 | Token | Handling | Site |
 |-------|----------|------|
-| Line comment `# …` | copied verbatim to end of line | `src/utils/toml_helpers.rs:43-50` |
-| Whitespace / structural bytes | copied verbatim | `src/utils/toml_helpers.rs:53-57` |
-| Multi-line basic string `"""…"""` | copied verbatim, **never rewritten** | `src/utils/toml_helpers.rs:60-75` |
-| Multi-line literal string `'''…'''` | copied verbatim | `src/utils/toml_helpers.rs:78-93` |
-| Single-line literal string `'…'` | copied verbatim (no escapes to fix) | `src/utils/toml_helpers.rs:96-110` |
-| Single-line basic string `"…"` | content captured, `needs_fix` applied | `src/utils/toml_helpers.rs:113-165` |
-| Unterminated basic string | copied verbatim so the parse error stays attributable to the real input | `src/utils/toml_helpers.rs:135-145` |
-| Everything else (keys, numbers, headers) | copied byte by byte | `src/utils/toml_helpers.rs:167-168` |
+| Line comment `# …` | copied verbatim to end of line | `src/utils/toml_helpers.rs:49-56` |
+| Whitespace / structural bytes | copied verbatim | `src/utils/toml_helpers.rs:59-63` |
+| Multi-line basic string `"""…"""` | copied verbatim, **never rewritten** | `src/utils/toml_helpers.rs:66-81` |
+| Multi-line literal string `'''…'''` | copied verbatim | `src/utils/toml_helpers.rs:84-99` |
+| Single-line literal string `'…'` | copied verbatim (no escapes to fix) | `src/utils/toml_helpers.rs:102-116` |
+| Single-line basic string `"…"` | body sliced from the source, `needs_fix` applied | `src/utils/toml_helpers.rs:119-180` |
+| Unterminated basic string | copied verbatim so the parse error stays attributable to the real input | `src/utils/toml_helpers.rs:140-150` |
+| Everything else (keys, numbers, headers) | copied a whole UTF-8 character at a time | `src/utils/toml_helpers.rs:182-191` |
 
-Two details matter for fidelity:
+Three details matter for fidelity:
 
 - **Non-fixed strings reuse the original bytes**
-  (`src/utils/toml_helpers.rs:161-162`) so non-ASCII UTF-8 survives intact.
+  (`src/utils/toml_helpers.rs:176-177`) so non-ASCII UTF-8 survives intact.
+- **A fixed string is sliced out of the original source** rather than rebuilt
+  from bytes (`src/utils/toml_helpers.rs:155-168`), so its non-ASCII content
+  survives byte-for-byte.
 - **Multi-line regions are skipped because they always contain valid TOML
   escapes** and the scanner cannot safely rewrite them
-  (`src/utils/toml_helpers.rs:31-33`).
+  (`src/utils/toml_helpers.rs:37-39`).
 
 ## fix_invalid_toml_escapes
 
 ```rust
-// src/utils/toml_helpers.rs:205-209
+// src/utils/toml_helpers.rs:348-352
 pub fn fix_invalid_toml_escapes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| {
         content.contains("\\<") || content.contains("\\>")
@@ -81,27 +84,34 @@ and is left untouched.
 
 ### The conversion
 
-A double-quoted string that contains `\<` or `\>` is rewritten **only if it
-can be represented as a literal string**. The decision is made at
-`src/utils/toml_helpers.rs:148-159`:
+A double-quoted string that contains `\<` or `\>` is **decoded to the value it
+denotes** and then re-emitted. The decision is made at
+`src/utils/toml_helpers.rs:160-173`:
 
-| Content contains `'`? | Rewrite | Site |
-|------------------------|---------|------|
-| **No** | Convert to a **single-quoted raw literal**; `\\` → `\` and `\"` → `"` are unescaped | `src/utils/toml_helpers.rs:155-158` |
-| **Yes** | Keep the **double quotes** and escape every backslash as `\\` | `src/utils/toml_helpers.rs:149-153` |
+| Decoded value contains `'` or a control character? | Rewrite | Site |
+|---------------------------------------------------|---------|------|
+| **No** | Emit a **single-quoted raw literal** | `src/utils/toml_helpers.rs:166-169` |
+| **Yes** | Emit a **double-quoted basic string** with proper escapes | `src/utils/toml_helpers.rs:170-173` |
 
-The single-quoted form is preferred because TOML literal strings have no
-escape processing at all — the backslashes survive the round trip and the
-original command text is preserved exactly. When the content itself contains
-a single quote, a literal string is impossible, so the scanner falls back to
-double quotes with doubled backslashes.
+The value is decoded first (`decode_basic_string`,
+`src/utils/toml_helpers.rs:205-282`), so every legal escape — `\t`, `\r`,
+`\n`, `\b`, `\f`, `\e`, `\uXXXX`, `\UXXXXXXXX`, `\\`, `\"` — keeps its
+meaning. An illegal escape such as `\<` is kept as the two literal characters
+`\` and `<`, which is what the hand-written legacy files mean.
 
-| Input | Output |
-|-------|--------|
-| `"echo \<name\>"` | `'echo \<name\>'` |
-| `"echo 'x' \<name\>"` | `"echo 'x' \\<name\\>"` |
-| `"a\nb"` | `"a\nb"` — unchanged, `\n` is legal |
-| `"plain"` | `"plain"` — unchanged |
+Re-emitting as a literal string is preferred because TOML literal strings have
+no escape processing at all. A literal cannot hold `'` or a control character,
+so those values fall back to the basic form, re-escaped by
+`encode_basic_string` (`src/utils/toml_helpers.rs:284-306`). Either way the
+**parsed value is unchanged**.
+
+| Input | Output | Parsed value |
+|-------|--------|--------------|
+| `"echo \<name\>"` | `'echo \<name\>'` | `echo \<name\>` |
+| `"echo 'x' \<name\>"` | `"echo 'x' \\<name\\>"` | `echo 'x' \<name\>` |
+| `"a\nb\<c"` | `"a\nb\\<c"` | `a` + LF + `b\<c` |
+| `"a\nb"` | `"a\nb"` — unchanged, `\n` is legal | `a` + LF + `b` |
+| `"plain"` | `"plain"` — unchanged | `plain` |
 
 ### Load-path only
 
@@ -109,20 +119,20 @@ double quotes with doubled backslashes.
 after a serialize:
 
 ```rust
-// src/library/persistence.rs:168 (shape)
+// src/library/persistence.rs:209 (shape)
 let content = fix_invalid_toml_escapes(&content);
 ```
 
 The save path is explicitly forbidden from post-processing
 `toml::to_string_pretty` output. The module states this in its own doc
-comment (`src/utils/toml_helpers.rs:181-189`): the serializer already picks
+comment (`src/utils/toml_helpers.rs:323-332`): the serializer already picks
 the correct quoting style and uses TOML native escapes (`\t`, `\r`, `\n`)
 inside basic strings, and running the helper on that output silently
 corrupts tabs, carriage returns, and newlines.
 
 ### Call sites
 
-Six call sites, in five files:
+Six call sites, in six files:
 
 | File | Line | Enclosing function | What is repaired |
 |------|------|--------------------|------------------|
@@ -152,7 +162,7 @@ change to one is **not** automatically a change to the other.
 ## quote_strings_containing_backslashes
 
 ```rust
-// src/utils/toml_helpers.rs:190-193
+// src/utils/toml_helpers.rs:329-332
 #[allow(dead_code)]
 pub(crate) fn quote_strings_containing_backslashes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| content.contains('\\'))
@@ -161,14 +171,14 @@ pub(crate) fn quote_strings_containing_backslashes(toml_str: &str) -> String {
 
 Converts double-quoted strings that contain **any** backslash — a broader
 rewrite than `fix_invalid_toml_escapes`, which only reacts to `\<` and `\>`.
-It uses the same quote-aware rewrite (literal form when there is no `'`,
-escaped double quotes otherwise).
+It uses the same decode-and-re-emit rewrite (literal form when the decoded
+value allows one, basic form otherwise).
 
 Two properties make it deliberately inert:
 
 1. It is `pub(crate)` and marked `#[allow(dead_code)]` — **nothing calls it**.
 2. It only applies to **hand-written** TOML, never to `toml::to_string_pretty`
-   output. The doc comment at `src/utils/toml_helpers.rs:181-189` spells out
+   output. The doc comment at `src/utils/toml_helpers.rs:323-332` spells out
    exactly what it would corrupt.
 
 It exists as the **trap that the save path used to fall into**. Applying it
@@ -182,10 +192,10 @@ instead of silently available.
 | File | Role |
 |------|------|
 | `src/utils/toml_helpers.rs` | Scanner + the two repair helpers |
-| `src/commands/mod.rs:177` | Repair on the legacy `snippets.toml` load path |
-| `src/library/persistence.rs:168` | Repair on the library load path |
-| `src/library/manager.rs:55`, `:106` | Repair on the `libraries.toml` registry load path |
-| `src/config/sync_settings.rs:536` | Repair on the `sync.toml` load path |
+| `src/commands/mod.rs:219` | Repair on the legacy `snippets.toml` load path |
+| `src/library/persistence.rs:209` | Repair on the library load path |
+| `src/library/manager.rs:57`, `:106` | Repair on the `libraries.toml` registry load path |
+| `src/config/sync_settings.rs:544` | Repair on the `sync.toml` load path |
 | `src/commands/pet_analysis.rs:103` | Repair on the Pet TOML import path |
 | `snip-sync/src/premade.rs:13` | The server's **separate** copy of the same repair |
 
@@ -196,8 +206,11 @@ instead of silently available.
 - **`write_schema_version` must use `toml::Table`, not `toml::Value`**, so
   array-of-tables survives (see [persistence.md](../persistence.md)).
 - **Multi-line regions (`"""…"""` and `'''…'''`) are never rewritten.**
-- **Only `\<` and `\>` are repaired.** A legal escape such as `\n` is left
-  exactly as it is.
+- **Only `\<` and `\>` trigger the repair.** A string with no illegal escape
+  is copied verbatim, so a legal escape such as `\n` is left exactly as it is.
+- **A repaired string keeps its parsed value.** Legal escapes are decoded
+  before the string is re-emitted, so `\t`, `\r`, `\n`, and `\uXXXX` survive
+  the repair instead of being frozen into two literal characters.
 - **The repair is not written back.** Files are repaired in memory for the
   parse only; the on-disk bytes are unchanged until the next legitimate save.
 - **`quote_strings_containing_backslashes` stays unreachable.**
@@ -207,20 +220,18 @@ instead of silently available.
 - **Do not call either helper on serialized output.** That is the single
   failure mode the golden corpus exists to catch — see
   `.skills/persistence-and-toml-fidelity.md`.
-- **A string containing `'` is *not* converted to a literal.** It keeps its
-  double quotes and every backslash is doubled
-  (`src/utils/toml_helpers.rs:149-153`). The repair therefore changes the
+- **A string whose value contains `'` or a control character is *not*
+  converted to a literal.** It keeps its double quotes and is re-escaped
+  (`src/utils/toml_helpers.rs:170-173`). The repair changes the
   *representation* of the string, and the stored command text still round
   trips correctly — but a naive "expect single quotes" assertion will fail
   for such a string.
-- **The repair is lossy about TOML *syntax*, not content.** Converting a
-  double-quoted string to a literal string means any *other* legal escape in
-  the same string (e.g. `\n` next to a `\<`) is no longer interpreted as an
-  escape — it becomes a literal backslash-n. This is intentional (the stored
-  command text is what must survive), but the repaired document is not
-  byte-equivalent to the original intent.
+- **The repair preserves the parsed value, not the source bytes.** A repaired
+  string is re-emitted with different quoting; the value `toml::from_str` sees
+  is the same. Do not assert on the repaired *text* unless you mean to pin the
+  quoting style.
 - **The two implementations can drift.** `snip-sync/src/premade.rs:13` and
-  `src/utils/toml_helpers.rs:205` are separate code with the same name.
+  `src/utils/toml_helpers.rs:348` are separate code with the same name.
   Fixing a bug in one does not fix the other.
 - **The scanner is not a validator.** It happily rewrites strings inside a
   document that is invalid for other reasons; the parse still fails, and the

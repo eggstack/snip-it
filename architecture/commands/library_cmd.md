@@ -22,8 +22,8 @@ directory).
 
 ## CLI surface
 
-`snp library` (alias `lib`) — `src/main.rs:121-125`; the subcommand enum
-is `LibraryCommands` (`src/main.rs:187-207`).
+`snp library` (alias `lib`) — `src/main.rs:147-151`; the subcommand enum
+is `LibraryCommands` (`src/main.rs:213-233`).
 
 | Form | Alias | Handler | Arguments |
 |------|-------|---------|-----------|
@@ -35,7 +35,7 @@ is `LibraryCommands` (`src/main.rs:187-207`).
 
 Unlike `sync`, `register`, and `cron`, the `library` group has **no**
 `*Args` struct — the clap variants are declared inline in
-`src/main.rs` and destructured at dispatch (`src/main.rs:730-738`).
+`src/main.rs` and destructured at dispatch (`src/main.rs:767-775`).
 
 ## Flow / steps
 
@@ -53,7 +53,7 @@ the rest (`:10-19`).
 
 `mgr.create_library(name)` → notify → `Created library '<name>' at <path>`.
 
-`LibraryManager::create_library` (`src/library/manager.rs:363-423`):
+`LibraryManager::create_library` (`src/library/manager.rs:376-436`):
 
 1. `gate_mutation()` → `transaction::gate_mutation_on_interrupted_transactions`
    (`:364`, `:636-642`).
@@ -87,7 +87,7 @@ the rest (`:10-19`).
 2. `mgr.delete_library(name)` (`:61`).
 3. Notify → `Deleted library '<name>'` (`:64-69`).
 
-`LibraryManager::delete_library` (`src/library/manager.rs:429-496`):
+`LibraryManager::delete_library` (`src/library/manager.rs:442-509`):
 
 - gate → lock (`:430-431`);
 - snapshot the config for rollback (`:432`);
@@ -109,7 +109,7 @@ the rest (`:10-19`).
 `mgr.set_primary(name)` → `Set '<name>' as primary library`. **No
 notification** — the primary pointer is not snippet content.
 
-`LibraryManager::set_primary` (`src/library/manager.rs:499-520`): gate →
+`LibraryManager::set_primary` (`src/library/manager.rs:512-533`): gate →
 lock → the library must exist (else `runtime_error("Library not found")`)
 → set `is_primary` on exactly one entry → `bump_generation()` +
 `save_config()`.
@@ -164,7 +164,7 @@ So `snp library create all` now fails. The `all` scope itself is a
 
 ## Fail-closed config load
 
-`LibraryManager::new()` (`src/library/manager.rs:41-92`) is the single
+`LibraryManager::new()` (`src/library/manager.rs:43-94`) is the single
 constructor used by all five handlers, and it does two things a casual
 reader would not expect from a "read" path:
 
@@ -199,21 +199,21 @@ that `snp status` has (see [status_cmd.md](status_cmd.md)).
 `create` and `delete` call `gate_mutation()` through
 `LibraryManager`, so both run
 `gate_mutation_on_interrupted_transactions(config_dir, transaction_dir)`
-(`src/library/manager.rs:636-642`). `set-primary` also calls
+(`src/library/manager.rs:666-672`). `set-primary` also calls
 `gate_mutation()` (`:500`) even though it only rewrites the index.
 
 ## Tokio runtime
 
 None. `snp library` never touches the global `RUNTIME`
-(`src/main.rs:22-27`) — every handler is synchronous.
+(`src/main.rs:29-35`) — every handler is synchronous.
 
-Startup policy (`src/main.rs:950-967`):
+Startup policy (`src/main.rs:987-1004`):
 
 - `library list` / `library show` → `StartupRecoveryPolicy::SuppressReadOnly`
-  with `StartupServices::Minimal` (no file logging) — `src/main.rs:899-905`;
+  with `StartupServices::Minimal` (no file logging) — `src/main.rs:936-942`;
 - `library create` / `library delete` / `library set-primary` →
   `StartupRecoveryPolicy::Allow` with `StartupServices::Logging` —
-  `src/main.rs:961-967`.
+  `src/main.rs:998-1004`.
 
 ## Auto-sync trigger
 
@@ -230,7 +230,7 @@ result is reported via `auto_sync::report_notification_result`.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1026-1032`).
+exit **1** (`src/main.rs:1063-1069`).
 
 | Situation | Result |
 |-----------|--------|
@@ -252,7 +252,7 @@ returns `CliOutcome::NotFound`.
 | Path | Role |
 |------|------|
 | `src/commands/library_cmd.rs` | The five handlers + the `if_empty` helper |
-| `src/main.rs:187-207`, `:730-738` | Clap wiring and dispatch |
+| `src/main.rs:213-233`, `:730-738` | Clap wiring and dispatch |
 | `src/library/manager.rs` | `LibraryManager` — index, files, linkage, gate, lock |
 | `src/library/model.rs:179-225` | `validate_library_name` (incl. the reserved `all`) |
 | `src/library/persistence.rs` | `load_library` / `save_library` (TOML fidelity) |

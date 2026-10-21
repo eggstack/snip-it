@@ -50,7 +50,7 @@ Two deliberate gaps, both annotated in the test source:
 
 1. **`config/` is not in the sync-client list.** It carries a known cross-layer
    call — `save_sync_settings()` → `crate::clipboard::invalidate_clipboard_settings_cache()`
-   (`src/config/sync_settings.rs:493`) — that predates the module split. Adding
+   (`src/config/sync_settings.rs:501`) — that predates the module split. Adding
    `config/` to `SYNC_CLIENT_MODULES` would fail on that exception. See
    "Known cross-layer exceptions".
 2. **`crate::config` is allowed from Core**, because core modules use only its
@@ -172,7 +172,7 @@ agent doesn't "discover" them as bugs.
 
 ### 1. `config/` → `clipboard` (sync-client → application)
 
-**Location:** `src/config/sync_settings.rs:493`
+**Location:** `src/config/sync_settings.rs:501`
 ```rust
 crate::clipboard::invalidate_clipboard_settings_cache();
 ```

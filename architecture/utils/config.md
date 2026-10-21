@@ -114,7 +114,7 @@ path**. `save_library` needs both — the gate reads the pending marker from
 the state directory and the journals live in the transaction directory:
 
 ```rust
-// src/library/persistence.rs:223-228
+// src/library/persistence.rs:264-269
 let sync_state_dir = crate::config::derive_sync_state_dir();
 let transaction_dir = crate::local_data::transaction_dir();
 crate::transaction::gate_mutation_on_interrupted_transactions(
@@ -173,7 +173,7 @@ the canonical one:
 Files are **moved**, not copied — the legacy directory is removed once empty.
 
 The migration is triggered from `LibraryManager::new()`
-(`src/library/manager.rs:42-45`); a failure is logged as a warning and does
+(`src/library/manager.rs:44-47`); a failure is logged as a warning and does
 not abort startup.
 
 ## Test-Only Config Directory Override
@@ -251,7 +251,7 @@ process-wide lock file. That contention is what made
 on a 30 s local-data-lock timeout.
 
 With the paths derived from the config directory
-(`src/library/persistence.rs:223-224`, `:233`) and the config directory
+(`src/library/persistence.rs:264-265`, `:233`) and the config directory
 redirected per test, each test gets its own gate, its own journal directory,
 and its own lock.
 
@@ -291,8 +291,8 @@ parallel lib tests.
 | `src/utils/config.rs` | Config-dir resolution, per-file path helpers, macOS migration, `ScopedConfigDir` |
 | `src/config/mod.rs:24` | Re-exports `derive_sync_state_dir` and `get_sync_config_path` at `crate::config::*` |
 | `src/local_data.rs:398-400` | `transaction_dir()` — `<config>/.transaction` |
-| `src/library/persistence.rs:223-228` | Consumer that derives gate + lock paths from the config dir |
-| `src/library/manager.rs:42-51` | Triggers the macOS migration; derives `libraries/`, `premade/`, `libraries.toml` |
+| `src/library/persistence.rs:264-269` | Consumer that derives gate + lock paths from the config dir |
+| `src/library/manager.rs:44-53` | Triggers the macOS migration; derives `libraries/`, `premade/`, `libraries.toml` |
 | `src/library/tests.rs:16-37` | In-crate test helper holding a `ScopedConfigDir` guard |
 
 ## Invariants

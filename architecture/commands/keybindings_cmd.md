@@ -18,8 +18,8 @@ integration — a different key surface).
 
 ## CLI surface
 
-`snp keybindings` (alias `k`) — `src/main.rs:105-107`, dispatched at
-`src/main.rs:674-675`.
+`snp keybindings` (alias `k`) — `src/main.rs:131-133`, dispatched at
+`src/main.rs:711-712`.
 
 No flags, no arguments, no JSON mode. `run() -> SnipResult<()>` prints
 the 79-line reference to stdout and returns `Ok(())`.
@@ -47,11 +47,11 @@ what is wrong:
 
 | The command prints | What the TUI actually does | Site |
 |--------------------|---------------------------|------|
-| `Normal Mode:` → `y : copy and quit (copies without quitting in search mode)` | **Incomplete.** The reference documents only the normal-mode copy. In **visual mode** `y` copies the *commands of every row in the range*, `strip_escape_sequences`-processed and joined with `\n`, and leaves visual mode. The reference never mentions the range copy. | `src/ui/mod.rs:1623-1673` |
-| `Normal Mode:` — no `Ctrl+C` line | **Missing.** `Ctrl+C` exits the snippet selector (it is only listed under the *Variable Prompt*'s normal mode). | `src/ui/mod.rs:1566-1569` |
-| `Normal Mode:` — no `Enter` line | **Missing.** `Enter` in normal mode runs the selected snippet. | `src/ui/mod.rs:1772-1775` |
-| `Theme Picker` → `e/q : cancel & revert to previous theme` and `Esc : leave filter (back to picker normal mode)` | **Incomplete.** `Esc` cancels the picker **when the picker is already in normal mode** — it is bound together with `q`. The reference's `Esc` line describes only the filter-mode behaviour. | `src/ui/mod.rs:1438-1449` (`q`/`Esc`), `:1371-1375` (filter-mode `Esc`) |
-| `Insert Mode:` → `/ : start search` | **Wrong.** The insert-mode match has no `/` arm: `/` is an ordinary printable character typed into the filter. `/` is a **normal-mode** key. | `src/ui/mod.rs:1695-1762`, normal-mode `/` at `:1881-1887` |
+| `Normal Mode:` → `y : copy and quit (copies without quitting in search mode)` | **Incomplete.** The reference documents only the normal-mode copy. In **visual mode** `y` copies the *commands of every row in the range*, `strip_escape_sequences`-processed and joined with `\n`, and leaves visual mode. The reference never mentions the range copy. | `src/ui/mod.rs:1714-1764` |
+| `Normal Mode:` — no `Ctrl+C` line | **Missing.** `Ctrl+C` exits the snippet selector (it is only listed under the *Variable Prompt*'s normal mode). | `src/ui/mod.rs:1657-1660` |
+| `Normal Mode:` — no `Enter` line | **Missing.** `Enter` in normal mode runs the selected snippet. | `src/ui/mod.rs:1877-1894` |
+| `Theme Picker` → `e/q : cancel & revert to previous theme` and `Esc : leave filter (back to picker normal mode)` | **Incomplete.** `Esc` cancels the picker **when the picker is already in normal mode** — it is bound together with `q`. The reference's `Esc` line describes only the filter-mode behaviour. | `src/ui/mod.rs:1529-1540` (`q`/`Esc`), `:1371-1375` (filter-mode `Esc`) |
+| `Insert Mode:` → `/ : start search` | **Wrong.** The insert-mode match has no `/` arm: `/` is an ordinary printable character typed into the filter. `/` is a **normal-mode** key. | `src/ui/mod.rs:1786-1867`, normal-mode `/` at `:1881-1887` |
 
 Treat the table above as the authority. When the TUI changes, this
 command's text must change with it — and until it does, `snp keybindings`
@@ -59,7 +59,7 @@ is wrong.
 
 ## The actual bindings
 
-### Normal mode (`src/ui/mod.rs:1767-1897`)
+### Normal mode (`src/ui/mod.rs:1872-2034`)
 
 | Key | Action | Site |
 |-----|--------|------|
@@ -89,9 +89,9 @@ is wrong.
 
 `v` and `V` are ignored when the list is empty, and they are **normal
 -mode only** — in insert mode `v` and `V` are ordinary printable
-characters (`src/ui/mod.rs:1571-1573`).
+characters (`src/ui/mod.rs:1662-1664`).
 
-### Insert mode (`src/ui/mod.rs:1695-1762`)
+### Insert mode (`src/ui/mod.rs:1786-1867`)
 
 The insert-mode match has exactly these arms:
 
@@ -113,15 +113,15 @@ filter like any other printable character.
 
 ### List display mode
 
-`list_display_mode` starts at `0` (`src/ui/mod.rs:600`) and is toggled by
+`list_display_mode` starts at `0` (`src/ui/mod.rs:715`) and is toggled by
 `Tab` in both normal and insert mode.
 
 | Mode | Rendering | Site |
 |------|-----------|------|
-| `0` (default) | the highlighted command only | `src/ui/mod.rs:1104-1111` |
-| `1` | `[description] ` prepended to the highlighted command | `src/ui/mod.rs:1087-1103` |
+| `0` (default) | the highlighted command only | `src/ui/mod.rs:1195-1202` |
+| `1` | `[description] ` prepended to the highlighted command | `src/ui/mod.rs:1178-1194` |
 
-### Theme picker (`src/ui/mod.rs:1432-1553`)
+### Theme picker (`src/ui/mod.rs:1523-1644`)
 
 Opened with `e` in normal mode.
 
@@ -192,10 +192,10 @@ Normal mode (`handle_normal_key`, `src/ui/variables.rs:596+`):
 
 When `y` is pressed in visual mode, the TUI copies the **commands** of
 every row in the range — each passed through `strip_escape_sequences` —
-joined with `\n` (`src/ui/mod.rs:1635-1641`).
+joined with `\n` (`src/ui/mod.rs:1726-1732`).
 
 The copy goes through a **direct `clipboard::copy_to_clipboard_auto`
-call** (`src/ui/mod.rs:1642`), which **bypasses
+call** (`src/ui/mod.rs:1733`), which **bypasses
 `commands::clip_cmd::copy_to_clipboard`** — the single implementation for
 snippet copies that additionally:
 
@@ -206,7 +206,7 @@ Two consequences:
 
 1. **No usage-index entry** is recorded for a visual-range copy.
 2. **Only the first row of the range is audit-logged** — the audit call
-   targets `filtered.get(start)` (`src/ui/mod.rs:1657-1668`), so the
+   targets `filtered.get(start)` (`src/ui/mod.rs:1748-1759`), so the
    remaining rows in the range are copied without an audit entry.
 
 This is the same wording used in [cron_cmd.md](cron_cmd.md), which
@@ -221,11 +221,11 @@ Read-only (trivially): stdout only. No gate, no lock, no state.
 ## Tokio runtime
 
 None. `snp keybindings` never touches the global `RUNTIME`
-(`src/main.rs:22-27`).
+(`src/main.rs:29-35`).
 
 Startup policy: `Commands::Keybindings` uses
 `StartupRecoveryPolicy::SuppressConfiguration` with
-`StartupServices::Logging` (`src/main.rs:982-992`).
+`StartupServices::Logging` (`src/main.rs:1019-1029`).
 
 ## Auto-sync trigger
 
@@ -247,7 +247,7 @@ success.
 | `src/clipboard.rs` | `copy_to_clipboard_auto` — the direct copy path |
 | `src/commands/clip_cmd.rs:40-49` | `copy_to_clipboard` — the auditing path that is bypassed |
 | `src/logging.rs` | `audit_log` |
-| `src/main.rs:105-107`, `:674-675` | Clap wiring and dispatch |
+| `src/main.rs:131-133`, `:674-675` | Clap wiring and dispatch |
 
 ## Invariants
 

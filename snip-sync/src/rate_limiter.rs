@@ -1,21 +1,29 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 /// Maximum number of rate limiter entries to prevent memory exhaustion from
 /// requests with many distinct API keys or peer addresses.
 const MAX_ENTRIES: usize = 100_000;
 
+/// Smallest window the limiter will use. A zero-length window would reset
+/// the window on every call (see `allow`), which silently disables rate
+/// limiting, so it is clamped to one second instead.
+const MIN_WINDOW_SECS: u64 = 1;
+
 #[derive(Clone)]
 struct WindowEntry {
-    window_start: u64,
+    /// Monotonic instant the current window started. A monotonic clock is
+    /// used on purpose: a wall-clock step backwards (NTP correction, VM
+    /// snapshot restore) must not pin every client inside a full window.
+    window_start: Instant,
     count: usize,
 }
 
 struct RateLimiterState {
     windows: HashMap<String, WindowEntry>,
-    oldest_first: BTreeSet<(u64, String)>,
+    oldest_first: BTreeSet<(Instant, String)>,
 }
 
 /// Bounded, process-local request windows. Windows intentionally reset when
@@ -23,13 +31,6 @@ struct RateLimiterState {
 /// persisted control-plane state.
 pub struct RateLimiter {
     windows: Arc<Mutex<RateLimiterState>>,
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 impl RateLimiter {
@@ -43,8 +44,17 @@ impl RateLimiter {
     }
 
     pub async fn allow(&self, key: &str, max_requests: usize, window: Duration) -> bool {
-        let now = now_secs();
-        let window_secs = window.as_secs();
+        // A zero request budget can never be satisfied. Return early so no
+        // window state is created for a key that is never allowed.
+        if max_requests == 0 {
+            return false;
+        }
+        // A zero-length window would expire on every call, which disables
+        // rate limiting entirely. Clamp it to the smallest window that still
+        // enforces the limit.
+        let window_secs = window.as_secs().max(MIN_WINDOW_SECS);
+
+        let now = Instant::now();
         let mut windows = self.windows.lock().await;
 
         if !windows.windows.contains_key(key)
@@ -55,7 +65,7 @@ impl RateLimiter {
         }
 
         if let Some(window_start) = windows.windows.get(key).map(|entry| entry.window_start) {
-            if now.saturating_sub(window_start) >= window_secs {
+            if now.saturating_duration_since(window_start).as_secs() >= window_secs {
                 windows
                     .oldest_first
                     .remove(&(window_start, key.to_string()));
@@ -82,6 +92,13 @@ impl RateLimiter {
 
         entry.count += 1;
         true
+    }
+
+    /// Test-only accessor for the start of a key's current window.
+    #[cfg(test)]
+    async fn window_start_for(&self, key: &str) -> Option<Instant> {
+        let windows = self.windows.lock().await;
+        windows.windows.get(key).map(|entry| entry.window_start)
     }
 }
 
@@ -155,5 +172,44 @@ mod tests {
     async fn test_zero_max_requests_deny_all() {
         let limiter = RateLimiter::new();
         assert!(!limiter.allow("zero", 0, Duration::from_secs(60)).await);
+    }
+
+    #[tokio::test]
+    async fn zero_length_window_still_enforces_the_limit() {
+        let limiter = RateLimiter::new();
+        // A zero-length window must not disable rate limiting: the limit is
+        // still enforced inside the clamped (one second) window.
+        assert!(limiter.allow("zero-window", 2, Duration::ZERO).await);
+        assert!(limiter.allow("zero-window", 2, Duration::ZERO).await);
+        assert!(!limiter.allow("zero-window", 2, Duration::ZERO).await);
+    }
+
+    #[tokio::test]
+    async fn zero_length_window_with_zero_budget_denies_everything() {
+        let limiter = RateLimiter::new();
+        assert!(!limiter.allow("zero-zero", 0, Duration::ZERO).await);
+    }
+
+    #[tokio::test]
+    async fn window_bookkeeping_uses_a_monotonic_clock() {
+        let limiter = RateLimiter::new();
+        assert!(limiter.allow("monotonic", 5, Duration::from_secs(60)).await);
+
+        let window_start = limiter
+            .window_start_for("monotonic")
+            .await
+            .expect("the window must exist after an allowed request");
+        // The window start is a monotonic instant, so it can never be behind
+        // the wall clock: a backwards clock step cannot pin the client
+        // inside a full window.
+        let now = Instant::now();
+        assert!(
+            window_start <= now,
+            "window start {window_start:?} must not be in the future"
+        );
+        assert!(
+            now.duration_since(window_start) < Duration::from_secs(5),
+            "window start must track the monotonic clock"
+        );
     }
 }

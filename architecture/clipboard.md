@@ -230,10 +230,10 @@ they are **not** symmetric.
 
 ### TUI visual-range multi-select
 
-`src/ui/mod.rs:1642`:
+`src/ui/mod.rs:1733`:
 
 ```rust
-// src/ui/mod.rs:1635-1642
+// src/ui/mod.rs:1726-1733
 let selected_items: Vec<String> = filtered
     .iter()
     .skip(start)
@@ -258,7 +258,7 @@ match clipboard::copy_to_clipboard_auto(&copy_text) {
   so a failed copy can still produce an audit entry.
 - The TUI then returns `SnippetSelection::Copied` (`:1671`), which
   `run_snippet_selection` treats as "selected and processed"
-  (`src/commands/mod.rs:453-456`) — so `clip_cmd::process_snippet` never
+  (`src/commands/mod.rs:556-559`) — so `clip_cmd::process_snippet` never
   runs for this path either.
 
 ### `snp cron` prompt
@@ -309,7 +309,7 @@ timeout in seconds (`src/clipboard.rs:131-135`).
 `get_clipboard_auto_clear_seconds` (`:35-53`) fills it from
 `crate::config::get_sync_settings()` (`:44`); `invalidate_clipboard_settings_cache`
 (`:55-60`) clears it. The only invalidator is
-`save_sync_settings()` (`src/config/sync_settings.rs:493`) — so a settings
+`save_sync_settings()` (`src/config/sync_settings.rs:501`) — so a settings
 change made by another process is not observed until the next write.
 
 Poisoned-mutex guards (`unwrap_or_else(|e| e.into_inner())`, `:39`, `:48`,
@@ -393,7 +393,7 @@ bumps the usage index — i.e. that the copy went through
 |------|---------|
 | `src/clipboard.rs` (260 lines) | Platform backends, timeout guard, auto-clear, settings cache |
 | `src/commands/clip_cmd.rs:40` | `copy_to_clipboard()` — the sanctioned side-effect funnel |
-| `src/ui/mod.rs:1635-1672` | TUI visual-range multi-select — direct `copy_to_clipboard_auto` call |
+| `src/ui/mod.rs:1726-1763` | TUI visual-range multi-select — direct `copy_to_clipboard_auto` call |
 | `src/commands/cron_cmd.rs:89` | `snp cron` prompt — direct `copy_to_clipboard_auto` call, no audit |
 | `src/commands/run_cmd.rs:194-207` | `snp run --copy` — goes through the funnel |
 | `src/error.rs:130`, `:280` | `SnipError::Clipboard` variant and constructor |
@@ -409,7 +409,7 @@ bumps the usage index — i.e. that the copy went through
    one that writes the audit row and bumps the usage index.
 2. **Exactly two bypasses, with deliberately different audit behaviour.**
    The TUI visual-range copy audits only the first row
-   (`src/ui/mod.rs:1657`); the `snp cron` prompt audits nothing
+   (`src/ui/mod.rs:1748`); the `snp cron` prompt audits nothing
    (`src/commands/cron_cmd.rs:89`).
 3. **Clipboard content is never logged.** Only operation names and success
    flags reach `tracing` (`src/logging.rs:356-362`).
@@ -432,13 +432,13 @@ bumps the usage index — i.e. that the copy went through
   *auto-clear*; it adds no audit row and no usage-index update.
 - **The TUI visual-range copy pastes commands, not descriptions.** The
   payload is `strip_escape_sequences(command)` joined with `\n`
-  (`src/ui/mod.rs:1639-1641`). A reader expecting descriptions will get
+  (`src/ui/mod.rs:1730-1732`). A reader expecting descriptions will get
   shell text.
 - **A multi-row TUI copy produces exactly one audit row.** `filtered.get(start)`
-  (`src/ui/mod.rs:1657`) is the only audited snippet; the remaining rows are
+  (`src/ui/mod.rs:1748`) is the only audited snippet; the remaining rows are
   invisible to the audit trail.
 - **A failed TUI copy can still be audited.** The audit write at
-  `src/ui/mod.rs:1660` happens after the copy result is handled, so the
+  `src/ui/mod.rs:1751` happens after the copy result is handled, so the
   status line can say "Copy failed" while `audit.log` records a `copy`.
 - **The auto-clear never fires for one-shot CLI commands.** `snp clip` exits
   before the timer; only the long-running TUI benefits.
@@ -449,7 +449,7 @@ bumps the usage index — i.e. that the copy went through
   `wayland-data-control`; the Linux backend is X11-only.
 - **The settings cache is invalidated only by `save_sync_settings`.** An
   external edit to the config file is not picked up until the next in-process
-  settings write (`src/config/sync_settings.rs:493`).
+  settings write (`src/config/sync_settings.rs:501`).
 - **`SNP_CLIPBOARD_TIMEOUT` is parsed as `u64` seconds.** A malformed or
   negative value silently falls back to 5 seconds
   (`src/clipboard.rs:62-68`).

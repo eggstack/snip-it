@@ -104,11 +104,11 @@ explicit or omitted, `new_cmd.rs:558-563`).
 ## Mutation vs read-only
 
 Mutating. Writes one library file through `save_library`
-(`src/library/persistence.rs:217`) or `save_snippets`
-(`src/commands/mod.rs:206`), both of which call
+(`src/library/persistence.rs:258`) or `save_snippets`
+(`src/commands/mod.rs:248`), both of which call
 `gate_mutation_on_interrupted_transactions()` and then
 `acquire_local_data_lock()` internally
-(`src/library/persistence.rs:225-233`, `src/commands/mod.rs:212-218`).
+(`src/library/persistence.rs:266-274`, `src/commands/mod.rs:254-260`).
 
 `new` also resolves the target through the **mutating**
 `get_library_path` (`new_cmd.rs:626`) and `init_library_manager`
@@ -120,13 +120,13 @@ Mutating. Writes one library file through `save_library`
 (`new_cmd.rs:650-653`), reported via `report_notification_result`. No
 explicit sync here; the detached worker picks it up.
 
-`src/main.rs:952` classifies `Commands::New(_)` as a mutation command
+`src/main.rs:989` classifies `Commands::New(_)` as a mutation command
 (`StartupRecoveryPolicy::Allow` + `StartupServices::Logging`).
 
 ## Tokio runtime
 
 `new` is a local-only command: it never initializes the global Tokio
-runtime and `src/main.rs:467-479` passes no runtime.
+runtime and `src/main.rs:493-505` passes no runtime.
 
 ## Error / exit mapping
 
@@ -191,7 +191,7 @@ runtime and `src/main.rs:467-479` passes no runtime.
   `resolve_editor_spec`.
 - `src/auto_sync/notification.rs` — `notify_mutation` and
   `report_notification_result`.
-- `src/main.rs` — dispatch (`src/main.rs:467-479`).
+- `src/main.rs` — dispatch (`src/main.rs:493-505`).
 
 ## File / line references
 

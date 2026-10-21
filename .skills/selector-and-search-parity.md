@@ -15,7 +15,7 @@ search, filters, or any new consumer of snippet text.
 
 ## The parity contract (one function, three consumers)
 
-`selector::searchable_text(snippet, fields)` (`src/selector.rs:135`) is the
+`selector::searchable_text(snippet, fields)` (`src/selector.rs:142`) is the
 single source of truth for *which fields participate* in a search. Deleted
 filtering, fuzzy scoring, and ranking live with the callers; this helper only
 decides field membership, precisely so the three surfaces cannot drift.
@@ -61,9 +61,9 @@ correctness bug**, not a style issue.
 
 | Function | Effect | Use for |
 |----------|--------|---------|
-| `resolve_selector(&selector)` (`src/selector.rs:681`) | Constructs `LibraryManager`, calls `ensure_library_mode()` — **can migrate, create, and rewrite metadata** | Commands that already own recovery/gating |
-| `resolve_selector_readonly(&selector)` (`src/selector.rs:623`) | Uses `readonly_library_sources()` — no migration, no directory creation, no metadata rewrite | Read-only commands, MCP, inspection |
-| `resolve_exact_target(...)` (`src/selector.rs:604`) | Builds an exact selector and delegates to the **mutating** resolver | Mutating callers needing ID/description/command matching |
+| `resolve_selector(&selector)` (`src/selector.rs:703`) | Constructs `LibraryManager`, calls `ensure_library_mode()` — **can migrate, create, and rewrite metadata** | Commands that already own recovery/gating |
+| `resolve_selector_readonly(&selector)` (`src/selector.rs:645`) | Uses `readonly_library_sources()` — no migration, no directory creation, no metadata rewrite | Read-only commands, MCP, inspection |
+| `resolve_exact_target(...)` (`src/selector.rs:626`) | Builds an exact selector and delegates to the **mutating** resolver | Mutating callers needing ID/description/command matching |
 
 - MCP is read-only, so it must never reach the mutating `resolve_selector`.
   Only `snippet_get` calls `resolve_selector_readonly` directly
@@ -89,7 +89,7 @@ paths:
   (`src/selector.rs:65-71`) → `LibraryScope::AllLibraries`. Used by `snp get`,
   exact-mode `run`/`clip`/`edit`, and MCP `snippet_get`.
 - **Read-only library path** — `LibraryManager::resolve_readonly_sources`
-  (`src/library/manager.rs:248-282`) matches the literal `"all"` itself, in
+  (`src/library/manager.rs:261-295`) matches the literal `"all"` itself, in
   three separate arms (`:256`, `:266`, `:278`). Used by `snp list`,
   `load_readonly_snippets`, and MCP `snippets_list` / `snippets_search`.
 
@@ -116,7 +116,7 @@ So `snp get --library all` and `snp list --library all` work, and
 (`src/library/model.rs:213-223`), so `snp library create all` fails.
 
 Read-only commands must resolve through `commands::load_readonly_snippets`
-(`src/commands/mod.rs:127-147`) → `library::readonly_library_sources`, never
+(`src/commands/mod.rs:169-189`) → `library::readonly_library_sources`, never
 through the mutating `get_library_path`; `ensure_library_mode()` must not run
 on a read path.
 

@@ -132,29 +132,51 @@ impl SearchFields {
 /// Deleted filtering, fuzzy scoring, and ranking live with the callers;
 /// this helper only decides *which fields* participate so CLI (`get --query`,
 /// `list --filter`), and MCP (`snippets_search`) cannot drift.
+///
+/// The text is assembled in a single buffer: the previous implementation
+/// collected the parts in a `Vec<&str>`, joined the tags into a temporary
+/// `String`, and joined the parts again, which allocated twice per snippet
+/// per query. The produced string is byte-identical to that form (the parts
+/// are still separated by a single space, and the tags still form one
+/// space-joined part).
 pub fn searchable_text(snippet: &crate::library::Snippet, fields: SearchFields) -> String {
-    let mut parts: Vec<&str> = Vec::with_capacity(4);
+    let mut text = String::new();
     if !snippet.description.is_empty() {
-        parts.push(snippet.description.as_str());
+        text.push_str(&snippet.description);
     }
     if !snippet.command.is_empty() {
-        parts.push(snippet.command.as_str());
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&snippet.command);
     }
-    let tags_joined;
     if fields.include_tags && !snippet.tags.is_empty() {
-        tags_joined = snippet.tags.join(" ");
-        if !tags_joined.is_empty() {
-            parts.push(tags_joined.as_str());
+        // The tags form a single part joined by one space. That part is
+        // dropped only when it is empty, i.e. for a lone empty tag — the
+        // same condition the previous `tags.join(" ")` check produced.
+        let tags_are_empty = snippet.tags.len() == 1 && snippet.tags[0].is_empty();
+        if !tags_are_empty {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            for (index, tag) in snippet.tags.iter().enumerate() {
+                if index > 0 {
+                    text.push(' ');
+                }
+                text.push_str(tag);
+            }
         }
     }
-    let output_summary;
     if fields.include_output && !snippet.output.is_empty() {
-        output_summary = crate::output::OutputPresentation::new(&snippet.output).for_scoring();
+        let output_summary = crate::output::OutputPresentation::new(&snippet.output).for_scoring();
         if !output_summary.is_empty() {
-            parts.push(output_summary.as_str());
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&output_summary);
         }
     }
-    parts.join(" ")
+    text
 }
 
 /// Score non-deleted snippets against `query` using the canonical
@@ -1103,6 +1125,106 @@ mod tests {
         snippet.favorite = true;
         let again = searchable_text(&snippet, SearchFields::with_output());
         assert!(!again.contains("ops"));
+    }
+
+    /// The previous (`Vec<&str>` + `join`) implementation of
+    /// [`searchable_text`], kept as the parity oracle for the single-buffer
+    /// rewrite. Search parity is a hard contract: `snp get --query`,
+    /// `snp list --filter`, and MCP `snippets_search` all share this one
+    /// function, so the produced string must stay byte-identical.
+    fn reference_searchable_text(snippet: &Snippet, fields: SearchFields) -> String {
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if !snippet.description.is_empty() {
+            parts.push(snippet.description.as_str());
+        }
+        if !snippet.command.is_empty() {
+            parts.push(snippet.command.as_str());
+        }
+        let tags_joined;
+        if fields.include_tags && !snippet.tags.is_empty() {
+            tags_joined = snippet.tags.join(" ");
+            if !tags_joined.is_empty() {
+                parts.push(tags_joined.as_str());
+            }
+        }
+        let output_summary;
+        if fields.include_output && !snippet.output.is_empty() {
+            output_summary = crate::output::OutputPresentation::new(&snippet.output).for_scoring();
+            if !output_summary.is_empty() {
+                parts.push(output_summary.as_str());
+            }
+        }
+        parts.join(" ")
+    }
+
+    #[test]
+    fn test_searchable_text_matches_previous_implementation_byte_for_byte() {
+        let mut with_zero_tags = make_snippet("id-0", "no tags", "echo 0");
+        with_zero_tags.tags = vec![];
+
+        let mut with_one_tag = make_snippet("id-1", "one tag", "echo 1");
+        with_one_tag.tags = vec!["solo".to_string()];
+
+        let mut with_many_tags = make_snippet("id-2", "many tags", "echo 2");
+        with_many_tags.tags = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+
+        let mut with_spaced_tag = make_snippet("id-3", "spaced tag", "echo 3");
+        with_spaced_tag.tags = vec!["two words".to_string(), "another one".to_string()];
+
+        let mut with_empty_description = make_snippet("id-4", "", "echo 4");
+        with_empty_description.tags = vec!["tag".to_string()];
+
+        let mut with_empty_command = make_snippet("id-5", "no command", "");
+        with_empty_command.tags = vec!["tag".to_string()];
+
+        let mut fully_empty = make_snippet("id-6", "", "");
+        fully_empty.tags = vec![];
+
+        let mut with_empty_tag = make_snippet("id-7", "empty tag", "echo 7");
+        with_empty_tag.tags = vec![String::new()];
+
+        let mut with_mixed_empty_tags = make_snippet("id-8", "mixed tags", "echo 8");
+        with_mixed_empty_tags.tags = vec![String::new(), "kept".to_string(), String::new()];
+
+        let mut with_output = make_snippet("id-9", "with output", "echo 9");
+        with_output.tags = vec!["out".to_string()];
+        with_output.output = "captured output line".to_string();
+
+        let mut with_only_output = make_snippet("id-10", "", "");
+        with_only_output.tags = vec![];
+        with_only_output.output = "only output".to_string();
+
+        let snippets = [
+            with_zero_tags,
+            with_one_tag,
+            with_many_tags,
+            with_spaced_tag,
+            with_empty_description,
+            with_empty_command,
+            fully_empty,
+            with_empty_tag,
+            with_mixed_empty_tags,
+            with_output,
+            with_only_output,
+        ];
+
+        let field_variants = [
+            SearchFields::description_and_command(),
+            SearchFields::fuzzy_default(),
+            SearchFields::with_output(),
+        ];
+
+        for snippet in &snippets {
+            for fields in field_variants {
+                let expected = reference_searchable_text(snippet, fields);
+                let actual = searchable_text(snippet, fields);
+                assert_eq!(
+                    actual, expected,
+                    "searchable_text drifted for snippet {} with fields {fields:?}",
+                    snippet.id
+                );
+            }
+        }
     }
 
     #[test]

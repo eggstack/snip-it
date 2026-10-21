@@ -188,7 +188,7 @@ The pre-fix Windows compiler output on commit `a6207f8` reported:
 - `error[E0658]: use of unstable library feature windows_by_handle` at `src\config.rs:219` for `metadata.file_index()`;
 - `error[E0658]: use of unstable library feature windows_by_handle` at `src\config.rs:224` for `metadata.volume_serial_number()`;
 - `error[E0308]: mismatched types` at `src\config.rs:224`, expected `u64` but found `u32`;
-- `error[E0308]: mismatched types` and `error[E0277]` at `src\utils\process.rs:48`, comparing the `u32` process exit code with the `i32` `STILL_ACTIVE` constant.
+- `error[E0308]: mismatched types` and `error[E0277]` at `src\utils\process.rs:53`, comparing the `u32` process exit code with the `i32` `STILL_ACTIVE` constant.
 
 The fixes were limited to the diagnosed Windows implementations: use the stable
 `GetFileInformationByHandle` API for file identity, cast `STILL_ACTIVE` to the

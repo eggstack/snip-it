@@ -41,7 +41,7 @@ pub struct BackupArgs {
 | `--format <FORMAT>` | `BackupFormat` | `directory` | Currently the only variant is `Directory` (`backup_archive.rs:15-17`). **The argument is accepted but ignored** — `run()` discards it with `let _ = format;` (`src/commands/backup_cmd.rs:49`). |
 | `--json` | flag | off | Emit a machine-readable JSON summary on **stdout**. The human summary always goes to **stderr**. |
 
-The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:260-261` dispatches to the same `handle_backup` (`src/main.rs:411-420`, `src/main.rs:829-831`).
+The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:286-287` dispatches to the same `handle_backup` (`src/main.rs:437-446`, `src/main.rs:866-868`).
 
 ## Control flow
 
@@ -151,13 +151,13 @@ The destination is always a **directory**. `--output` names the final directory;
 | `--json` | stdout | `{"backup_dir", "schema", "version", "file_count", "total_bytes"}` (`src/commands/backup_cmd.rs:229-242`). |
 | default | stderr | `Backup created: <dir>`, schema, version, file count, total size, then one line per manifest entry: `<kind> (<path>): <size> bytes, sha256:<first 16 hex chars>` (`:243-257`). The digest is **truncated to 16 hex characters** in the human output; the full digest is in the manifest. |
 
-`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:411-420`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:48-72` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
+`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:437-446`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:48-72` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
 
 ## Interaction with the transaction journal and locks
 
 - **Transaction journal:** none. `snp backup` never calls `begin_transaction`, so it creates no journal and needs no rollback.
 - **Mutation gate:** not called. The gate (`gate_mutation_on_interrupted_transactions`) protects *mutations*; backup does not mutate library state.
-- **Local-data lock:** acquired for the whole capture (`src/commands/backup_cmd.rs:77-78`). This is the same lock `save_library` takes (`src/library/persistence.rs:233`), which is what makes the snapshot atomic with respect to library writes.
+- **Local-data lock:** acquired for the whole capture (`src/commands/backup_cmd.rs:77-78`). This is the same lock `save_library` takes (`src/library/persistence.rs:274`), which is what makes the snapshot atomic with respect to library writes.
 - **Lock hierarchy position:** the local-data lock only. No transaction lock is taken, because there is no journal to protect.
 
 ## Key Files

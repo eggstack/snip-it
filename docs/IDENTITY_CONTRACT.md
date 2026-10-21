@@ -14,16 +14,22 @@
 - **ID field**: `id` on the `Snippet` struct (`src/library/model.rs:32`)
 - **Format**: `legacy-<64 hex chars>` — a SHA-256 digest, hex-encoded
 - **Generation**: **deterministic, not random.** `normalize_snippet_ids()`
-  (`src/library/persistence.rs:36`) runs on every load and assigns IDs by
+  (`src/library/persistence.rs:38`) runs on every load and assigns IDs by
   hashing stable user data, so a given file always yields the same IDs.
-- **Empty/missing IDs**: `deterministic_legacy_id()` (`src/library/persistence.rs:87`)
+- **Empty/missing IDs**: `deterministic_legacy_id()` (`src/library/persistence.rs:128`)
   — `SHA-256("snip-it-legacy-id-v1\0" + description + command + tags + output +
   folders + favorite + device_id + occurrence)`, prefixed `legacy-`. Field values
   are NUL-separated; the occurrence index is hashed as its little-endian bytes.
   The digest is rendered as 64 lowercase hex characters (two per digest byte).
 - **Duplicate explicit IDs**: `deterministic_duplicate_id()`
-  (`src/library/persistence.rs:119`) — same construction but salted with
+  (`src/library/persistence.rs:160`) — same construction but salted with
   `"snip-it-duplicate-id-v1\0" + original_id`
+- **Reserved IDs**: every ID the file already carries is reserved before any
+  provisional ID is minted, so an ID that is already persisted is never handed
+  out again — not to a later snippet, and not to an earlier one. Without this
+  a snippet holding `legacy-<hash(content, 0)>` would not consume occurrence
+  index 0, and a sibling with the same content and an empty ID would be handed
+  the very same ID.
 - **Occurrence counter**: the missing-ID and duplicate-ID branches deliberately
   share one content-fingerprint counter, so identical-content snippets consume
   occurrence indices from the same sequence regardless of branch. Inserting or
@@ -48,17 +54,17 @@
 | Pet format (no `id` field) | ID omitted by the format; the import path assigns a new one |
 | Native reimport | Existing ID is discarded; new UUID assigned (`src/commands/import_cmd.rs:135-145`) |
 | Import from external source without ID | New UUID assigned |
-| Same ID + identical content | Deduplicates on load (one copy kept) |
-| Same ID + different content | Conflict: duplicate ID gets a deterministic replacement on load (`src/library/persistence.rs:119`) |
+| Same ID + identical content | Both snippets are kept; the second gets a deterministic replacement ID on load (`src/library/persistence.rs:160`) |
+| Same ID + different content | Both snippets are kept; the second gets a deterministic replacement ID on load (`src/library/persistence.rs:160`) |
 | Different ID + same content | Both kept (no content-based deduplication) |
 | Restore | Retains IDs subject to collision rules (duplicates resolved at load) |
 | Sync push/pull/merge | Uses same ID across devices; the protobuf `Snippet` message carries the `id` field (`snip-proto/src/snip_proto.rs:85-113`) |
-| Delete | Sets `deleted=true`, retains ID as tombstone (`src/commands/mod.rs:499-514`) |
+| Delete | Sets `deleted=true`, retains ID as tombstone (`src/commands/mod.rs:602-617`) |
 | Recreate | New ID (never reuses deleted IDs) |
 
 ### ID Assignment Points
 
-1. **`load_library()`** — calls `normalize_snippet_ids()` to assign IDs for empty IDs and deduplicate duplicates (`src/library/persistence.rs:158`, `:36`). This is the primary assignment path for all newly created snippets.
+1. **`load_library()`** — calls `normalize_snippet_ids()` to assign IDs for empty IDs and make duplicate IDs unique (`src/library/persistence.rs:199`, `:38`). This is the primary assignment path for all newly created snippets.
 2. **`commands::import_cmd`** — regenerates the ID for imported snippets with `uuid::Uuid::new_v4()`, regardless of source ID (`src/commands/import_cmd.rs:145`). Existing non-empty IDs are discarded and recorded as normalizations. This is the only random-ID site left.
 3. **`doctor_cmd`** — reports planned ID regeneration for imported snippets with non-empty IDs (`src/commands/doctor_cmd.rs:292-300`). This is a diagnostic record, not an assignment path.
 
@@ -81,27 +87,40 @@ Note: `Snippet::new()` creates a snippet with an empty `id` field. The determini
 | Primary selection | References `filename`; validated canonical name (`src/library/manager.rs`) |
 | Delete | Config entry removed, file deleted after config save for crash safety (`src/library/manager.rs`) |
 | Recreate | New entry (filename is primary key; case-insensitive duplicate check) (`src/library/manager.rs`) |
-| Sync linkage | `link_server_library` sets both `library_id` and `server_id` (`src/library/manager.rs:536`) |
-| Unlink | Clears `library_id` and `server_id` (`src/library/manager.rs:570`) |
-| Server import | `add_server_library` creates or links by normalized filename (`src/library/manager.rs:648`) |
+| Sync linkage | `link_server_library` sets both `library_id` and `server_id` (`src/library/manager.rs:550`) |
+| Unlink | Clears `library_id` and `server_id` (`src/library/manager.rs:586`) |
+| Server import | `add_server_library` creates or links by normalized filename (`src/library/manager.rs:678`) |
 
 ## Migration Rules
 
 - Missing IDs get a deterministic `legacy-<hex>` ID on load
 - Duplicate IDs get a deterministic replacement on load
 - Empty IDs get a deterministic `legacy-<hex>` ID on load
-- No ID reuse from deleted snippets — deleted snippets retain their original ID as a tombstone (`src/commands/mod.rs:499-514`)
-- Deleted snippets are excluded from TUI display but retained for sync (`src/commands/mod.rs:243-250`)
+- No ID reuse from deleted snippets — deleted snippets retain their original ID as a tombstone (`src/commands/mod.rs:602-617`)
+- Deleted snippets are excluded from TUI display but retained for sync (`src/commands/mod.rs:285-292`)
 
 ## Sync Identity Semantics
 
-- Snippet IDs are the merge key across devices (`src/sync_commands.rs:1252-1254`)
+- Snippet IDs are the merge key across devices (`src/sync_commands.rs:1261-1263`)
 - Last-write-wins conflict resolution uses `updated_at` timestamp, then
   `device_id`, then a SHA-256 fingerprint of the synced fields
   (`src/sync_commands.rs:1199-1224`)
 - Locally deleted snippets are never resurrected by newer server copies
-  (`src/sync_commands.rs:1298-1310`); a server-only tombstone is dropped because
-  this device never observed the snippet (`src/sync_commands.rs:1316-1323`)
-- Server-deleted snippets are marked `deleted=true` locally (data preserved, not removed) (`src/sync_commands.rs:1264-1284`)
-- `output` is local-only — not synced, and absent from the protobuf `Snippet` message (`snip-proto/src/snip_proto.rs:85-113`); the merge keeps the local copy (`src/sync_commands.rs:1285-1296`)
+  (`src/sync_commands.rs:1307-1319`); a server-only tombstone is dropped because
+  this device never observed the snippet (`src/sync_commands.rs:1325-1332`)
+- Server-deleted snippets are marked `deleted=true` locally (data preserved, not removed) (`src/sync_commands.rs:1273-1293`)
+- `output` is local-only — not synced, and absent from the protobuf `Snippet` message (`snip-proto/src/snip_proto.rs:85-113`); the merge keeps the local copy (`src/sync_commands.rs:1294-1305`)
 - `device_id` and `deleted` fields are sanitized on import (`src/commands/import_cmd.rs:157-158`)
+
+## Known limitations
+
+- **The server's delta cursor is `updated_at`, which the client controls.**
+  The server filters rows with `updated_at >= since` and hands the client
+  `MAX(updated_at)` as the next cursor, so a row pushed with an `updated_at`
+  below the library maximum is never delivered to a client whose cursor is
+  already above it. The trigger is clock skew on one device (or a restore
+  from an old backup); the consequence is that the snippet lives only on the
+  server and on the pushing device. A fresh device, whose cursor is 0, still
+  receives it. The fix — a monotonic per-library write sequence as the
+  cursor — needs a protocol and schema change and is recorded, not yet
+  implemented, in `plans/adrs/ADR-0001-sync-delta-cursor.md`.

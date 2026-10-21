@@ -14,18 +14,18 @@
 | Path | Entry point | Understands `"all"`? | Used by |
 |------|-------------|----------------------|----------|
 | Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-71`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP `snippet_get` |
-| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:784`) → `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:248-289`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`), MCP `snippets_list` / `snippets_search` |
-| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:91-115`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
+| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:815`) → `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:261-302`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`), MCP `snippets_list` / `snippets_search` |
+| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:91-157`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
 
 There are **two independent** definitions of the keyword, and they agree:
 
 - The selector path matches the literal `"all"` in
   `LibraryScope::from_filter_arg` (`src/selector.rs:65-71`).
 - The read-only path matches the literal `"all"` on its own, in
-  `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:277-288`);
+  `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:290-301`);
   it does **not** consume `LibraryScope::from_filter_arg`.
 
-Both are unit-tested (`src/selector.rs:1064-1082`, `src/library/tests.rs:495`).
+Both are unit-tested (`src/selector.rs:1086-1104`, `src/library/tests.rs:495`).
 A command that wants cross-library support must route through one of those
 two; adding `"all"` handling to `get_library_path` would fork the rule a third
 time.
@@ -56,7 +56,7 @@ snp get --library work --query deploy
 
 The name is matched against library filenames **exactly** (case-sensitive):
 `get_library_by_filename` compares `meta.filename == name`
-(`src/library/manager.rs:222-227`). If the library does not exist, the command
+(`src/library/manager.rs:235-240`). If the library does not exist, the command
 exits with an error.
 
 ### All Libraries (`--library all`)
@@ -101,7 +101,7 @@ A library has **two** identifiers, and they are not interchangeable:
 | `--library <name>` | Match by filename exactly (case-sensitive), error if not found |
 | `--library all` (selector or read-only path) | Union of all visible libraries |
 | `--library all` (single-library path) | Error: `library_not_found` — the keyword is reserved, so this reads as "does not exist" |
-| Primary library not set | Error `No primary library` with the guidance `Create a library with 'snp library create <name>'` (`src/selector.rs:633-638`) |
+| Primary library not set | Error `No primary library` with the guidance `Create a library with 'snp library create <name>'` (`src/selector.rs:655-660`) |
 
 ---
 
@@ -110,7 +110,7 @@ A library has **two** identifiers, and they are not interchangeable:
 When `--library all` is used with a selector-based command, every match from
 every visible library is collected and then sorted deterministically by
 **library name → description → snippet ID** (`selector::finish_aggregate`,
-`src/selector.rs:536-571`). The `--resolution` policy then decides what
+`src/selector.rs:558-593`). The `--resolution` policy then decides what
 happens:
 
 - **`unique` (default)**: more than one match is **ambiguous**, not "the first
@@ -168,7 +168,7 @@ output even when `--library all` concatenates several libraries.
 - `LibraryManager::create_library` stores the name **as given**; it does not
   lowercase it or convert spaces to hyphens. Duplicate detection at creation
   time is case-insensitive, so `Work` and `work` cannot both exist
-  (`src/library/manager.rs:391-401`).
+  (`src/library/manager.rs:404-414`).
 - Name **creation** is validated, not normalized: `validate_library_name`
   rejects empty names, names over 50 characters, path separators, a `.toml`
   suffix, and the reserved `all`

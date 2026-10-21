@@ -26,6 +26,8 @@ pub(crate) fn write_library_file(path: &Path, content: &str, temp_prefix: &str) 
 /// - For duplicate explicit IDs, the first occurrence keeps the original and
 ///   later occurrences receive deterministic replacement IDs.
 /// - Repeated loads of identical file content produce identical IDs.
+/// - Every ID in the normalized collection is unique: an ID that is already
+///   present in the file is never handed out again.
 ///
 /// Note: the missing-ID and duplicate-ID branches intentionally share one
 /// content-fingerprint occurrence counter, so identical-content snippets
@@ -34,29 +36,68 @@ pub(crate) fn write_library_file(path: &Path, content: &str, temp_prefix: &str) 
 /// inserting or reordering identical-content snippets can shift provisional
 /// IDs of unrelated missing-ID snippets (accepted churn after sync merges).
 fn normalize_snippet_ids(snippets: &mut [Snippet]) {
-    let mut seen_ids: HashSet<String> = HashSet::new();
+    // Pass 1 — reserve every ID the file already carries. Reserving them up
+    // front means a provisional ID can never be minted for a snippet whose
+    // sibling already owns that ID, regardless of the order the two appear in
+    // the file. Without this, a snippet that already holds
+    // `legacy-<hash(content, 0)>` did not consume occurrence index 0, so a
+    // later empty-ID sibling with the same content was handed the very same
+    // ID — two snippets sharing one identity.
+    let mut taken: HashSet<String> = HashSet::new();
+    for snippet in snippets.iter() {
+        if !snippet.id.is_empty() {
+            taken.insert(snippet.id.clone());
+        }
+    }
+
+    // Pass 2 — hand out IDs. `kept` tracks the IDs already claimed by a
+    // snippet that kept its own value, so only the *second* occurrence of a
+    // repeated explicit ID is replaced.
+    let mut kept: HashSet<String> = HashSet::new();
     let mut content_fingerprints: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
     for snippet in snippets.iter_mut() {
         if snippet.id.is_empty() {
             // Compute a deterministic fingerprint from stable user data.
-            let occurrence = content_fingerprints
-                .entry(snippet_content_key(snippet))
-                .or_insert(0);
-            let idx = *occurrence;
-            *occurrence += 1;
-            snippet.id = deterministic_legacy_id(snippet, idx);
-        } else if seen_ids.contains(&snippet.id) {
+            let key = snippet_content_key(snippet);
+            let new_id = next_free_id(&key, &mut content_fingerprints, &taken, |idx| {
+                deterministic_legacy_id(snippet, idx)
+            });
+            taken.insert(new_id.clone());
+            snippet.id = new_id;
+        } else if !kept.insert(snippet.id.clone()) {
             // Duplicate explicit ID — generate a deterministic replacement.
-            let occurrence = content_fingerprints
-                .entry(snippet_content_key(snippet))
-                .or_insert(0);
-            let idx = *occurrence;
-            *occurrence += 1;
-            snippet.id = deterministic_duplicate_id(&snippet.id, snippet, idx);
+            let key = snippet_content_key(snippet);
+            let original_id = snippet.id.clone();
+            let new_id = next_free_id(&key, &mut content_fingerprints, &taken, |idx| {
+                deterministic_duplicate_id(&original_id, snippet, idx)
+            });
+            taken.insert(new_id.clone());
+            snippet.id = new_id;
         }
-        seen_ids.insert(snippet.id.clone());
+    }
+}
+
+/// Returns the first candidate ID that is not already in `taken`.
+///
+/// The candidate is derived from `key` and the occurrence index for that key.
+/// The occurrence index advances on every attempt, so a candidate that is
+/// already taken is skipped rather than reused.
+fn next_free_id(
+    key: &str,
+    content_fingerprints: &mut std::collections::HashMap<String, usize>,
+    taken: &HashSet<String>,
+    mut candidate: impl FnMut(usize) -> String,
+) -> String {
+    loop {
+        let occurrence = content_fingerprints.entry(key.to_string()).or_insert(0);
+        let idx = *occurrence;
+        *occurrence += 1;
+        let id = candidate(idx);
+        if !taken.contains(&id) {
+            return id;
+        }
     }
 }
 
@@ -333,7 +374,59 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     fs::copy(path, &backup_path)
         .map_err(|e| SnipError::io_error("create backup", backup_path.clone(), e))?;
 
+    // `fs::copy` writes the copy without fsyncing it, so a power loss right
+    // after the save could leave the rollback point truncated. Flush the
+    // backup before the atomic write replaces the original.
+    sync_backup_file(&backup_path);
+
     Ok(Some(backup_path))
+}
+
+/// Flush a freshly copied backup to disk.
+///
+/// `fs::copy` does not fsync the destination. The flush is best-effort: a
+/// backup that cannot be synced is still a usable rollback point, so the
+/// failure is logged rather than propagated to the caller.
+fn sync_backup_file(path: &Path) {
+    match fs::OpenOptions::new().write(true).open(path) {
+        Ok(file) => {
+            if let Err(e) = file.sync_all() {
+                tracing::warn!(
+                    backup = %path.display(),
+                    error = %e,
+                    "Failed to fsync backup file"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                backup = %path.display(),
+                error = %e,
+                "Failed to open backup file for fsync"
+            );
+        }
+    }
+}
+
+/// Returns `true` when `name` is a backup file that belongs to `file_stem`.
+///
+/// Backups are named `{file_stem}.{timestamp}.toml.bak`. Matching on the
+/// plain `{file_stem}.` prefix would also accept another library's backups
+/// whenever one library name is a prefix of another (`foo` vs `foo.bar`), so
+/// the rotation would delete an unrelated library's rollback point. The
+/// segment between the stem and the `.toml.bak` suffix must therefore be the
+/// timestamp itself — digits and underscores, never another `.` separator.
+pub(crate) fn is_backup_name_for_stem(name: &str, file_stem: &str) -> bool {
+    let Some(rest) = name.strip_prefix(file_stem) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('.') else {
+        return false;
+    };
+    let Some(timestamp) = rest.strip_suffix(".toml.bak") else {
+        return false;
+    };
+    !timestamp.is_empty() && timestamp.chars().all(|c| c.is_ascii_digit() || c == '_')
 }
 
 fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()> {
@@ -344,13 +437,17 @@ fn cleanup_old_backups(backup_dir: &Path, original_path: &Path) -> SnipResult<()
         None => return Ok(()),
     };
 
-    let prefix = format!("{file_stem}.");
     let mut backups: Vec<_> = fs::read_dir(backup_dir)
         .map_err(|e| SnipError::io_error("read backup directory", backup_dir.to_path_buf(), e))?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
-            name.starts_with(&prefix) && name.ends_with(".toml.bak")
+            // Only this library's own backups count towards its rotation.
+            // A plain prefix match would also capture
+            // `<stem>.<other>.<ts>.toml.bak` backups that belong to a
+            // different library whose name starts with this one
+            // (`foo` vs `foo.bar`).
+            is_backup_name_for_stem(&name, &file_stem)
         })
         .map(|entry| {
             (

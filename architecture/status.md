@@ -165,7 +165,7 @@ a stale-tolerant hint. `Drop` releases the kernel lock and never unlinks the
 file, so a lock file with a dead PID is the normal steady state
 (`src/process_file_lock.rs:190-200`). Liveness uses `kill(pid, 0)`: only
 `ESRCH` proves absence — `EPERM` and unknown errno mean the process is alive
-(`src/utils/process.rs:14-25`). On non-Unix an unknown PID is treated as alive
+(`src/utils/process.rs:19-30`). On non-Unix an unknown PID is treated as alive
 (conservative, non-stealing).
 
 `DeadStale` means a recorded PID that is provably gone. `Malformed` means the
@@ -243,7 +243,7 @@ state**; they are what make a failing auto-sync back off instead of hot-looping.
 
 - The worker increments the durable count on every failed cycle and computes
   the next eligible time with `transient_backoff(consecutive)`
-  (`src/auto_sync/worker.rs:510-532`, `:544-549`). The count is read from the
+  (`src/auto_sync/worker.rs:519-541`, `:544-549`). The count is read from the
   status file, `+1`, or `1` when the status is missing or corrupt.
 - `schedule_sync` reads `next_attempt_at_unix_ms` and returns
   `DeferredUntil(t)` while `now < t` — except for `Caller::ExplicitRetry`,
@@ -305,9 +305,9 @@ pub enum PreflightError {
 }
 ```
 
-(`src/auto_sync/worker.rs:324-333`), returned by
+(`src/auto_sync/worker.rs:333-342`), returned by
 `preflight_check(state_dir, observed) -> Result<PendingState, PreflightError>`
-(`src/auto_sync/worker.rs:373-395`).
+(`src/auto_sync/worker.rs:382-404`).
 
 | Condition | Preflight result | Worker behaviour | Effect on status |
 |-----------|------------------|------------------|-------------------|
@@ -318,11 +318,11 @@ pub enum PreflightError {
 | Marker unparseable / CRC mismatch | `Failed { class: LocalFailure }` | `record_sync_failure` | `attention_required = true` — operator action needed |
 
 Classification is `failure_class_for_pending_error`
-(`src/auto_sync/worker.rs:348-365`): `Io`/`Lock` → `Transient`;
+(`src/auto_sync/worker.rs:357-374`): `Io`/`Lock` → `Transient`;
 `Deserialize`/`IntegrityMismatch`/`Corrupted` → `LocalFailure`; anything else →
 `Internal`. The generation attributed to the failure is
 `UNKNOWN_PENDING_GENERATION` (`0`) when the marker's own generation cannot be
-trusted (`src/auto_sync/worker.rs:371`).
+trusted (`src/auto_sync/worker.rs:380`).
 
 **This is the defect the two audited commits fixed.** Before commit `8d5c209`,
 every one of these conditions was reported as `NothingToDo` — a clean exit
@@ -448,10 +448,10 @@ a backup next to the damaged file:
 
 | Trigger | Side effect | Site |
 |---------|-------------|------|
-| A library TOML fails to parse | copies it to `<library>.toml.corrupt.bak` | `src/library/persistence.rs:175` |
-| `libraries.toml` fails to parse | copies it to `libraries.toml.corrupt` | `src/library/manager.rs:60` |
-| `sync.toml` fails its integrity check | copies it to `sync.toml.corrupt.bak` and returns defaults | `src/config/sync_settings.rs:507-532` |
-| macOS legacy config directory detected | migrates the config directory | `src/library/manager.rs:43` → `src/utils/config.rs:166` |
+| A library TOML fails to parse | copies it to `<library>.toml.corrupt.bak` | `src/library/persistence.rs:216` |
+| `libraries.toml` fails to parse | copies it to `libraries.toml.corrupt` | `src/library/manager.rs:62` |
+| `sync.toml` fails its integrity check | copies it to `sync.toml.corrupt.bak` and returns defaults | `src/config/sync_settings.rs:515-540` |
+| macOS legacy config directory detected | migrates the config directory | `src/library/manager.rs:45` → `src/utils/config.rs:166` |
 
 These are the same "fail closed with a best-effort backup" paths used
 everywhere else in the codebase (see [persistence.md](persistence.md)); they
@@ -527,7 +527,7 @@ or `snp validate` for that.
   `sync.configuration` field and the `CONFIG_LOAD_FAILED` diagnostic.
   `src/status_snapshot.rs:371-378`.
 - **Only `ESRCH` proves a PID is dead.** `EPERM` and unknown errno mean the
-  process is alive. `src/utils/process.rs:23-25`.
+  process is alive. `src/utils/process.rs:28-30`.
 - **A leftover lock file is normal.** `Drop` releases the kernel lock without
   unlinking, so `auto-sync-execution.lock` and `auto-sync-worker.lock`
   persist with the last owner's metadata between runs.
@@ -543,7 +543,7 @@ or `snp validate` for that.
   is replacing it.
 - **`executor_exit_code == -1` means "detached helper"**, not a crash — the
   worker has no executor process to report a code for.
-  `src/auto_sync/worker.rs:510-532`.
+  `src/auto_sync/worker.rs:519-541`.
 - **`config_fingerprint` is a `DefaultHasher` digest**, so its numeric value
   changes across Rust toolchain releases. Only the *comparison* against the
   stored value is meaningful; never persist or display it as a stable id.

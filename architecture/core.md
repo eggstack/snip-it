@@ -75,7 +75,7 @@ Stored in `libraries.toml`.
 
 `#[doc(hidden)]`. Parallel vectors of snippet metadata; index `i` refers to
 the same snippet in every vector. Built by
-`commands::get_snippet_data()` (`src/commands/mod.rs:243`) for the TUI.
+`commands::get_snippet_data()` (`src/commands/mod.rs:285`) for the TUI.
 
 ```rust
 pub struct SnippetData {
@@ -107,7 +107,7 @@ the TUI `process_fn` callback.
 ### `SelectionOutcome` — `src/lib.rs:147-157`
 
 `#[doc(hidden)]`, `#[non_exhaustive]`. The raw result of the shared
-TUI selection loop (`run_snippet_selection`, `src/commands/mod.rs:338`).
+TUI selection loop (`run_snippet_selection`, `src/commands/mod.rs:399`).
 
 | Variant | Payload | Meaning |
 |---------|---------|---------|
@@ -193,11 +193,11 @@ There is **no** `From<SnipError> for CliOutcome` conversion, and no
 ```text
 command handler returns Err(SnipError)
         │
-        └──► main(): eprintln!("error: {e}"); exit 1      (src/main.rs:1026-1032)
+        └──► main(): eprintln!("error: {e}"); exit 1      (src/main.rs:1063-1069)
 
 command handler returns Ok(CliOutcome::X)
         │
-        └──► main(): exit(X.exit_code())                  (src/main.rs:1019-1024)
+        └──► main(): exit(X.exit_code())                  (src/main.rs:1056-1061)
 ```
 
 - A handler that wants a **specific** code (3, 4, 5, 6, 7, 9) returns the
@@ -208,7 +208,7 @@ command handler returns Ok(CliOutcome::X)
   parsing — no command returns it.
 - Exit code **10** (`UNSAFE_REPAIRS`) is **not** a `CliOutcome` variant. It
   is produced by the direct `exit_on_repair_status()` path in `main.rs`
-  (`src/main.rs:375-388`), which calls `std::process::exit` inside the
+  (`src/main.rs:401-414`), which calls `std::process::exit` inside the
   handler.
 
 `PersistenceFailed` deliberately maps to code 1 (`GENERAL_ERROR`) rather than
@@ -275,7 +275,7 @@ and the stable-vs-internal policy live in **[public_api.md](public_api.md)**.
 - **`ProcessResult::is_done()` is the usage-recording gate.** A `Failed`
   child writes no usage metadata.
 - **Exit 10 has no `CliOutcome` variant.** It only exists in
-  `exit_on_repair_status` (`src/main.rs:375-388`); a caller that tries to
+  `exit_on_repair_status` (`src/main.rs:401-414`); a caller that tries to
   match it on `CliOutcome` will not find it.
 - **`SnipError::Runtime` classification is substring-based** and therefore
   looser than the typed `SyncFailure` path — prefer `sync_failure()` for

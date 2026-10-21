@@ -30,9 +30,9 @@ pub struct StatusArgs {
 ```
 
 `StatusArgs` is the single source of truth for **both** spellings:
-`snp status` (`src/main.rs:169`) and `snp data status` (alias `s`,
-`src/main.rs:266-268`). Both dispatch through the single-path handler
-`handle_status` (`src/main.rs:439-442`), which calls
+`snp status` (`src/main.rs:195`) and `snp data status` (alias `s`,
+`src/main.rs:292-294`). Both dispatch through the single-path handler
+`handle_status` (`src/main.rs:465-468`), which calls
 `status_cmd::run(args.json, args.sync_only)` and always returns
 `CliOutcome::Success`.
 
@@ -128,11 +128,11 @@ write to disk:
 
 | Side effect | Trigger | Site |
 |-------------|---------|------|
-| `libraries.toml.corrupt` | `libraries.toml` exists but does not parse — the file is copied to a backup and the constructor returns an error | `src/library/manager.rs:60` (reached via `LibraryManager::new()` in `capture_local_summary`, `src/status_snapshot.rs:542`) |
-| `<library>.toml.corrupt.bak` | A library file fails to parse — `load_library` copies it to `<name>.toml.corrupt.bak` before returning the parse error | `src/library/persistence.rs:175` (reached via `count_snippets`, `src/status_snapshot.rs:576`) |
-| `sync.toml.corrupt.bak` | `sync.toml` fails its CRC32 integrity check — the file is copied to a backup and the settings are reset to defaults | `src/config/sync_settings.rs:507-532` (reached via `load_sync_settings` in `sync_configuration_state`, `src/status_snapshot.rs:202`) |
+| `libraries.toml.corrupt` | `libraries.toml` exists but does not parse — the file is copied to a backup and the constructor returns an error | `src/library/manager.rs:62` (reached via `LibraryManager::new()` in `capture_local_summary`, `src/status_snapshot.rs:542`) |
+| `<library>.toml.corrupt.bak` | A library file fails to parse — `load_library` copies it to `<name>.toml.corrupt.bak` before returning the parse error | `src/library/persistence.rs:216` (reached via `count_snippets`, `src/status_snapshot.rs:576`) |
+| `sync.toml.corrupt.bak` | `sync.toml` fails its CRC32 integrity check — the file is copied to a backup and the settings are reset to defaults | `src/config/sync_settings.rs:515-540` (reached via `load_sync_settings` in `sync_configuration_state`, `src/status_snapshot.rs:202`) |
 | `sync.toml` rewrite + keychain write | A plaintext API key is migrated to the OS keychain, and the `@keychain` marker is written back to `sync.toml` | `src/config/sync_settings.rs:353-391`, `:546-550` |
-| Config-directory migration | The legacy macOS config directory is moved into the XDG location | `src/library/manager.rs:43` → `src/utils/config.rs:166-206` |
+| Config-directory migration | The legacy macOS config directory is moved into the XDG location | `src/library/manager.rs:45` → `src/utils/config.rs:166-206` |
 
 The corrupt-file backups are **best-effort diagnostics**: the original
 files are left in place, and the command still exits 0. But a
@@ -145,13 +145,13 @@ local census while the real index is on disk next to a
 **No transaction gate** (`gate_mutation_on_interrupted_transactions`) is
 called, and no execution lock is acquired. `snp status` is classified as
 `StartupRecoveryPolicy::SuppressReadOnly` with
-`StartupServices::Minimal` (`src/main.rs:890-905`) — no file logging, and
+`StartupServices::Minimal` (`src/main.rs:927-942`) — no file logging, and
 pending auto-sync is not rescheduled before the command runs.
 
 ## Tokio runtime
 
 None. `snp status` never touches the global `RUNTIME`
-(`src/main.rs:22-27`).
+(`src/main.rs:29-35`).
 
 ## Auto-sync trigger
 
@@ -162,7 +162,7 @@ on.
 ## Error / exit mapping
 
 `SnipResult<()>` → `handle_status` returns `CliOutcome::Success`
-(`src/main.rs:439-442`).
+(`src/main.rs:465-468`).
 
 | Situation | Result |
 |-----------|--------|
@@ -182,10 +182,10 @@ Corrupt state is a *displayed condition*, not a failure of this command.
 | `src/auto_sync/status.rs` | `read_status_typed`, `AutoSyncStatus`, `status_path` |
 | `src/auto_sync/pending.rs` | `read_state_from_dir` — the pending marker read |
 | `src/auto_sync/execution_lock.rs`, `src/auto_sync/lock.rs` | Execution- and worker-lock liveness |
-| `src/library/manager.rs:41-92` | `LibraryManager::new` — migration + fail-closed index load |
-| `src/library/persistence.rs:175` | `load_library` corrupt backup |
-| `src/config/sync_settings.rs:498-553` | `load_sync_settings` — integrity check, corrupt backup, keychain migration |
-| `src/main.rs:439-442` | `handle_status` — the shared single-path handler |
+| `src/library/manager.rs:43-94` | `LibraryManager::new` — migration + fail-closed index load |
+| `src/library/persistence.rs:216` | `load_library` corrupt backup |
+| `src/config/sync_settings.rs:506-561` | `load_sync_settings` — integrity check, corrupt backup, keychain migration |
+| `src/main.rs:465-468` | `handle_status` — the shared single-path handler |
 
 ## Invariants
 

@@ -220,14 +220,14 @@ fn adopt_generation_reset(current: &PendingState, latest: PendingState) -> Optio
 
 (`src/auto_sync/worker.rs:202-214`). It is applied in exactly three places: the
 debounce loop (both the deadline-reached and the mid-sleep re-read branches,
-`src/auto_sync/worker.rs:243-262` and `:287-308`), the preflight
-(`src/auto_sync/worker.rs:378-387`), and the post-sync follow-up check
+`src/auto_sync/worker.rs:254-273` and `:287-308`), the preflight
+(`src/auto_sync/worker.rs:387-396`), and the post-sync follow-up check
 (`src/auto_sync/worker.rs:151-161`). Any other lower generation — and any
 lower generation with an equal-or-older timestamp — stays corrupt.
 
 `STALE_PENDING_THRESHOLD_MS` (formerly 5 minutes) was **removed**: pending
 intent is no longer discarded by age, and `startup_recover`
-(`src/auto_sync/worker.rs:567-584`) reschedules whatever marker it finds.
+(`src/auto_sync/worker.rs:576-593`) reschedules whatever marker it finds.
 
 ### Pending transaction lock
 
@@ -331,7 +331,7 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
    Sleeps in ≤ 250 ms slices, re-reading the marker each time; newer
    generations restart the deadline, marker removal cancels, corruption fails
    the cycle as `Internal`. The cleared-and-recreated reset is adopted as a
-   fresh full window (`src/auto_sync/worker.rs:216-314`).
+   fresh full window (`src/auto_sync/worker.rs:227-323`).
 4. **Preflight.** Re-reads the marker.
 
    ```rust
@@ -341,7 +341,7 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
    }
    ```
 
-   (`src/auto_sync/worker.rs:323-332`), returned by
+   (`src/auto_sync/worker.rs:332-341`), returned by
    `preflight_check(state_dir, observed) -> Result<PendingState, PreflightError>`
    (`:373-395`). The typed error keeps three semantically different conditions
    apart:
@@ -351,7 +351,7 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
    | Marker removed between debounce and preflight | `NothingToDo` → exit 0 |
    | Lower generation that is the cleared-and-recreated case | `Ok(recreated)` — adopted as the new target, the cycle continues |
    | Lower generation that cannot be adopted | `Failed { class: Internal }` |
-   | Marker unreadable or corrupt | `Failed { class }` — `Transient` for `Io`/`Lock`, `LocalFailure` for `Deserialize`/`IntegrityMismatch`/`Corrupted` (`src/auto_sync/worker.rs:348-365`) |
+   | Marker unreadable or corrupt | `Failed { class }` — `Transient` for `Io`/`Lock`, `LocalFailure` for `Deserialize`/`IntegrityMismatch`/`Corrupted` (`src/auto_sync/worker.rs:357-374`) |
 
    **Both failure shapes go through `record_sync_failure`** — status file,
    backoff, `sync_completed` event, nonzero exit — so corruption can never be
@@ -364,12 +364,12 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
    `crate::sync_commands::run_sync_with_limits(&settings, None, push_only,
    pull_only, &runtime, Some(crate::sync::SyncRunLimits { deadline,
    request_timeout }))` directly — never a child sync process
-   (`src/auto_sync/worker.rs:409-454`). A runtime-construction failure is
+   (`src/auto_sync/worker.rs:418-463`). A runtime-construction failure is
    recorded as `Internal` (`:431-438`).
 6. **Acknowledge.** Success → `clear_if_generation_matches(observed)`:
    `Cleared` / `GenerationChanged` (newer work preserved) / `Missing`
    (already cleared) all record success; a clear I/O failure records
-   `LocalFailure` (`src/auto_sync/worker.rs:455-500`).
+   `LocalFailure` (`src/auto_sync/worker.rs:464-509`).
 7. **Follow-up.** Only `Success` loops (`follow_up_allowed`,
    `src/auto_sync/worker.rs:175-177`). The loop re-reads the marker: a strictly
    newer generation continues; an adoptable reset continues; an unadoptable
@@ -378,12 +378,12 @@ the **entire** cycle — debounce, sync, and follow-up — via `let _lock = lock
 
 ### Failure recording and backoff
 
-`record_sync_failure` (`src/auto_sync/worker.rs:510-532`) is the single
+`record_sync_failure` (`src/auto_sync/worker.rs:519-541`) is the single
 failure sink for the worker. It:
 
 1. computes `consecutive = next_consecutive_failures(state_dir)` — the durable
    count from the status file, `+1`, or `1` when the status is missing/corrupt
-   (`src/auto_sync/worker.rs:544-549`);
+   (`src/auto_sync/worker.rs:553-558`);
 2. computes `backoff = transient_backoff(consecutive)`;
 3. calls `status::record_failure(state_dir, generation, class, -1, consecutive,
    now + backoff, message, config_fingerprint)` — the `-1` exit code means
@@ -433,7 +433,7 @@ by the next acquirer — no inspect-then-rename race. `Drop` releases the kernel
 lock and never unlinks, so the lock file persists and may hold a dead owner's
 metadata (`src/process_file_lock.rs:190-200`). Liveness is `kill(pid, 0)`:
 only `ESRCH` proves absence (`EPERM`/unknown = live)
-(`src/utils/process.rs:14-25`); Linux start tokens use `/proc/<pid>/stat`
+(`src/utils/process.rs:19-30`); Linux start tokens use `/proc/<pid>/stat`
 field 22. Non-Unix treats unknown PIDs as alive (conservative non-stealing).
 
 ## Detachment
@@ -642,7 +642,7 @@ detail}` (`:70-79`). The worker emits `worker`/`started` on entry
 - **Do not collapse a corrupt marker into `NothingToDo`.** `preflight_check`
   returns a typed `PreflightError` precisely so that "the marker is gone"
   (clean exit) stays distinct from "the marker is corrupt" and "the marker
-  could not be read" (recorded failures). `src/auto_sync/worker.rs:316-333`.
+  could not be read" (recorded failures). `src/auto_sync/worker.rs:325-342`.
 - **The pending *read* error path is a failure path too**, not just preflight.
   `src/auto_sync/worker.rs:87-104`.
 - **`record_pending_mutation` is the only generation incrementer.** Scheduling,
@@ -663,7 +663,7 @@ detail}` (`:70-79`). The worker emits `worker`/`started` on entry
   leftover lock file with a dead PID is normal, not corruption.
   `src/process_file_lock.rs:190-200`.
 - **Only `ESRCH` proves a PID is gone.** `EPERM` and unknown errors mean the
-  process is alive. `src/utils/process.rs:23-25`.
+  process is alive. `src/utils/process.rs:28-30`.
 - **Status is informative, not authoritative.** It drives retry scheduling but
   is never the source of truth for whether pending work exists, and a status
   write failure never clears pending. `src/auto_sync/status.rs:8-10`.

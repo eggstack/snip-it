@@ -128,11 +128,11 @@ gRPC handler code lives in `lib.rs`. `main.rs` is CLI dispatch plus
    loopback. A non-loopback plaintext bind is refused, not warned about.
 3. `bootstrap::ensure_layout()` + `ensure_config_file()` create the
    directory layout and the default `config.toml` if it is missing.
-4. `Config::load()` (`snip-sync/src/lib.rs:350`) is **fail-closed**: a
+4. `Config::load()` (`snip-sync/src/lib.rs:359`) is **fail-closed**: a
    present-but-malformed or unreadable `config.toml` aborts startup with
    the path in the error; compiled defaults apply only when the file is
-   absent (`snip-sync/src/lib.rs:359-386`). Every resolved value is then
-   range-checked by `Config::validate()` (`snip-sync/src/lib.rs:490-590`),
+   absent (`snip-sync/src/lib.rs:368-395`). Every resolved value is then
+   range-checked by `Config::validate()` (`snip-sync/src/lib.rs:499-599`),
    which rejects zero ports, zero DB connections, zero timeouts, zero
    message size, zero field limits, and a zero rate limit.
 
@@ -140,19 +140,31 @@ gRPC handler code lives in `lib.rs`. `main.rs` is CLI dispatch plus
 
 - `ServerLock::try_acquire(&state_dir)` at startup
   (`snip-sync/src/main.rs:97`). The Unix path uses `flock(LOCK_EX |
-  LOCK_NB)` (`snip-sync/src/server_lock.rs:181`); Windows uses
+  LOCK_NB)` (`snip-sync/src/server_lock.rs:241`); Windows uses
   `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK |
-  LOCKFILE_FAIL_IMMEDIATELY` (`snip-sync/src/server_lock.rs:203-212`).
-- The kernel owns exclusion; the lock file (`snip-sync.server.lock`:
-  pid, start token, nonce, timestamp) is **diagnostic metadata only**.
-  `Drop` releases without unlinking, so crash leftovers are harmless —
-  the kernel already freed the lock
-  (`snip-sync/src/server_lock.rs:115-118`).
+  LOCKFILE_FAIL_IMMEDIATELY` (`snip-sync/src/server_lock.rs:261-270`).
+- The kernel owns exclusion; the lock file (`snip-sync.server.lock`) and its
+  owner record are **diagnostic metadata only**. `Drop` releases without
+  unlinking, so crash leftovers are harmless — the kernel already freed the
+  lock (`snip-sync/src/server_lock.rs:121-129`).
+- The owner record (pid, start token, nonce, timestamp) is published to a
+  **sidecar file** beside the lock — `snip-sync.server.lock.owner`
+  (`snip-sync/src/server_lock.rs:177-184`), written through a temp file and
+  an atomic rename (`snip-sync/src/server_lock.rs:345-396`). The lock file
+  itself is truncated and rewritten in place, so a concurrent reader could
+  observe it empty and lose the ability to identify the running server; the
+  sidecar removes that window. `read_owner` prefers the sidecar and falls
+  back to the in-place record (`snip-sync/src/server_lock.rs:398-406`).
+- The sidecar is deliberately *not* the lock file: renaming a new inode over
+  `snip-sync.server.lock` would move the kernel lock to the old, unlinked
+  inode and let a second server flock the new inode successfully. The `flock`
+  therefore stays on the canonical inode.
 - `Busy { owner }` reports the holding `pid`; `UnsupportedPlatform`
   refuses to run (`snip-sync/src/main.rs:99-113`).
 - The guard is held for the whole `serve()` lifetime
   (`snip-sync/src/main.rs:97-119`). Current servers never write a PID
-  file — the kernel lock *is* the identity record.
+  file — the kernel lock *is* the exclusion record, and the sidecar is the
+  identity record beside it.
 
 ### Legacy PID fallback
 
@@ -251,7 +263,7 @@ production, `sqlite::memory:` in tests. Schema is created with
 
 ### Connection setup
 
-`Database::connect()` (`snip-sync/src/db.rs:145`) builds the pool with
+`Database::connect()` (`snip-sync/src/db.rs:253`) builds the pool with
 `SqlitePoolOptions::new().max_connections(max_connections)` and — the
 part that matters — an `after_connect` hook:
 
@@ -268,7 +280,7 @@ let pool = SqlitePoolOptions::new()
     .await?;
 ```
 
-`snip-sync/src/db.rs:179-188`
+`snip-sync/src/db.rs:287-296`
 
 `foreign_keys` is a **per-connection** SQLite setting (unlike
 `journal_mode`, which SQLite persists in the database file header). Running
@@ -277,7 +289,7 @@ happened to check out — at most 1 of `max_connections` (default 5) —
 leaving the schema's declared foreign keys unenforced on the rest.
 `after_connect` runs for every connection the pool opens, so FK
 enforcement is now uniform across the pool. `PRAGMA journal_mode=WAL` is
-applied once to the pool (`snip-sync/src/db.rs:190-192`) because it *is*
+applied once to the pool (`snip-sync/src/db.rs:298-300`) because it *is*
 persisted in the file header.
 
 ### Tables
@@ -288,7 +300,7 @@ persisted in the file header.
 | `libraries` | `id` (PK), `user_id` (FK → `users`), `name`, `created_at`, `deleted_at` (soft delete), `UNIQUE(user_id, name)` |
 | `snippets` | `id` (**global** PK), `user_id` (FK), `library_id` (FK), `description`, `command`, `tags` (JSON text, default `'[]'`), `created_at`, `updated_at`, `device_id`, `deleted` (0/1), `encrypted` (0/1) |
 
-Schema DDL: `snip-sync/src/db.rs:196-248`.
+Schema DDL: `snip-sync/src/db.rs:304-356`.
 
 Indexes: `idx_users_api_key_prefix`, `idx_snippets_user`,
 `idx_snippets_library`, `idx_snippets_updated`,
@@ -300,11 +312,11 @@ deleted)`, `idx_libraries_user`.
 - **Hash**: Argon2id (`Algorithm::Argon2id`, `V0x13`), 16 MiB memory
   (`1 << 14` KiB), 3 iterations, parallelism 4, fresh 16-byte salt per
   key; PHC string stored in `users.api_key`
-  (`snip-sync/src/db.rs:81-98`).
+  (`snip-sync/src/db.rs:92-109`).
 - **Indexed lookup**: `api_key_prefix` = first 8 chars of
   `base64(SHA-256(api_key))` (`STANDARD_NO_PAD`). Auth queries
   `WHERE api_key_prefix = ?` then Argon2-verifies only that bucket
-  (`snip-sync/src/db.rs:318-338`).
+  (`snip-sync/src/db.rs:426-446`).
 - **Legacy backfill**: `migrate_plaintext_api_keys()` runs at startup
   before listeners spawn; failure halts startup so a half-migrated DB
   cannot lock users out (`snip-sync/src/main.rs:131-141`). The old
@@ -315,15 +327,15 @@ deleted)`, `idx_libraries_user`.
 ### The global `snippets.id` primary key
 
 `snippets.id` is `TEXT PRIMARY KEY` — **global**, not scoped to
-`(user_id, library_id)` (`snip-sync/src/db.rs:231`). Per-query scoping
+`(user_id, library_id)` (`snip-sync/src/db.rs:339`). Per-query scoping
 (`WHERE user_id = ? AND library_id = ?`) still applies to every read
-(`snip-sync/src/db.rs:499-522`), but the *write* path can hit an id that
+(`snip-sync/src/db.rs:165-210`), but the *write* path can hit an id that
 another scope already owns.
 
 The upsert uses a last-write-wins `ON CONFLICT(id) DO UPDATE … WHERE`
 whose `WHERE` clause requires the incoming row to match the stored row's
 `user_id` **and** `library_id`
-(`snip-sync/src/db.rs:635-650`). SQLite reports a false `WHERE` on
+(`snip-sync/src/db.rs:718-733`). SQLite reports a false `WHERE` on
 `DO UPDATE` as a silent no-op — **0 rows affected, no error**. A push
 whose id already belongs to another user or library therefore wrote
 zero rows while looking successful.
@@ -331,7 +343,7 @@ zero rows while looking successful.
 The server's merge rule is **not** the client's. Inside the same `WHERE`
 clause the server applies a lexicographic last-write-wins over
 `(updated_at, device_id, command, description)` — plain string comparison,
-**no SHA-256 fingerprint** (`snip-sync/src/db.rs:646-650`). `deleted` is an
+**no SHA-256 fingerprint** (`snip-sync/src/db.rs:729-733`). `deleted` is an
 ordinary column (`deleted = excluded.deleted`), so a newer *live* row
 overwrites a tombstone: the server does **not** guarantee no resurrection.
 The no-resurrection guarantee belongs to the client's `choose_version`
@@ -357,7 +369,7 @@ pub enum UpsertOutcome {
 Zero rows affected triggers a scope probe — a `SELECT user_id,
 library_id FROM snippets WHERE id = ? AND (user_id != ? OR library_id != ?)`
 — which distinguishes the two cases
-(`snip-sync/src/db.rs:666-687`).
+(`snip-sync/src/db.rs:749-770`).
 
 This matters in practice because the client's snippet ids are
 **deterministic** (`legacy-<sha256 hex>` from content + occurrence index;
@@ -372,7 +384,7 @@ so a legitimate second library can collide with the first.
 | `create_user(api_key)` | Hash + prefix, insert user + `default` library in one transaction; returns user id |
 | `get_user_by_api_key(key)` | Prefix-bucket select, Argon2 verify, `Ok(None)` on miss |
 | `upsert_snippet_in_tx(tx, snippet, user_id, library_id)` | Last-write-wins upsert inside a caller-owned transaction; returns `UpsertOutcome` |
-| `upsert_snippet(...)` | Test-only convenience wrapper (`#[cfg(test)]`, `snip-sync/src/db.rs:573`) |
+| `upsert_snippet(...)` | Test-only convenience wrapper (`#[cfg(test)]`, `snip-sync/src/db.rs:656`) |
 | `get_snippets(user, lib, since, limit, offset, include_deleted)` | Paginated delta read; total count + `has_more` computed by caller |
 | `get_latest_timestamp(user, lib)` | Sync watermark; held back while `has_more` to avoid skipping pages |
 | `get_default_library(user)` | Resolves the per-user `default` library id |
@@ -403,7 +415,7 @@ so a legitimate second library can collide with the first.
 ### Server-side validation
 
 - **Field limits** (configurable, defaults in
-  `snip-sync/src/lib.rs:86-104`): `max_command_length` 1024,
+  `snip-sync/src/lib.rs:95-113`): `max_command_length` 1024,
   `max_encrypted_payload_length` 1 MiB, `max_description_length` 1024,
   `max_tags` 50, `max_tag_length` 100, `max_id_length` 128,
   `max_device_id_length` 128, `max_api_key_length` 512,
@@ -415,21 +427,21 @@ so a legitimate second library can collide with the first.
   ciphertext: `command` then holds the whole
   `{description, command, tags}` blob, and anything larger than the gRPC
   ceiling could be stored but never downloaded again
-  (`snip-sync/src/lib.rs:869-891`).
+  (`snip-sync/src/lib.rs:890-912`).
 - **Batch/page bounds**: at most 10,000 snippets per `Push`/`Sync`
-  request (`DEFAULT_MAX_SYNC_SNIPPETS`, `snip-sync/src/lib.rs:100`,
-  enforced at `snip-sync/src/lib.rs:1218` and `snip-sync/src/lib.rs:1363`
+  request (`DEFAULT_MAX_SYNC_SNIPPETS`, `snip-sync/src/lib.rs:109`,
+  enforced at `snip-sync/src/lib.rs:1239` and `snip-sync/src/lib.rs:1391`
   — a compile-time constant, not configurable); every `limit` is clamped
-  to `MAX_REQUEST_LIMIT = 1000` (`snip-sync/src/lib.rs:108`). Omitted
-  limits default to 1000 (`sync`, `snip-sync/src/lib.rs:1485-1489`),
-  100 (`get_snippets`, `snip-sync/src/lib.rs:1107-1111`), 50
-  (`list_libraries`, `snip-sync/src/lib.rs:1660-1664`). Download pages are
+  to `MAX_REQUEST_LIMIT = 1000` (`snip-sync/src/lib.rs:117`). Omitted
+  limits default to 1000 (`sync`, `snip-sync/src/lib.rs:1537-1541`),
+  100 (`get_snippets`, `snip-sync/src/lib.rs:1128-1132`), 50
+  (`list_libraries`, `snip-sync/src/lib.rs:1718-1722`). Download pages are
   *also* bounded by encoded bytes: `fit_page_to_byte_ceiling()` trims
   trailing rows so the encoded page stays under
   `grpc_max_message_size - 64 KiB` envelope reserve (minus `skipped_ids`
   bytes), sets `has_more`, and always keeps at least one row
-  (`snip-sync/src/lib.rs:131-156`, applied at
-  `snip-sync/src/lib.rs:1528-1536`). Without this, row-count paging alone
+  (`snip-sync/src/lib.rs:140-165`, applied at
+  `snip-sync/src/lib.rs:1586-1594`). Without this, row-count paging alone
   could produce a page tonic cannot encode, which returns `OUT_OF_RANGE`
   and makes the library permanently undownloadable.
 - **Transport bounds**: `grpc_max_message_size` defaults to 4 MiB and is
@@ -443,11 +455,11 @@ so a legitimate second library can collide with the first.
   call (no micro-boundary split). Future timestamps beyond +300 s fail
   with `CLOCK_SKEW`; zero/negative timestamps fail (zero = unset client
   clock, invisible to delta queries); `created_at > updated_at` fails
-  (`snip-sync/src/lib.rs:848-956`).
+  (`snip-sync/src/lib.rs:869-977`).
 - **Auth + rate limit**: `extract_api_key()` prefers the
   `authorization: Bearer` metadata, falls back to the body field. Every
   scoped RPC runs `authenticate_and_rate_limit_with_duration()`
-  (`snip-sync/src/lib.rs:789-846`): empty key → unauthenticated,
+  (`snip-sync/src/lib.rs:810-867`): empty key → unauthenticated,
   overlong → invalid_argument, over-limit → resource_exhausted with
   `rate_limit_hits` inc, unknown key → unauthenticated with
   `auth_failures` inc.
@@ -464,19 +476,19 @@ them differently:
 | `SyncResponse.skipped_ids` | Per-record ids that failed validation, upserted into a foreign scope, or errored | Surfaced as ids, and counted in `skipped_count` |
 
 - `PushSnippets` rejects a cross-scope collision and reports it in
-  `rejected_count` (`snip-sync/src/lib.rs:1280-1300`). `success` is
-  `rejected == 0` (`snip-sync/src/lib.rs:1337-1342`), so a partial
+  `rejected_count` (`snip-sync/src/lib.rs:1307-1327`). `success` is
+  `rejected == 0` (`snip-sync/src/lib.rs:1365-1370`), so a partial
   refusal is a `success: false` response with a non-zero
   `rejected_count`, not a transport error.
 - `Sync` reports the same collision in `skipped_ids`
-  (`snip-sync/src/lib.rs:1452-1474`) and sets
+  (`snip-sync/src/lib.rs:1486-1526`) and sets
   `message = "Sync completed, N snippets skipped"`.
 - A **genuine** last-write-wins dedupe (a newer row already exists under
   the same user and library) is *not* a rejection: it counts as accepted
-  in `PushSnippets` (`snip-sync/src/lib.rs:1285`).
+  in `PushSnippets` (`snip-sync/src/lib.rs:1312`).
 - On the client, `PushSnippets` refusals are folded into `skipped_count`
-  only (`src/sync.rs:760-790`); the server's `SyncResponse.skipped_ids`
-  are surfaced verbatim (`src/sync.rs:786`).
+  only (`src/sync.rs:860-890`); the server's `SyncResponse.skipped_ids`
+  are surfaced verbatim (`src/sync.rs:886`).
 
 ### Client retry contract (cross-reference)
 
@@ -484,7 +496,7 @@ The client retries `ResourceExhausted` (the server's rate-limit code) but
 never `OutOfRange` — tonic raises `OUT_OF_RANGE` when a message cannot be
 encoded or decoded within the size limit, which is a deterministic verdict
 about the payload rather than a transient condition
-(`src/sync.rs:94-116`). `InvalidArgument`, `NotFound`, `AlreadyExists`,
+(`src/sync.rs:109-131`). `InvalidArgument`, `NotFound`, `AlreadyExists`,
 `PermissionDenied`, and `Unauthenticated` are also non-retryable.
 
 ## HTTP server (EggServe)
@@ -580,11 +592,11 @@ Locked by socket tests in `tests/snip_sync_lifetime.rs`:
 ## Rate limiting
 
 **File**: `snip-sync/src/rate_limiter.rs`. Default 120 requests/minute
-(`DEFAULT_RATE_LIMIT_PER_MINUTE`, `snip-sync/src/lib.rs:102`).
+(`DEFAULT_RATE_LIMIT_PER_MINUTE`, `snip-sync/src/lib.rs:111`).
 
 ### Keying: the peer address, never the API key
 
-`peer_rate_limit_key()` (`snip-sync/src/lib.rs:757-774`) derives the
+`peer_rate_limit_key()` (`snip-sync/src/lib.rs:778-795`) derives the
 bucket identity from the peer `SocketAddr` that tonic populates into
 `request.extensions()`.
 
@@ -595,14 +607,14 @@ runs, every attacker-chosen key got a fresh budget of
 ceiling** on the authenticated gRPC surface. The peer address is bounded
 by the number of real callers, so keying on it restores an aggregate
 ceiling. Every RPC now uses the peer-derived key: `register`
-(`snip-sync/src/lib.rs:989`), `get_snippets` (`:1057`),
+(`snip-sync/src/lib.rs:1010`), `get_snippets` (`:1057`),
 `push_snippets` (`:1168`), `sync` (`:1352`), `create_library` (`:1592`),
 `list_libraries` (`:1649`), `delete_library` (`:1710`),
 `list_premade_libraries` (`:1769`), `get_premade_library` (`:1821`),
 `search_premade_libraries` (`:1893`).
 
 The rate-limit check runs **before** the API-key lookup
-(`snip-sync/src/lib.rs:811-843`), so an unauthenticated flood is bounded
+(`snip-sync/src/lib.rs:832-864`), so an unauthenticated flood is bounded
 by the same peer bucket. Over-limit calls return
 `Status::resource_exhausted` and increment
 `snip_sync_rate_limit_hits_total`.
@@ -610,12 +622,12 @@ by the same peer bucket. Over-limit calls return
 ### Trusted proxies and `x-forwarded-for`
 
 `x-forwarded-for` is honoured **only** when the peer address is listed in
-`trusted_proxies` (`snip-sync/src/lib.rs:763-773`). The trusted list
+`trusted_proxies` (`snip-sync/src/lib.rs:784-794`). The trusted list
 comes from the `TRUSTED_PROXIES` environment variable (comma-separated,
 entries that parse as `IpAddr` are kept) or `[server.rate_limit]
-trusted_proxies` (`snip-sync/src/lib.rs:461-469`). The first
+trusted_proxies` (`snip-sync/src/lib.rs:470-478`). The first
 comma-separated element of the header is used, with any `:port` suffix
-stripped (`strip_port`, `snip-sync/src/lib.rs:69`). An untrusted peer
+stripped (`strip_port`, `snip-sync/src/lib.rs:78`). An untrusted peer
 that sends the header is ignored, and a request with no peer address
 falls back to the literal key `"unknown"`.
 
@@ -623,12 +635,12 @@ falls back to the literal key `"unknown"`.
 
 - Epoch-second sliding windows: the window resets when
   `now - window_start >= window_secs`, and the counter restarts at zero
-  (`snip-sync/src/rate_limiter.rs:45-85`).
+  (`snip-sync/src/rate_limiter.rs:46-102`).
 - The map is bounded at `MAX_ENTRIES = 100_000`
   (`snip-sync/src/rate_limiter.rs:8`); the oldest entry is evicted when a
   new key arrives at the cap.
 - The limiter is **process-local**: state is in-memory only and resets on
-  restart (`snip-sync/src/rate_limiter.rs:16-33`).
+  restart (`snip-sync/src/rate_limiter.rs:24-34`).
 
 ## Metrics
 
@@ -637,16 +649,16 @@ instruments:
 
 | Metric | Type | Labels | Incremented at |
 |--------|------|--------|----------------|
-| `snip_sync_requests_total` | CounterVec | `method` | `SnipSyncService::record_request` (`snip-sync/src/lib.rs:636-640`) |
-| `snip_sync_request_duration_seconds` | HistogramVec | `method` | `record_request_duration` (`snip-sync/src/lib.rs:697-704`) |
-| `snip_sync_sync_operations_total` | CounterVec | `direction` | `record_sync` (`snip-sync/src/lib.rs:714-719`) |
-| `snip_sync_library_operations_total` | CounterVec | `operation` | `record_library_op` (`snip-sync/src/lib.rs:721-726`) |
-| `snip_sync_rate_limit_hits_total` | Counter | — | `record_rate_limit` (`snip-sync/src/lib.rs:706-708`) |
-| `snip_sync_auth_failures_total` | Counter | — | `record_auth_failure` (`snip-sync/src/lib.rs:710-712`) **and** the HTTP Basic-auth failure path (`snip-sync/src/http.rs:181`) |
+| `snip_sync_requests_total` | CounterVec | `method` | `SnipSyncService::record_request` (`snip-sync/src/lib.rs:649-653`) |
+| `snip_sync_request_duration_seconds` | HistogramVec | `method` | `record_request_duration` (`snip-sync/src/lib.rs:710-717`) |
+| `snip_sync_sync_operations_total` | CounterVec | `direction` | `record_sync` (`snip-sync/src/lib.rs:735-740`) |
+| `snip_sync_library_operations_total` | CounterVec | `operation` | `record_library_op` (`snip-sync/src/lib.rs:742-747`) |
+| `snip_sync_rate_limit_hits_total` | Counter | — | `record_rate_limit` (`snip-sync/src/lib.rs:719-721`) |
+| `snip_sync_auth_failures_total` | Counter | — | `record_auth_failure` (`snip-sync/src/lib.rs:723-733`) **and** the HTTP Basic-auth failure path (`snip-sync/src/http.rs:181`) |
 
 `Metrics::new()` failure falls back to `Metrics::fallback()`, an
 isolated registry with placeholder instruments so the server keeps serving
-(`snip-sync/src/metrics.rs:88-117`, wired at `snip-sync/src/main.rs:170-179`).
+(`snip-sync/src/metrics.rs:103-166`, wired at `snip-sync/src/main.rs:170-179`).
 
 The `/metrics` endpoint is only enabled when **both** `METRICS_USERNAME`
 and `METRICS_PASSWORD` are configured; a half-configured pair stays
@@ -741,13 +753,13 @@ allowed_origins = "https://example.com"
   case-insensitive `true/1/yes/on` and `false/0/no/off`.
 - **Range validation**: zero ports, zero DB connections, zero timeouts,
   zero message size, zero field limits, and zero rate limit are all
-  rejected with `InvalidRange` (`snip-sync/src/lib.rs:490-590`).
+  rejected with `InvalidRange` (`snip-sync/src/lib.rs:499-599`).
 - **Fail-closed**: a present-but-malformed/unreadable `config.toml`
   makes `serve` and `croncheck` error identifying the path; compiled
   defaults apply only when the file is absent. `ensure_config_file()`
   creates it with `create_new` (no clobber) and `0o600` on Unix; a
   world-readable file holding metrics credentials logs a warning
-  (`snip-sync/src/lib.rs:327-347`).
+  (`snip-sync/src/lib.rs:336-356`).
 - `CORS_ALLOW_ALL` is environment-only (no TOML key) and is ignored on a
   non-loopback HTTP bind (`snip-sync/src/main.rs:228-242`).
 - `max_sync_snippets` is **not** configurable; the 10,000-record batch
@@ -820,7 +832,7 @@ Line counts at time of writing (`wc -l`):
   world-readable warning when they hold credentials.
 - Premade filenames are allowlisted (`alphanumeric/-/_/.`, ≤64 chars,
   no `..`/`/` `\`) at the handler layer
-  (`snip-sync/src/lib.rs:1838-1860`) and resolved via
+  (`snip-sync/src/lib.rs:1896-1918`) and resolved via
   canonicalize-plus-prefix check in the manager
   (`snip-sync/src/premade.rs:268-283`); error paths never leak DB
   internals to clients.

@@ -82,7 +82,7 @@ pub struct PremadeLibrary {
 
 #[derive(Debug, Deserialize)]
 struct Snippet {
-    #[serde(rename = "Command", default)]
+    #[serde(rename = "command", alias = "Command", default)]
     command: Option<String>,
     #[serde(rename = "Description", default)]
     description: Option<String>,
@@ -319,6 +319,93 @@ Description = "Say hello"
         let result = manager.get("test");
         assert!(result.is_ok());
         assert!(result.unwrap().contains("echo hello"));
+    }
+
+    /// Directory holding the premade libraries that ship with the server.
+    fn shipped_premade_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("premade-libraries")
+    }
+
+    #[test]
+    fn test_every_shipped_premade_library_is_valid_toml() {
+        let dir = shipped_premade_dir();
+        let mut entries: Vec<_> = fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .flatten()
+            .collect();
+        entries.sort_by_key(|e| e.path());
+
+        let mut checked = 0usize;
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+                continue;
+            }
+            let raw = fs::read_to_string(&path).unwrap();
+            // Parse the SHIPPED bytes verbatim — no escape fixing, no
+            // rewriting. A shipped file must already be valid TOML.
+            let parsed: SnippetFile = toml::from_str(&raw).unwrap_or_else(|e| {
+                panic!(
+                    "shipped premade library {} is not valid TOML: {e}",
+                    path.display()
+                )
+            });
+            assert!(
+                !parsed.snippets.is_empty(),
+                "shipped premade library {} has no snippets",
+                path.display()
+            );
+            for snippet in &parsed.snippets {
+                let cmd = snippet.command.as_deref().unwrap_or("");
+                assert!(
+                    !cmd.is_empty(),
+                    "snippet in {} has no command — the server deserializer \
+                     and the shipped key casing disagree",
+                    path.display()
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "no shipped premade libraries found in {}",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn test_premade_manager_lists_all_shipped_libraries() {
+        let manager = PremadeManager::new(shipped_premade_dir());
+        let libs = manager.list();
+        let names: Vec<&str> = libs.iter().map(|l| l.name.as_str()).collect();
+        assert!(
+            names.contains(&"bash-scripts"),
+            "bash-scripts missing from shipped premade libraries: {names:?}"
+        );
+        for lib in &libs {
+            assert!(
+                lib.snippet_count > 0,
+                "library {} reported {} snippets",
+                lib.name,
+                lib.snippet_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_bash_scripts_topcmds_command_parses() {
+        let path = shipped_premade_dir().join("bash-scripts.toml");
+        let raw = fs::read_to_string(&path).unwrap();
+        let parsed: SnippetFile = toml::from_str(&raw).unwrap();
+        let cmd = parsed
+            .snippets
+            .iter()
+            .find(|s| s.command.as_deref().unwrap_or("").contains("topcmds"))
+            .and_then(|s| s.command.clone())
+            .expect("topcmds snippet");
+        // The awk program must reference field 2 (`$2`), never an invalid
+        // TOML escape.
+        assert!(cmd.contains("{print $2}"), "unexpected command: {cmd}");
     }
 
     #[test]

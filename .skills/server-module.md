@@ -11,7 +11,7 @@ handlers, HTTP wire parity, rate limiting, configuration, size gate).
 - **TLS**: snip-sync serves plaintext gRPC and HTTP. Production deployments must use a reverse proxy with TLS; `TLS_ENABLED` acknowledges proxy termination and does not enable native TLS.
 - **CORS**: `CORS_ALLOW_ALL=true` env var enables permissive CORS, but the server ignores it (with a warning) when the HTTP listener is not bound to a loopback address. When not set and no origins configured, cross-origin requests are blocked.
 - **HTTP runtime**: `snip-sync/src/http.rs` is the concrete `/health` and `/metrics` EggServe leaf service. It rejects request bodies, keeps metrics Basic-auth comparison constant-time, applies configured CORS and security headers, and relies on EggServe for HEAD framing. Proven wire parity: router 404/405 are empty with no content-type (metrics-disabled 404 keeps `"Not found"`), known routes answer preflight/unsupported methods with `Allow: GET, HEAD`, every non-allow-all response carries `Vary: origin` (allow-all omits it), and preflight never carries the security headers. Keep Tonic on its separate listener and do not add EggServe TLS/H2/H3 or a general routing framework.
-- **Rate limiting**: Every authenticated RPC goes through the `authenticate_and_rate_limit()` helper (`snip-sync/src/lib.rs:776`); `register` is unauthenticated but rate-limits the peer address directly (`snip-sync/src/lib.rs:991`), and `health` is neither authenticated nor rate-limited. The bucket is keyed on the **peer address** (`peer_rate_limit_key`, `snip-sync/src/lib.rs:757`; with trusted-proxy / `x-forwarded-for` handling), not on the client-supplied API key — keying on the raw key let every attacker-chosen key get a fresh budget, so the limiter imposed no aggregate ceiling. The rate limit runs **before** API-key lookup. `RATE_LIMIT_PER_MINUTE` controls limit; the window itself is `RateLimiter::allow()` (`snip-sync/src/rate_limiter.rs:45`).
+- **Rate limiting**: Every authenticated RPC goes through the `authenticate_and_rate_limit()` helper (`snip-sync/src/lib.rs:797`); `register` is unauthenticated but rate-limits the peer address directly (`snip-sync/src/lib.rs:1012`), and `health` is neither authenticated nor rate-limited. The bucket is keyed on the **peer address** (`peer_rate_limit_key`, `snip-sync/src/lib.rs:778`; with trusted-proxy / `x-forwarded-for` handling), not on the client-supplied API key — keying on the raw key let every attacker-chosen key get a fresh budget, so the limiter imposed no aggregate ceiling. The rate limit runs **before** API-key lookup. `RATE_LIMIT_PER_MINUTE` controls limit; the window itself is `RateLimiter::allow()` (`snip-sync/src/rate_limiter.rs:46`).
 - **HTTP auth**: `/metrics` returns `401` with the RFC 9110 `WWW-Authenticate: Basic realm="metrics", charset="UTF-8"` challenge; the scheme match is case-insensitive (RFC 9110 §11.1); auth failures increment `snip_sync_auth_failures_total`.
 - **Argon2**: Memory cost is `1 << 14` (16 MiB) in `snip-sync/src/db.rs:15`; both hashing and verification use the same parameters.
 
@@ -59,7 +59,7 @@ Persistent lock-file presence is not an ownership signal.
 ## Environment Variables
 
 Typed overrides (ports, counts, limits, timeouts) are strictly parsed via
-`parse_env` (`snip-sync/src/lib.rs:275`). Missing variables fall
+`parse_env` (`snip-sync/src/lib.rs:284`). Missing variables fall
 back to file/default configuration. Present but invalid values cause startup to
 fail with an error naming the variable and the supplied value. String
 overrides (hosts, paths, credentials, origin lists) are taken verbatim;
@@ -95,7 +95,7 @@ Path defaults derive from `dirs::` (`paths.rs`): `config_dir()` → `dirs::confi
 `dirs` returns `None`, so a table entry saying "relative" is always wrong —
 these are absolute per-platform paths.
 
-### Request-limit ceilings (also strictly parsed, `snip-sync/src/lib.rs:419-460`)
+### Request-limit ceilings (also strictly parsed, `snip-sync/src/lib.rs:428-469`)
 
 Adding or changing a limit means touching **both** the env var and the
 `DEFAULT_*` constant and the `server.limits` config block:

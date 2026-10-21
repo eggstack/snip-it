@@ -25,8 +25,8 @@ Related: [../sync.md](../sync.md) (protocol + merge),
 
 ## CLI surface
 
-`snp sync` (alias `y`) — `src/main.rs:108-113`. The subcommand group is
-`Option<SyncCommands>` (`src/main.rs:272-335`), so a bare `snp sync` falls
+`snp sync` (alias `y`) — `src/main.rs:134-139`. The subcommand group is
+`Option<SyncCommands>` (`src/main.rs:298-361`), so a bare `snp sync` falls
 through to `SyncCommands::Run`.
 
 | Form | Alias | Handler | Flags |
@@ -50,12 +50,12 @@ pub struct SyncOptions {
 }
 ```
 
-The clap surface is declared inline in `src/main.rs:274-288` (not as an
-`*Args` struct) and is mapped into `SyncOptions` at `src/main.rs:679-695`.
+The clap surface is declared inline in `src/main.rs:300-314` (not as an
+`*Args` struct) and is mapped into `SyncOptions` at `src/main.rs:716-732`.
 `--push-only` and `--pull-only` are mutually exclusive
-(`conflicts_with = "pull_only"` / `"push_only"`, `src/main.rs:280-285`).
+(`conflicts_with = "pull_only"` / `"push_only"`, `src/main.rs:306-311`).
 
-### `snp sync config` flags (`src/main.rs:289-310`)
+### `snp sync config` flags (`src/main.rs:315-336`)
 
 | Flag | Type | Default | Behavior |
 |------|------|---------|----------|
@@ -263,7 +263,7 @@ preserved (`:391-394`); a corrupt marker is preserved (`:414-416`).
 | Aspect | `snp sync run` (manual) | Detached auto-sync worker |
 |-------|-------------------------|---------------------------|
 | Entry | `sync_cmd::run` → `sync_commands::run_sync` | `auto_sync::worker` → `sync_commands::run_sync_with_limits` |
-| `SyncRunLimits` | `None` — unbounded (`sync_commands.rs:657-664`) | `Some(SyncRunLimits { deadline, request_timeout })` (`src/sync.rs:64-74`) |
+| `SyncRunLimits` | `None` — unbounded (`sync_commands.rs:657-664`) | `Some(SyncRunLimits { deadline, request_timeout })` (`src/sync.rs:64-89`) |
 | Execution lock | `wait_acquire(state_dir, 30 s)` with a bounded wait | `WorkerLock` (kernel `flock`/`LockFileEx`), blocking |
 | Library set | CLI `--library` or the config index | Configured library set |
 | Pending clear | `clear_pending_after_explicit_sync(observed_gen, ok)` | Worker clears its own generation |
@@ -271,7 +271,7 @@ preserved (`:391-394`); a corrupt marker is preserved (`:414-416`).
 
 `SyncRunLimits::remaining()` (`src/sync.rs:70-73`) yields the remaining
 budget for each retry attempt; the retry macro consults it at
-`src/sync.rs:201`.
+`src/sync.rs:216`.
 
 ## Recovery / control handlers
 
@@ -389,18 +389,18 @@ None of these call
 `gate_mutation_on_interrupted_transactions()` directly. The library writes
 go through `LibraryManager`, whose mutators call `gate_mutation()` →
 `transaction::gate_mutation_on_interrupted_transactions`
-(`src/library/manager.rs:636-642`).
+(`src/library/manager.rs:666-672`).
 
 ## Tokio runtime
 
-`RUNTIME` is a `LazyLock<tokio::runtime::Runtime>` in `src/main.rs:22-27`.
-`sync run` and `sync retry` touch it (`src/main.rs:696`, `:711`); the
+`RUNTIME` is a `LazyLock<tokio::runtime::Runtime>` in `src/main.rs:29-35`.
+`sync run` and `sync retry` touch it (`src/main.rs:733`, `:711`); the
 control subcommands (`config`, `clear-failure`, `discard-pending`,
 `repair`) do not, so they never construct a runtime.
 
 Startup policy: `Commands::Sync { .. }` uses
 `StartupRecoveryPolicy::SuppressExplicitSync` and
-`StartupServices::Logging` (`src/main.rs:970-973`), i.e. pending auto-sync
+`StartupServices::Logging` (`src/main.rs:1007-1010`), i.e. pending auto-sync
 is not auto-rescheduled before an explicit sync.
 
 ## Auto-sync interaction
@@ -413,8 +413,8 @@ no feedback loop.
 The pending marker itself is owned by the auto-sync module. `startup_recover`
 reschedules **any** marker regardless of age — the old
 `STALE_PENDING_THRESHOLD_MS` age threshold was removed
-(`src/auto_sync/worker.rs:567-584`). Scheduling errors are typed:
-`preflight_check` returns `PreflightError` (`src/auto_sync/worker.rs:324-333`)
+(`src/auto_sync/worker.rs:576-593`). Scheduling errors are typed:
+`preflight_check` returns `PreflightError` (`src/auto_sync/worker.rs:333-342`)
 instead of collapsing a corrupt or unreadable marker into `NothingToDo`
 (exit 0); corrupt and unreadable markers now reach `record_sync_failure`
 (`src/auto_sync/worker.rs:131-144`, pending-read path `:87-104`).
@@ -423,7 +423,7 @@ instead of collapsing a corrupt or unreadable marker into `NothingToDo`
 
 - `SnipResult<()>` handlers: **every** `Err` reaches `main` as
   `eprintln!("error: {e}")` + `std::process::exit(1)`
-  (`src/main.rs:1026-1031`). Despite `docs/EXIT_CODES.md` listing 7
+  (`src/main.rs:1063-1068`). Despite `docs/EXIT_CODES.md` listing 7
   (`SYNC_FAILED`) and `CliOutcome::SyncFailed` mapping to it
   (`src/outcome.rs:84`), **no `snp sync` path produces exit 7** —
   `CliOutcome::SyncFailed` is never constructed anywhere in `src/`.
@@ -439,7 +439,7 @@ instead of collapsing a corrupt or unreadable marker into `NothingToDo`
 | Path | Role |
 |------|------|
 | `src/commands/sync_cmd.rs` | CLI handlers for the whole `snp sync` group |
-| `src/main.rs:272-335` | `SyncCommands` clap definitions |
+| `src/main.rs:298-361` | `SyncCommands` clap definitions |
 | `src/sync_commands.rs` | The sync engine: library loop, counters, recovery markers |
 | `src/sync.rs` | gRPC client, `SyncRunLimits`, `require_api_key`, retry macro |
 | `src/auto_sync/execution_lock.rs` | Foreground/worker execution lock (`wait_acquire`) |

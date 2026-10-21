@@ -23,17 +23,17 @@ Two artifacts live under the config directory and are easy to confuse:
 | Diagnostic log | `<config>/logs/snp.log.YYYY-MM-DD` | `tracing` subscriber, non-blocking | Free-form operational events |
 | Audit trail | `<config>/audit.log` | `audit_log()`, synchronous append | Structured record of snippet mutations |
 
-## Startup service levels (`src/main.rs:887`)
+## Startup service levels (`src/main.rs:924`)
 
 `command_behavior()` assigns the startup recovery policy **and** the
 logging/audit service level in one match, so the two cannot drift
-(`src/main.rs:882-885`). `StartupServices` has exactly two variants
-(`src/main.rs:873-877`).
+(`src/main.rs:919-922`). `StartupServices` has exactly two variants
+(`src/main.rs:910-914`).
 
 | Level | Commands | Startup behaviour |
 |-------|----------|-------------------|
-| `Minimal` (`src/main.rs:875`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1006-1007`), no `log_startup_info()` (`:1010-1012`) |
-| `Logging` (`src/main.rs:876`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1008`) + `log_startup_info()` (`:1011`), and `log_shutdown_info()` on every exit path (`:1022`, `:1029`, `:1036`) |
+| `Minimal` (`src/main.rs:912`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1043-1044`), no `log_startup_info()` (`:1010-1012`) |
+| `Logging` (`src/main.rs:913`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1045`) + `log_startup_info()` (`:1011`), and `log_shutdown_info()` on every exit path (`:1022`, `:1029`, `:1036`) |
 
 Because `init_default_file_logging()` never runs, `Minimal` commands never
 create `<config>/logs/`, never create `snp.log.*`, and never create
@@ -42,7 +42,7 @@ the config directory for their own reasons — see
 [cli.md](cli.md) for the command-level contract.)
 Note that the `Minimal` group's suppression of **startup recovery** is a
 separate mechanism: it is the recovery *policy* (`StartupRecoveryPolicy::SuppressReadOnly`,
-`src/main.rs:903`) that is checked at `src/main.rs:1014`, not the service
+`src/main.rs:940`) that is checked at `src/main.rs:1051`, not the service
 level.
 
 `log_shutdown_info()` flushes the non-blocking writer by dropping the worker
@@ -190,7 +190,7 @@ fields — so one record looks like:
 
 ### `init_default_file_logging()` (`src/logging.rs:172`)
 
-The entry point used by `main` (`src/main.rs:1008`):
+The entry point used by `main` (`src/main.rs:1045`):
 
 1. `crate::utils::config::ensure_config_dir()` (`:177`) — creates the config
    directory and tightens it to `0o700` on Unix. Failures are a stderr
@@ -299,8 +299,8 @@ Pipe-delimited, one line per entry (`:428-436`):
   a synchronous append cannot lose the last record.
 - **Error handling differs by caller.** `clip` propagates the error with
   `?` (`src/commands/clip_cmd.rs:42`), so a failed audit write fails the
-  copy command; the TUI batch copy (`src/ui/mod.rs:1660-1667`) and the
-  delete path (`src/commands/mod.rs:432-434`) log at debug level instead.
+  copy command; the TUI batch copy (`src/ui/mod.rs:1751-1758`) and the
+  delete path (`src/commands/mod.rs:535-537`) log at debug level instead.
 
 ### Rotation and retention
 
@@ -339,9 +339,9 @@ and installs a replacement that, on panic:
 `file:line:column` (`:239`), and downcasts the payload to `&str` or
 `String`, falling back to `"Unknown panic"` (`:242-248`).
 
-The hook is installed first in `main()` (`src/main.rs:1001`), **before**
+The hook is installed first in `main()` (`src/main.rs:1038`), **before**
 argument parsing and **before** `init_default_file_logging()`
-(`src/main.rs:1008`). A panic that happens before logging is initialised
+(`src/main.rs:1045`). A panic that happens before logging is initialised
 therefore still restores the terminal and prints to stderr, but has no log
 file to write to. The same applies to the `target: "panic"` record: it is
 only captured when the active filter covers the `panic` target — see
@@ -425,15 +425,15 @@ bodies are empty and the test passes vacuously.
 | File | Subject |
 |------|---------|
 | `src/logging.rs` (702 lines) | Subscriber setup, filter selection, structured events, audit trail, panic hook |
-| `src/main.rs:873-998` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
-| `src/main.rs:1000-1038` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
+| `src/main.rs:910-1035` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
+| `src/main.rs:1037-1075` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
 | `src/utils/config.rs:63-82`, `:91-116` | `get_config_dir()` / `ensure_config_dir()` — the config-root resolution the audit path uses |
 | `src/utils/config.rs:35-57` | `ScopedConfigDir` — test-only thread-local config override |
 | `src/utils/redact.rs:32` | `redact_secrets()` — the canonical secret stripper |
 | `src/auto_sync/status.rs:27` | `status::redact_secrets` re-export used by `redact_command` |
 | `src/commands/clip_cmd.rs:42` | Audit call site that propagates its error |
-| `src/ui/mod.rs:1660` | Audit call site that logs at debug instead |
-| `src/commands/mod.rs:432` | `delete` audit call site — also logs at debug |
+| `src/ui/mod.rs:1751` | Audit call site that logs at debug instead |
+| `src/commands/mod.rs:535` | `delete` audit call site — also logs at debug |
 | `Cargo.toml:117-119` | `tracing`, `tracing-subscriber` (fmt/registry/env-filter), `tracing-appender` |
 
 ## Invariants
@@ -452,7 +452,7 @@ bodies are empty and the test passes vacuously.
    `ratatui::restore()`), and the log writer is flushed before the process
    dies.
 6. **The recovery policy and the logging level are decided by one match**
-   (`src/main.rs:887`), so they cannot drift apart.
+   (`src/main.rs:924`), so they cannot drift apart.
 7. **Unit tests never write to the real `~/.config/snp/`** — the audit
    sentinel test binds a per-test, thread-local config directory.
 
@@ -497,7 +497,7 @@ bodies are empty and the test passes vacuously.
   (`:381-385`), without tightening its permissions the way
   `ensure_config_dir()` does.
 - **The panic hook is installed before logging is initialised**
-  (`src/main.rs:1001` vs `:1008`), so an early panic has no log file to
+  (`src/main.rs:1038` vs `:1008`), so an early panic has no log file to
   write to — only the stderr line.
 - **`init_default_logging()` has no in-tree caller.** It is a public alias
   for `init_default_file_logging()` kept for the documented API surface

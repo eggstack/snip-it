@@ -22,19 +22,19 @@ below; deterministic non-interactive resolution lives in
 
 | Item | Location | Purpose |
 |------|----------|---------|
-| `SnippetListParams` | `src/ui/mod.rs:499` | Borrowed view of the library (descriptions, commands, tags, folders, favorites, `snippets`, `original_indices`, `sort_opts`, `usage`, `is_search`, `initial_filter`, `allow_delete`) |
-| `SnippetSelection` | `src/ui/mod.rs:516` | `Selected(usize, Option<String>)` / `Copied` / `Delete(usize)` / `Cancelled` |
-| `select_snippet` | `src/ui/mod.rs:527` | Public wrapper; tty guard, then `select_snippet_inner` (`:545`) |
-| `run_snippet_selection` | `src/commands/mod.rs:338` | Sole caller of `select_snippet`; loads library + usage, loops the TUI, handles `Delete`/`Copied`/sync |
+| `SnippetListParams` | `src/ui/mod.rs:614` | Borrowed view of the library (descriptions, commands, tags, folders, favorites, `snippets`, `original_indices`, `sort_opts`, `usage`, `is_search`, `initial_filter`, `allow_delete`) |
+| `SnippetSelection` | `src/ui/mod.rs:631` | `Selected(usize, Option<String>)` / `Copied` / `Delete(usize)` / `Cancelled` |
+| `select_snippet` | `src/ui/mod.rs:642` | Public wrapper; tty guard, then `select_snippet_inner` (`:545`) |
+| `run_snippet_selection` | `src/commands/mod.rs:399` | Sole caller of `select_snippet`; loads library + usage, loops the TUI, handles `Delete`/`Copied`/sync |
 | Re-exports | `src/ui/mod.rs:16-17` | `pub use theme::get_theme;` and `pub use variables::{VariablePromptResult, prompt_variables};` |
 
 The real signatures:
 
 ```rust
-// src/ui/mod.rs:527
+// src/ui/mod.rs:642
 pub fn select_snippet(params: SnippetListParams) -> io::Result<Option<SnippetSelection>>;
 
-// src/ui/mod.rs:516
+// src/ui/mod.rs:631
 pub enum SnippetSelection {
     Selected(usize, Option<String>),
     Copied,
@@ -43,7 +43,7 @@ pub enum SnippetSelection {
 }
 ```
 
-`select_snippet` has exactly one call site (`src/commands/mod.rs:403`). Nothing
+`select_snippet` has exactly one call site (`src/commands/mod.rs:506`). Nothing
 else in the tree constructs `SnippetListParams`, so the TUI's inputs are fully
 determined by `run_snippet_selection`.
 
@@ -64,7 +64,7 @@ surface is a breaking change for every caller; extend inside
 
 ### Setup
 
-1. **tty guard** (`src/ui/mod.rs:533`) — `select_snippet` returns
+1. **tty guard** (`src/ui/mod.rs:648`) — `select_snippet` returns
    `io::ErrorKind::Unsupported` unless *both* stdin and stdout are terminals.
    Without this guard `ratatui::init()` panics and the process aborts with
    `SIGABRT` (exit 134) on piped stdio. The error text points at
@@ -72,17 +72,17 @@ surface is a breaking change for every caller; extend inside
    non-interactive spellings. Added in commit `2aaae33`
    ("Make README quickstart-first and fix what it got wrong"); covered by
    `tests/tui_requires_terminal.rs`.
-2. **Mouse capture** (`src/ui/mod.rs:562`) — `EnableMouseCapture` is
+2. **Mouse capture** (`src/ui/mod.rs:677`) — `EnableMouseCapture` is
    best-effort: failure logs a warning and continues without mouse support
    (headless SSH).
-3. **`ratatui::init()`** (`src/ui/mod.rs:568`) — in ratatui 0.30.2 this
+3. **`ratatui::init()`** (`src/ui/mod.rs:683`) — in ratatui 0.30.2 this
    enables raw mode, enters the alternate screen buffer, and installs a panic
    hook that chains to the previously installed one
    (`ratatui-0.30.2/src/init.rs:398`, `:566-572`).
 4. **`TerminalGuard`** (`src/ui/mod.rs:42-53`) — its `Drop` disables mouse
    capture (warn-only) and calls `ratatui::restore()`, which disables raw mode
    and leaves the alternate screen. The guard is bound immediately after
-   `init()` (`src/ui/mod.rs:569`), so every early return and every panic
+   `init()` (`src/ui/mod.rs:684`), so every early return and every panic
    unwinds through it.
 
 ### Teardown
@@ -92,7 +92,7 @@ surface is a breaking change for every caller; extend inside
 | Normal exit | `TerminalGuard::drop` → `DisableMouseCapture` + `ratatui::restore()` |
 | Panic | The same `Drop` runs during unwind, *and* ratatui's own panic hook restores the terminal before delegating to snip-it's hook |
 | Process panic | `src/logging.rs:264-272` `setup_panic_handler` explicitly disables mouse capture and calls `ratatui::restore()` before logging and flushing |
-| SIGINT / SIGTERM | `TERMINATE` is set by the `signal_hook` handler registered in `src/main.rs:35-44`; the loop breaks and returns `SnippetSelection::Cancelled` (`src/ui/mod.rs:660-662`, `:1912-1914`) |
+| SIGINT / SIGTERM | `TERMINATE` is set by the `signal_hook` handler registered in `src/main.rs:61-70`; the loop breaks and returns `SnippetSelection::Cancelled` (`src/ui/mod.rs:785-787`, `:1912-1914`) |
 
 `TERMINATE` is a process-global `LazyLock<Arc<AtomicBool>>`
 (`src/ui/mod.rs:59-60`); `get_terminate()` (`src/ui/mod.rs:62`) hands the same
@@ -100,7 +100,7 @@ handle to `src/main.rs` and to `src/ui/variables.rs:262`.
 
 ## The event loop
 
-`select_snippet_inner` (`src/ui/mod.rs:545-1926`) is a single `loop` whose
+`select_snippet_inner` (`src/ui/mod.rs:660-2063`) is a single `loop` whose
 body is, in order:
 
 1. **Termination check** (`:660`) — `TERMINATE.load(...)` → break.
@@ -132,13 +132,13 @@ body is, in order:
 
 Rendering is **pull-based and dirty-flagged**, not continuous:
 
-- `needs_redraw` (`src/ui/mod.rs:655`) is set by the filter recompute
+- `needs_redraw` (`src/ui/mod.rs:780`) is set by the filter recompute
   (`:798`), theme changes (`:699`, `:733`), copy-message expiry (`:669`),
   mouse events (`:1302`), and terminal resize (`:1903`).
 - `terminal.draw(...)` runs only when the flag is set (`:825-826`).
 - The draw closure snapshots the theme once via `get_theme()`; the draw path
   performs no I/O and no locking beyond that single read-lock.
-- `next_event_poll_timeout` (`src/ui/mod.rs:311-327`) computes the poll
+- `next_event_poll_timeout` (`src/ui/mod.rs:426-442`) computes the poll
   deadline as the minimum of the pending filter and theme debounce windows,
   falling back to 200 ms when nothing is pending (`:326`). The loop therefore
   wakes exactly when the next scheduled recompute is due.
@@ -150,7 +150,7 @@ Rendering is **pull-based and dirty-flagged**, not continuous:
 
 `highlighted_commands: Vec<Option<Line<'static>>>` and
 `snippet_previews: Vec<Option<SnippetPreview>>` are allocated once
-(`src/ui/mod.rs:573-574`) and filled on demand, so a large library pays no
+(`src/ui/mod.rs:688-689`) and filled on demand, so a large library pays no
 syntax-highlighting cost before the first frame. `command_line_for_display`
 (`:329-343`) returns the cached line or falls back to unstyled text;
 `warm_visible_highlights` (`:345-371`) fills the cache under the frame
@@ -184,7 +184,7 @@ budget.
 The TUI does **not** use the canonical search-text builder. The two surfaces
 have different corpora and different scoring:
 
-| | TUI filter (`src/ui/mod.rs:641-651`) | `selector::searchable_text` (`src/selector.rs:135`) |
+| | TUI filter (`src/ui/mod.rs:756-766`) | `selector::searchable_text` (`src/selector.rs:142`) |
 |---|---|---|
 | Description | included, as `"[desc]: cmd"` | included, plain |
 | Command | included, same string | included, plain |
@@ -272,7 +272,7 @@ visual-mode branch, so they take precedence.
 | Condition | Result |
 |-----------|--------|
 | `TERMINATE` set | `SnippetSelection::Cancelled` (`:1912-1914`) |
-| `filtered.is_empty()` | `Ok(None)` (`:1915-1917`) — the caller treats `None` as cancelled (`src/commands/mod.rs:477-480`) |
+| `filtered.is_empty()` | `Ok(None)` (`:1915-1917`) — the caller treats `None` as cancelled (`src/commands/mod.rs:580-583`) |
 | `sel.selected < filtered.len()` | `SnippetSelection::Selected(filtered[sel.selected], should_copy)` (`:1918-1922`) |
 | otherwise (`q` / `Ctrl+C` set `selected = filtered.len()`) | `SnippetSelection::Cancelled` (`:1923-1925`) |
 
@@ -432,7 +432,7 @@ Pressing `y` in visual mode (`:1623-1673`):
    `SnippetSelection::Copied` directly (`:1670-1671`).
 
 The `Copied` outcome is treated by the caller as "already processed": it ends
-the loop without re-invoking `process_fn` (`src/commands/mod.rs:453-456`).
+the loop without re-invoking `process_fn` (`src/commands/mod.rs:556-559`).
 
 ## Variable prompt flow (`src/ui/variables.rs`)
 
@@ -448,7 +448,7 @@ the two share names but not responsibilities:
 
 ### Detection and substitution
 
-1. `expand_snippet_command` (`src/commands/mod.rs:274-293`) calls
+1. `expand_snippet_command` (`src/commands/mod.rs:316-335`) calls
    `parse_variables(&snippet.command)` (`:278`).
 2. With no variables, the command is returned with escape sequences stripped
    (`:280-282`) — no prompt is shown.
@@ -491,26 +491,26 @@ must not conflate them:
 
 | Variant | Trigger | Caller behaviour |
 |---|---|---|
-| `Cancel` | `Ctrl+C` (`:452-455`) or the `TERMINATE` flag (`:265-267`) | `ExpandedCommand::Cancel` → the whole command exits (`src/commands/mod.rs:286`) |
-| `Back` | `q` in normal mode of the prompt | `ExpandedCommand::Skip` → back to the snippet selector, nothing runs (`src/commands/mod.rs:287`) |
-| `Skip` | Empty variable list (`:79-81`) | `ExpandedCommand::Skip` (`src/commands/mod.rs:288`) |
-| `Values` | `Enter` in the prompt | The command is expanded and returned (`src/commands/mod.rs:289-291`) |
+| `Cancel` | `Ctrl+C` (`:452-455`) or the `TERMINATE` flag (`:265-267`) | `ExpandedCommand::Cancel` → the whole command exits (`src/commands/mod.rs:328`) |
+| `Back` | `q` in normal mode of the prompt | `ExpandedCommand::Skip` → back to the snippet selector, nothing runs (`src/commands/mod.rs:329`) |
+| `Skip` | Empty variable list (`:79-81`) | `ExpandedCommand::Skip` (`src/commands/mod.rs:330`) |
+| `Values` | `Enter` in the prompt | The command is expanded and returned (`src/commands/mod.rs:331-333`) |
 
 ## Async integration (`Option<&Runtime>`)
 
 The TUI itself is **synchronous**. Tokio enters only at the caller boundary:
 
 - `run_snippet_selection` takes `runtime: Option<&tokio::runtime::Runtime>`
-  (`src/commands/mod.rs:344`).
+  (`src/commands/mod.rs:440`).
 - When `do_sync` is true the runtime is **required**; `None` is a hard error
-  ("sync requested but no runtime", `src/commands/mod.rs:353-359`). When
+  ("sync requested but no runtime", `src/commands/mod.rs:456-462`). When
   `do_sync` is false the runtime is discarded and the value is `None`
   (`:360-362`).
-- The CLI wires this as `args.sync.then_some(&RUNTIME)` (`src/main.rs:540`,
+- The CLI wires this as `args.sync.then_some(&RUNTIME)` (`src/main.rs:566`,
   `:561`, `:582`, `:597`), so the global `RUNTIME`
-  (`src/main.rs:22-27`) is only borrowed when `--sync` was requested.
+  (`src/main.rs:29-35`) is only borrowed when `--sync` was requested.
 - `select_cmd` passes `do_sync = false` and `runtime = None`
-  (`src/commands/select_cmd.rs:88-91`).
+  (`src/commands/select_cmd.rs:96-99`).
 
 The sync itself runs **after** the TUI has exited:
 
@@ -527,10 +527,10 @@ uses its own current-thread runtime; see [auto_sync.md](auto_sync.md).
 ## Deleted-snippet filtering
 
 The TUI never sees deleted snippets. Filtering happens one layer up, in
-`get_snippet_data` (`src/commands/mod.rs:243-271`):
+`get_snippet_data` (`src/commands/mod.rs:285-313`):
 
 ```rust
-// src/commands/mod.rs:244-250
+// src/commands/mod.rs:286-292
 let filtered: Vec<_> = snippets
     .snippets
     .iter()
@@ -546,12 +546,12 @@ that a delete inside the TUI is reflected on the next pass, and it uses it to
 translate the TUI's `Delete(idx)` back into a library index (`:424-430`).
 
 Note that `original_indices` and `folders` are **destructured but unused**
-inside the TUI (`src/ui/mod.rs:552`, `:555`); the mapping is maintained by the
+inside the TUI (`src/ui/mod.rs:667`, `:555`); the mapping is maintained by the
 caller, not by the selector. The TUI's own row indices are always indices
 into the filtered array it was handed.
 
 Deletion itself is a **tombstone**, not a removal: `mark_snippet_deleted`
-(`src/commands/mod.rs:499-514`) sets `deleted = true` and bumps `updated_at`
+(`src/commands/mod.rs:602-617`) sets `deleted = true` and bumps `updated_at`
 past `now` so the tombstone survives a sync round-trip.
 
 ## Rendering layout
@@ -574,7 +574,7 @@ past `now` so the tombstone survives a sync round-trip.
 └─────────────────────────────────────┘
 ```
 
-- The four-row layout is computed at `src/ui/mod.rs:805-816`.
+- The four-row layout is computed at `src/ui/mod.rs:896-907`.
 - The cursor marker is `▶ `, suppressed when `is_search` is true
   (`:1139`); the favorite marker is `★ ` (`:1084-1085`).
 - `list_display_mode` (`:600`) selects the row shape: `0` (default) renders
@@ -591,10 +591,10 @@ past `now` so the tombstone survives a sync round-trip.
 
 ## `is_search` is currently unreachable
 
-`SnippetListParams.is_search` (`src/ui/mod.rs:503`) selects a search-flavoured
+`SnippetListParams.is_search` (`src/ui/mod.rs:618`) selects a search-flavoured
 presentation: no `▶ ` row marker (`:1139`), a different status-bar hint line
 (`:1206-1215`), and no `Copied` early return (`:1670`, `:1784`). **The only
-caller passes `is_search: false`** (`src/commands/mod.rs:407`), so every
+caller passes `is_search: false`** (`src/commands/mod.rs:510`), so every
 `is_search == true` branch in the selector is currently dead code. Treat the
 flag as a reserved hook, not a live mode.
 
@@ -608,13 +608,13 @@ flag as a reserved hook, not a live mode.
 | `src/ui/theme.rs` (1063 lines) | `Theme` palette, `ThemeManager`, active-theme resolution — see [ui.md](ui.md) |
 | `src/ui/highlight.rs` (248 lines) | `highlight_command()` tokenizer — see [ui.md](ui.md) |
 | `src/ui/_generated_bundled_themes.rs` (301 lines) | **Generated** bundled themes — see [ui.md](ui.md) |
-| `src/commands/mod.rs:338-496` | `run_snippet_selection` — the bridge from commands to the TUI |
-| `src/commands/mod.rs:243-271` | `get_snippet_data` — deleted filtering + index mapping |
-| `src/commands/mod.rs:499-514` | `mark_snippet_deleted` — tombstone write |
+| `src/commands/mod.rs:399-599` | `run_snippet_selection` — the bridge from commands to the TUI |
+| `src/commands/mod.rs:285-313` | `get_snippet_data` — deleted filtering + index mapping |
+| `src/commands/mod.rs:602-617` | `mark_snippet_deleted` — tombstone write |
 | `src/commands/keybindings_cmd.rs` (85 lines) | Static keybinding reference that mirrors the loop (can drift) |
-| `src/selector.rs:135-158` | `searchable_text` — the *canonical* search contract the TUI does **not** use |
+| `src/selector.rs:142-180` | `searchable_text` — the *canonical* search contract the TUI does **not** use |
 | `src/utils/variables.rs` (1947 lines) | Variable parsing / expansion / escape stripping |
-| `src/main.rs:29-50` | SIGINT/SIGTERM handler feeding `TERMINATE` |
+| `src/main.rs:55-76` | SIGINT/SIGTERM handler feeding `TERMINATE` |
 | `src/logging.rs:264-272` | Panic hook that restores the terminal |
 
 ## Invariants
@@ -623,14 +623,14 @@ flag as a reserved hook, not a live mode.
    output is `SnippetSelection::Delete`, and it is honoured exclusively
    through `mark_snippet_deleted` (tombstone preserved for sync, never a hard
    remove).
-2. **`select_snippet` requires a real tty** (`src/ui/mod.rs:533`). A piped
+2. **`select_snippet` requires a real tty** (`src/ui/mod.rs:648`). A piped
    invocation must fail with an actionable error, never abort the process.
 3. **The terminal is always restored.** `TerminalGuard` is bound directly
    after `ratatui::init()`; the panic hook repeats the restore.
 4. **The TUI never mutates a snippet and never expands variables itself.**
    Expansion happens in `expand_snippet_command` after the loop exits.
 5. **Deleted snippets are filtered before the TUI sees them**
-   (`src/commands/mod.rs:248`); the selector has no delete-tombstone concept.
+   (`src/commands/mod.rs:290`); the selector has no delete-tombstone concept.
 6. **`SortMode::Command` is initial-only.** Interactive toggles never produce
    it.
 7. **An empty filter recomputes immediately**; non-empty edits debounce at
@@ -639,7 +639,7 @@ flag as a reserved hook, not a live mode.
    mode would set `should_copy` and leave the loop via `Selected(idx, Some(_))`
    instead. Delete-confirm is gated on `allow_delete`, not on `is_search`.
 9. **`should_copy` carries the description, not the command**
-   (`src/ui/mod.rs:1783`); only `copy_flag.is_some()` is meaningful to the
+   (`src/ui/mod.rs:1920`); only `copy_flag.is_some()` is meaningful to the
    caller (`src/commands/run_cmd.rs:356`).
 10. **Visual-mode `y` copies commands, not descriptions**, and audit-logs only
     the first row of the range.
@@ -651,7 +651,7 @@ flag as a reserved hook, not a live mode.
 ## Gotchas
 
 - **Visual-mode `y` bypasses the clipboard funnel.** It calls
-  `clipboard::copy_to_clipboard_auto` directly (`src/ui/mod.rs:1642`), so it
+  `clipboard::copy_to_clipboard_auto` directly (`src/ui/mod.rs:1733`), so it
   records no usage-index entry and does not go through
   `copy_to_clipboard()` in `src/commands/clip_cmd.rs:40`. Only
   `src/commands/cron_cmd.rs:89` does the same thing.
@@ -661,7 +661,7 @@ flag as a reserved hook, not a live mode.
   `visual_mode` for exactly this reason (`:1841-1843`); if you add a sort
   path, do the same.
 - **`original_indices` is not used by the TUI.** It is the *caller's*
-  index mapping (`src/commands/mod.rs:250`, `:424`). Reading it as a TUI
+  index mapping (`src/commands/mod.rs:292`, `:424`). Reading it as a TUI
   invariant produces off-by-N bugs after a delete.
 - **`j` and `k` are literal text in insert mode.** Any doc that claims
   vim-style navigation in insert mode is wrong.
@@ -677,7 +677,7 @@ flag as a reserved hook, not a live mode.
   of a range and exits with `SnippetSelection::Copied`.
 - **`is_search` is dead code today.** Do not use it to reason about current
   behaviour.
-- **`Folder` data is passed in but unused** (`src/ui/mod.rs:552`); the
+- **`Folder` data is passed in but unused** (`src/ui/mod.rs:667`); the
   selector shows folders nowhere.
 - **`keybindings_cmd.rs` can drift from the loop.** It is a static
   `println!` block with no test tying it to `src/ui/mod.rs`.

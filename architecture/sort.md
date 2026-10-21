@@ -127,7 +127,7 @@ and arrives through the `fuzzy_scores` map.
 
 | Caller | Score source | Passed as |
 |---|---|---|
-| `SnippetSelector::resolve` — `src/selector.rs:431-437` | `score_fuzzy_matches(&snippets.snippets, query, SearchFields::fuzzy_default())` (`src/selector.rs:418-419`) | `Some(&fuzzy_scores)` |
+| `SnippetSelector::resolve` — `src/selector.rs:453-459` | `score_fuzzy_matches(&snippets.snippets, query, SearchFields::fuzzy_default())` (`src/selector.rs:440-441`) | `Some(&fuzzy_scores)` |
 | `snp list --filter` — `src/commands/list_cmd.rs:135` | inline `shared_fuzzy_matcher().fuzzy_match()` (`src/commands/list_cmd.rs:100`) | `filter.is_some().then_some(&fuzzy_scores)` (`src/commands/list_cmd.rs:138`) |
 | MCP `snippets_search` — `src/mcp/tools.rs:111` | inline `shared_fuzzy_matcher().fuzzy_match()` (`src/mcp/tools.rs:103`) | `Some(&scores)` |
 
@@ -136,10 +136,10 @@ When the caller passes `None`, or the map has no entry for an index,
 scored snippet under `Relevance`.
 
 **Empty query ⇒ no scores.** `score_fuzzy_matches` returns every non-deleted
-index with an empty score map for an empty query (`src/selector.rs:176-183`).
+index with an empty score map for an empty query (`src/selector.rs:198-205`).
 Under `Relevance` that means all scores are `None` → all equal → levels 3 and
 4 are skipped → level 5 (index ascending) decides. The selector's own filter
-(`src/selector.rs:441-445`) then keeps every candidate because an empty query
+(`src/selector.rs:463-467`) then keeps every candidate because an empty query
 matches everything.
 
 `fuzzy_scores` are also a **tie-break at level 3** for every non-`Relevance`
@@ -187,7 +187,7 @@ is documented in [usage.md](usage.md).
 | Caller | Line | Mode | `favorites_first` | Usage slice |
 |---|---|---|---|---|
 | `snp list` | `src/commands/list_cmd.rs:135` | `--sort` (default `Relevance`) | `--favorites-first` | only for `LastUsed` / `MostUsed` |
-| `SnippetSelector::resolve` (fuzzy path) | `src/selector.rs:431` | `Relevance` | `false` (via `..Default::default()`, `src/selector.rs:427-430`) | `None` |
+| `SnippetSelector::resolve` (fuzzy path) | `src/selector.rs:453` | `Relevance` | `false` (via `..Default::default()`, `src/selector.rs:449-452`) | `None` |
 | MCP `snippets_search` | `src/mcp/tools.rs:111` | `Relevance` | `false` (explicit, `src/mcp/tools.rs:118`) | `None` |
 
 ---
@@ -239,7 +239,7 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
 | `src/usage.rs:100-108` | `get_usage()` — zeroed default for an unknown snippet ID |
 | `src/usage.rs:127-140` | `load_from()` — fail-open load with corrupt-file backup |
 | `src/commands/list_cmd.rs:122-138` | Builds the optional usage slice and passes the optional fuzzy scores |
-| `src/selector.rs:425-437` | `Relevance` ranking inside the selector's fuzzy path |
+| `src/selector.rs:447-459` | `Relevance` ranking inside the selector's fuzzy path |
 | `src/mcp/tools.rs:111-118` | `Relevance` ranking for MCP search (`favorites_first: false`) |
 | `src/ui/mod.rs:173-291` | The separate TUI comparator |
 | `src/ui/state.rs:4-15` | `ui::state::SortMode` — the TUI's own mode enum |
@@ -256,7 +256,7 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
 - The tie-break chain is total: level 5 (original index, ascending) means
   there is never an unresolved tie.
 - Deleted snippets never reach the sorter — callers pass live-only indices
-  (`src/commands/list_cmd.rs:91,113`; `src/selector.rs:363`).
+  (`src/commands/list_cmd.rs:91,113`; `src/selector.rs:385`).
 - `MostUsed` breaks `use_count` ties by `last_used_at` descending; a `None`
   last-used sorts after a `Some`; an all-`None` group falls through to index
   order.

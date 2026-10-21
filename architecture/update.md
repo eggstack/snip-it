@@ -19,7 +19,7 @@ the crate-version-to-tag contract beyond what the code pins, the server's HTTP
 leaf (see [server.md](server.md)), or the update server's gRPC surface.
 
 **Sources**: `src/update.rs` (1769 lines), `snip-sync/src/update.rs` (778),
-`src/main.rs:70-83` (CLI flags), `src/main.rs:452-466` (dispatch),
+`src/main.rs:96-109` (CLI flags), `src/main.rs:478-492` (dispatch),
 `tests/architecture.rs:163-258` (source-level pins).
 
 ## Module Map
@@ -28,7 +28,7 @@ leaf (see [server.md](server.md)), or the update server's gRPC surface.
 |------|------|
 | `src/update.rs` | Client updater: version check, asset download, checksum + identity verification, executable replacement |
 | `snip-sync/src/update.rs` | Server updater: same strategy over external `curl`, with lifecycle-aware stop/restart |
-| `src/main.rs:70-83` | `snp update --dry-run/--locked` and the hidden `__self-replace` subcommand |
+| `src/main.rs:96-109` | `snp update --dry-run/--locked` and the hidden `__self-replace` subcommand |
 | `snip-sync/src/cli.rs:50-68` | `snip-sync update --dry-run/--locked` and the hidden `SelfReplace` subcommand |
 | `tests/architecture.rs:163-258` | Pins that lock the two-transport split at source level |
 
@@ -71,7 +71,7 @@ contract, identity probe, lifecycle-aware restart).
 pub async fn run(dry_run: bool, _locked: bool) -> Result<(), String>
 ```
 
-CLI (`src/main.rs:70-75`):
+CLI (`src/main.rs:96-101`):
 
 ```rust
 Update {
@@ -83,8 +83,8 @@ Update {
 ```
 
 Dispatched through the global runtime: `RUNTIME.block_on(update::run(dry_run, locked))`
-(`src/main.rs:452-458`). `snp update` is classified
-`SuppressConfiguration` + `Logging` (`src/main.rs:982-992`).
+(`src/main.rs:478-484`). `snp update` is classified
+`SuppressConfiguration` + `Logging` (`src/main.rs:1019-1029`).
 
 - **`--dry-run`** stops before any download or write: `run()` prints the plan
   and returns `Ok(())` (`src/update.rs:93-96`), via `print_dry_run()`
@@ -234,7 +234,7 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
   (`src/update.rs:850-859`); the helper performs `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`
   (`run_self_replace_helper`, `src/update.rs:868`). The hidden subcommand is
-  declared at `src/main.rs:76-83` and dispatched at `src/main.rs:459-466`; it
+  declared at `src/main.rs:102-109` and dispatched at `src/main.rs:485-492`; it
   is a no-op error on non-Windows.
 
 ### Cargo Fallback
@@ -277,7 +277,7 @@ the CLI `--locked` flag.
 - The server has its own hidden `SelfReplace` subcommand
   (`snip-sync/src/cli.rs:57-68`, dispatched at `snip-sync/src/main.rs:35`),
   which additionally accepts `--restart` and `--managed-restart`
-  (`snip-sync/src/update.rs:632-637`).
+  (`snip-sync/src/update.rs:680-685`).
 
 ## Architecture Pins
 
@@ -337,7 +337,7 @@ no second HTTP client, no Tokio test runtime, no external network.
 - `src/update.rs:1035` — `test-support` transport tests with the std-only loopback fixture
 - `snip-sync/src/update.rs` — server updater: `curl` adapter, lifecycle-aware stop/restart, size-gate rationale
 - `snip-sync/src/cli.rs:50-68` — server `update` flags and the hidden `SelfReplace` subcommand
-- `src/main.rs:70-83` — client `update` flags and the hidden `__self-replace` subcommand
+- `src/main.rs:96-109` — client `update` flags and the hidden `__self-replace` subcommand
 - `Cargo.toml:141-146` — the lean `eggfetch-core` feature set
 - `tests/architecture.rs:163-258` — the source-level pins on the split
 

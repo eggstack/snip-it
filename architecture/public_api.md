@@ -48,7 +48,7 @@ pub use utils::atomic::{
 |---|---|---|
 | `SnipError`, `SnipResult` | `src/error.rs` | The crate's single error type; every fallible API returns it |
 | `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets` | `src/library/model.rs` | The domain data model, re-exported out of the `pub(crate) mod library` |
-| `load_library`, `save_library` | `src/library/persistence.rs:158`, `:217` | Read/write one library TOML file by path |
+| `load_library`, `save_library` | `src/library/persistence.rs:199`, `:217` | Read/write one library TOML file by path |
 | `AtomicWriteOptions`, `AtomicWriteReport`, `Durability`, `atomic_replace`, `write_private_atomic` | `src/utils/atomic.rs` | The durability-preserving write primitives |
 
 `pub mod config`, `pub mod error`, `pub mod outcome`, and `pub mod sort` are
@@ -161,29 +161,30 @@ is why they are called out explicitly in `AGENTS.md`.
 
 | Re-export | Line | Affects |
 |---|---|---|
-| `run_snippet_selection` | `src/commands/mod.rs:338` | `run`, `clip`, `search`, `select` — all four TUI commands call it (`src/commands/run_cmd.rs:349`, `src/commands/clip_cmd.rs:107`, `src/commands/search_cmd.rs:58`, `src/commands/select_cmd.rs:85`) |
-| `load_snippets` | `src/commands/mod.rs:157` | The shared TOML load path (`src/commands/list_cmd.rs:63`, `src/commands/new_cmd.rs:630`) |
-| `save_snippets` | `src/commands/mod.rs:206` | The shared TOML save path, including the mutation gate and local-data lock (`src/commands/new_cmd.rs:646`) |
-| `load_readonly_snippets` | `src/commands/mod.rs:127` | The **read-only** resolution path used by `snp list` (`src/commands/list_cmd.rs:71`) — never migrates or rewrites metadata |
-| `get_snippet_data` | `src/commands/mod.rs:243` | Builds the `SnippetData` parallel vectors for the TUI |
-| `expand_snippet_command` | `src/commands/mod.rs:274` | Variable expansion shared by `run` and `clip` |
+| `run_snippet_selection` | `src/commands/mod.rs:399` | `run`, `clip`, `search`, `select` — all four TUI commands call it (`src/commands/run_cmd.rs:349`, `src/commands/clip_cmd.rs:107`, `src/commands/search_cmd.rs:58`, `src/commands/select_cmd.rs:85`) |
+| `run_snippet_selection_with_resolution` | `src/commands/mod.rs:433` | `pub(crate)` — `snp select` calls it with `LibraryResolution::ReadOnly`, so the read-only TUI command resolves the library without migrating a legacy checkout |
+| `load_snippets` | `src/commands/mod.rs:199` | The shared TOML load path (`src/commands/list_cmd.rs:63`, `src/commands/new_cmd.rs:630`) |
+| `save_snippets` | `src/commands/mod.rs:248` | The shared TOML save path, including the mutation gate and local-data lock (`src/commands/new_cmd.rs:646`) |
+| `load_readonly_snippets` | `src/commands/mod.rs:169` | The **read-only** resolution path used by `snp list` (`src/commands/list_cmd.rs:71`) — never migrates or rewrites metadata |
+| `get_snippet_data` | `src/commands/mod.rs:285` | Builds the `SnippetData` parallel vectors for the TUI |
+| `expand_snippet_command` | `src/commands/mod.rs:316` | Variable expansion shared by `run` and `clip` |
 
 `run_snippet_selection` is the **single** TUI entry point: it resolves the
 library, loads the usage index, builds the one-shot usage map, calls
 `ui::select_snippet`, and optionally triggers a background sync
-(`src/commands/mod.rs:338-496`). It takes `Option<&tokio::runtime::Runtime>`
+(`src/commands/mod.rs:399-600`). It takes `Option<&tokio::runtime::Runtime>`
 and errors when `do_sync` is true but the runtime is `None`
-(`src/commands/mod.rs:353-362`).
+(`src/commands/mod.rs:456-464`).
 
 `load_readonly_snippets` is the read-only sibling of `load_snippets`. It
 calls `library::readonly_library_sources()`
-(`src/library/manager.rs:784-787`), which resolves the visible libraries
+(`src/library/manager.rs:815-818`), which resolves the visible libraries
 without creating library files or rewriting library metadata. Routing a
 read-only command through the mutating `get_library_path` would reintroduce
 recovery side effects — that is the reason the two functions are separate.
 
 > One caveat to the "no migration" claim: `readonly_library_sources()`
-> constructs a `LibraryManager` (`src/library/manager.rs:41-92`), and
+> constructs a `LibraryManager` (`src/library/manager.rs:43-94`), and
 > `LibraryManager::new()` calls `migrate_macos_config_dir()`
 > (`src/utils/config.rs:166-179`). On macOS with a legacy config directory
 > present, that migration **does** create directories and move files — so
@@ -198,10 +199,10 @@ recovery side effects — that is the reason the two functions are separate.
 
 | Re-export | Line | Affects |
 |---|---|---|
-| `select_snippet` + `SnippetListParams` | `src/ui/mod.rs:527`, `:499-513` | The only TUI entry point, called from exactly one place — `src/commands/mod.rs:403` |
+| `select_snippet` + `SnippetListParams` | `src/ui/mod.rs:642`, `:499-513` | The only TUI entry point, called from exactly one place — `src/commands/mod.rs:506` |
 | `get_theme` | `src/ui/mod.rs:16` | Theme resolution for every TUI render |
 | `prompt_variables` + `VariablePromptResult` | `src/ui/mod.rs:17` | Variable prompting inside the TUI |
-| `get_terminate` | `src/ui/mod.rs:62-64` | The shared SIGINT/SIGTERM flag, also used by `main.rs`'s Unix signal handler (`src/main.rs:35`) |
+| `get_terminate` | `src/ui/mod.rs:62-64` | The shared SIGINT/SIGTERM flag, also used by `main.rs`'s Unix signal handler (`src/main.rs:61`) |
 
 Because `select_snippet` has exactly one call site, any change to the
 selection contract — the params struct, the sort options, the usage slice,

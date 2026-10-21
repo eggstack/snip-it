@@ -45,7 +45,11 @@ maps to `closed`.
 
 ## Dependency-ready implementation plans
 
-None. All registered milestones are closed. Register new work here only
+| Plan | Status | Subject | Dependencies or blockers |
+|---|---|---|---|
+| `plans/adrs/ADR-0001-sync-delta-cursor.md` | proposed | Monotonic per-library sequence as the sync delta cursor, so a row pushed with an old `updated_at` cannot become invisible to other devices | Needs a `snip-proto` field, a server schema migration, and a client cursor change — one change with a version bump for `snip-proto`, `snip-sync`, and `snip-it`. Not started; the decision is recorded so it is not re-derived. |
+
+All previously registered milestones are closed. Register new work here only
 after dependency and handoff review per `plans/003-planning-process.md`
 §10.
 

@@ -174,7 +174,7 @@ Description = "Useful bash functions, aliases, and scripts for daily tasks."
 [[Snippets]]
   Description = "Show most used commands"
   Tag = ["script", "history"]
-  command = "topcmds() { history | awk '{print \$2}' | sort | uniq -c | sort -rn | head -n ${1:-20}; }"
+  command = "topcmds() { history | awk '{print $2}' | sort | uniq -c | sort -rn | head -n ${1:-20}; }"
 
 [[Snippets]]
   Description = "Extract URLs from text"

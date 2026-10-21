@@ -19,8 +19,8 @@ Related: [sync_cmd.md](sync_cmd.md), [register_cmd.md](register_cmd.md),
 
 ## CLI surface
 
-`snp premade` (alias `p`) — `src/main.rs:126-131`; the subcommand enum is
-`PremadeCommands` (`src/main.rs:209-225`).
+`snp premade` (alias `p`) — `src/main.rs:152-157`; the subcommand enum is
+`PremadeCommands` (`src/main.rs:235-251`).
 
 | Form | Alias | Handler | Server RPC |
 |------|-------|---------|-----------|
@@ -31,8 +31,8 @@ Related: [sync_cmd.md](sync_cmd.md), [register_cmd.md](register_cmd.md),
 | `premade update <name>` | `u` | `run_update(name, &RUNTIME)` (`premade_cmd.rs:225`) | `GetPremadeLibrary` |
 
 `premade get` takes an optional positional `name`; the literal `all`
-selects the batch path (the check is at `src/main.rs:742`; the optional
-positional is declared at `src/main.rs:215`).
+selects the batch path (the check is at `src/main.rs:779`; the optional
+positional is declared at `src/main.rs:241`).
 
 ## The credential guard
 
@@ -60,22 +60,22 @@ fn require_sync_credentials(sync_settings: &crate::config::SyncSettings) -> bool
 key — which tripped its `debug_assert!` in debug builds and otherwise sent
 an unauthenticated request the server rejects with a bare 401 instead of
 the actionable message printed here. The assertion has since been removed
-(`src/sync.rs:291-299`).
+(`src/sync.rs:306-314`).
 
 The guard returns `false` → the handler prints the message and returns
 `Ok(())` — exit 0, not an error.
 
 As a second line of defence, every authenticated `SyncClient` method also
-calls `require_api_key()` (`src/sync.rs:800-808`), which fails fast with a
+calls `require_api_key()` (`src/sync.rs:900-908`), which fails fast with a
 typed error naming `snp register --force`:
 
 | Method | Guard call |
 |--------|-----------|
-| `list_libraries` | `src/sync.rs:955` |
-| `create_library` | `src/sync.rs:1016` |
-| `list_premade_libraries` | `src/sync.rs:1051` |
-| `get_premade_library` | `src/sync.rs:1083` |
-| `search_premade_libraries` | `src/sync.rs:1127` |
+| `list_libraries` | `src/sync.rs:1080` |
+| `create_library` | `src/sync.rs:1141` |
+| `list_premade_libraries` | `src/sync.rs:1176` |
+| `get_premade_library` | `src/sync.rs:1208` |
+| `search_premade_libraries` | `src/sync.rs:1252` |
 
 ## Flow / steps
 
@@ -147,7 +147,7 @@ importing.
 
 ## The TOCTOU-safe canonical-path write
 
-`LibraryManager::save_premade_library` (`src/library/manager.rs:717-751`)
+`LibraryManager::save_premade_library` (`src/library/manager.rs:747-782`)
 is the only write path for the premade cache, and it is where the
 path-traversal defence lives:
 
@@ -199,7 +199,7 @@ Two independent checks:
    with the canonicalised premade directory. This is the check that
    survives a symlink pointing outside the cache.
 
-Note the asymmetry: `premade_exists` (`src/library/manager.rs:709-711`)
+Note the asymmetry: `premade_exists` (`src/library/manager.rs:739-741`)
 is a plain `Path::exists()` probe and does no canonicalisation — it is
 only used to decide whether to download, never to authorise a write.
 
@@ -217,17 +217,17 @@ only used to decide whether to download, never to authorise a write.
 The premade cache is outside the journaled snippet dataset, so there is
 no transaction gate (`gate_mutation_on_interrupted_transactions`) and no
 library-index write. `save_premade_library` does take the local-data
-lock (`acquire_local_data_lock`, `src/library/manager.rs:718`).
+lock (`acquire_local_data_lock`, `src/library/manager.rs:749`).
 
 ## Tokio runtime
 
 All five handlers take `&tokio::runtime::Runtime` and use
 `runtime.block_on(...)` for the RPCs. `RUNTIME` is the global `LazyLock`
-runtime in `src/main.rs:22-27`; dispatch is at `src/main.rs:739-752`.
+runtime in `src/main.rs:29-35`; dispatch is at `src/main.rs:776-789`.
 
 Startup policy: `Commands::Premade { .. }` uses
 `StartupRecoveryPolicy::Allow` and `StartupServices::Logging`
-(`src/main.rs:960`).
+(`src/main.rs:997`).
 
 ## Auto-sync trigger
 
@@ -237,7 +237,7 @@ imports it, and the import path is what notifies.
 ## Error / exit mapping
 
 `SnipResult<()>` — every `Err` becomes `error: <message>` on stderr and
-exit **1** (`src/main.rs:1026-1032`).
+exit **1** (`src/main.rs:1063-1069`).
 
 | Situation | Result |
 |-----------|--------|
@@ -258,9 +258,9 @@ There is no `CliOutcome` on these paths.
 | `src/commands/premade_cmd.rs` | `require_sync_credentials` + the five handlers |
 | `src/sync_commands.rs:503-584` | `run_premade_sync` — the batch download helper |
 | `src/sync.rs` | `SyncClient` premade RPCs + `require_api_key` |
-| `src/library/manager.rs:709-751` | `premade_exists` / `save_premade_library` (traversal + canonical containment) |
+| `src/library/manager.rs:739-782` | `premade_exists` / `save_premade_library` (traversal + canonical containment) |
 | `src/config/sync_settings.rs` | `get_sync_settings` (non-failing load) |
-| `src/main.rs:209-225`, `:739-752` | Clap wiring and dispatch |
+| `src/main.rs:235-251`, `:739-752` | Clap wiring and dispatch |
 
 ## Invariants
 

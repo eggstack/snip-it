@@ -150,8 +150,8 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 
 | Reader | Source | Purpose |
 |--------|--------|---------|
-| TUI selection loop | `src/commands/mod.rs:373-402` | Loads the index once per session and builds a one-shot `HashMap` for O(1) per-snippet lookup (not O(k·m)) |
-| `ui::SnippetListParams.usage` | `src/ui/mod.rs:499-513` | Optional `&[UsageData]` slice handed to the TUI; the TUI also reads usage for its own ordering hints (`src/ui/mod.rs:181`) |
+| TUI selection loop | `src/commands/mod.rs:476-505` | Loads the index once per session and builds a one-shot `HashMap` for O(1) per-snippet lookup (not O(k·m)) |
+| `ui::SnippetListParams.usage` | `src/ui/mod.rs:614-628` | Optional `&[UsageData]` slice handed to the TUI; the TUI also reads usage for its own ordering hints (`src/ui/mod.rs:181`) |
 | `sort::rank_snippets` | `src/sort.rs:116-122` | The `usage` slice used by the `LastUsed` / `MostUsed` sort modes |
 | `list` command | `src/commands/list_cmd.rs:124` | `--sort last-used` / `--sort most-used` |
 | `validate` command | `src/commands/validate_cmd.rs:461-466` | Orphaned-usage-entry diagnostic |
@@ -172,7 +172,7 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 - `src/library/model.rs:169-177` — `find_orphaned_ids`, the shared orphan classifier
 - `src/commands/run_cmd.rs:175-184` — usage write on successful run
 - `src/commands/clip_cmd.rs:40-49` — usage write on successful clip
-- `src/commands/mod.rs:373-402` — session-scoped usage load and the one-shot lookup map
+- `src/commands/mod.rs:476-505` — session-scoped usage load and the one-shot lookup map
 - `src/sort.rs:116-122` — the `usage` slice consumed by `LastUsed` / `MostUsed`
 - `src/utils/config.rs:63` — `get_config_dir()`, the base for `usage.toml`
 ## Invariants

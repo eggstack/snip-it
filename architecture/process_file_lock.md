@@ -307,7 +307,7 @@ diverge between lock implementations
 (`src/utils/process.rs:1-4`).
 
 The rule that matters: **only `ESRCH` proves absence.** `EPERM` and unknown
-errnos mean the process is **live** (`src/utils/process.rs:23-25`).
+errnos mean the process is **live** (`src/utils/process.rs:28-30`).
 
 The kernel-backed family does **not** use liveness to authorize stealing.
 `is_stale()` on the execution-lock wrapper
@@ -336,7 +336,7 @@ backward compatibility.
 |------|------|---------|---------------|--------|
 | Detached auto-sync worker | `try_acquire` | — | `AlreadyHeld` → `WorkerOutcome::NothingToDo`; other errors → `WorkerOutcome::Failed` | `src/auto_sync/worker.rs:64-71` |
 | Status deferral release | `try_acquire` | — | logged at debug and skipped | `src/auto_sync/status.rs:339-346` |
-| `run_explicit_sync` (TUI `--sync`) | `wait_acquire` | 30 s | propagated | `src/commands/mod.rs:304-307` |
+| `run_explicit_sync` (TUI `--sync`) | `wait_acquire` | 30 s | propagated | `src/commands/mod.rs:346-349` |
 | Manual `snp sync` | `wait_acquire` | 30 s | `Timeout` → "sync already in progress", reports the owner PID | `src/commands/sync_cmd.rs:190-201` |
 | Manual sync (second path) | `wait_acquire` | 30 s | same mapping | `src/commands/sync_cmd.rs:528-537` |
 | Pending-marker read-modify-write | `acquire_pending_txn` → `wait_acquire` | 10 s (`PENDING_TXN_LOCK_TIMEOUT`) | `PendingTxnLockError::Busy` | `src/auto_sync/pending.rs:17`, `:77`, `:132`, `:241`, `:262`, `:284` |
@@ -352,21 +352,21 @@ The `snip-sync` server is a separate crate and cannot call into the binary
 crate's module, so it carries a **mirrored implementation** of the same
 protocol in `snip-sync/src/server_lock.rs`:
 
-- `ServerLockIdentity` (`snip-sync/src/server_lock.rs:29-42`) — same fields
+- `ServerLockIdentity` (`snip-sync/src/server_lock.rs:34-47`) — same fields
   minus `purpose`.
-- `ServerLock::try_acquire` (`snip-sync/src/server_lock.rs:165`) — same
+- `ServerLock::try_acquire` (`snip-sync/src/server_lock.rs:225`) — same
   `read(true).write(true).create(true).truncate(false)` open, same `flock` /
   `LockFileEx`, same `u32::MAX` byte range
-  (`snip-sync/src/server_lock.rs:150-156`).
+  (`snip-sync/src/server_lock.rs:158-164`).
 - `Drop` releases the kernel lock and leaves the file on disk
-  (`snip-sync/src/server_lock.rs:113-121`).
+  (`snip-sync/src/server_lock.rs:121-129`).
 - Lock file name: `snip-sync.server.lock`
-  (`snip-sync/src/server_lock.rs:43`).
+  (`snip-sync/src/server_lock.rs:48`).
 
 Its module doc states the contract explicitly: the kernel owns mutual
 exclusion, the persistent file is diagnostic metadata only, and a new server
 can start after a crashed owner exits because the kernel releases the lock at
-process teardown (`snip-sync/src/server_lock.rs:1-17`).
+process teardown (`snip-sync/src/server_lock.rs:1-22`).
 
 ---
 
@@ -454,7 +454,7 @@ local-data lock closed exactly this hole; the transaction lock did not.
   (`src/commands/restore_cmd.rs:1133`).
 - `save_library` derives both its mutation-gate path and its local-data-lock
   path from the **config directory**, not from the target library path
-  (`src/library/persistence.rs:223-224`).
+  (`src/library/persistence.rs:264-265`).
 
 ---
 
@@ -493,7 +493,7 @@ local-data lock closed exactly this hole; the transaction lock did not.
 6. **Unsupported platforms fail loudly** rather than weakening exclusion
    (`src/process_file_lock.rs:346-350`).
 7. **Only `ESRCH` proves a process is absent**; `EPERM` and unknown errnos
-   mean live (`src/utils/process.rs:23-25`).
+   mean live (`src/utils/process.rs:28-30`).
 8. **The Windows locked range is a single byte at `u32::MAX`**, far beyond
    real file content (`src/process_file_lock.rs:229-236`).
 

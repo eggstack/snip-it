@@ -71,7 +71,7 @@ surface. Check them on any change to local mutation or sync triggering.
 
 ### Security
 - **Path canonicalization**: Output paths and editor paths should be canonicalized before use
-- **TLS verification**: `src/sync.rs:1249` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it (deep dive: `architecture/sync.md`)
+- **TLS verification**: `src/sync.rs:1374` sets `.domain_name(host)` on `ClientTlsConfig` — verify it is still set after any TLS touch, don't regress it (deep dive: `architecture/sync.md`)
 - **Shell execution**: `src/commands/run_cmd.rs:107-113` intentionally uses `$SHELL` with `/bin/sh` fallback (test asserts both accepted) — don't "harden" it to hardcoded `/bin/sh` (deep dive: `architecture/commands/run_cmd.md`)
 - **Atomic file operations**: Use `fs::OpenOptions::create_new(true)` to prevent TOCTOU races
 
@@ -81,7 +81,7 @@ surface. Check them on any change to local mutation or sync triggering.
 - **Silent failures**: Check for `let _ = ...` patterns that suppress errors without logging
 
 ### Sync
-- **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`, `src/commands/mod.rs:243`)
+- **Deleted snippets**: `deleted: true` snippets should be filtered from TUI display (in `get_snippet_data()`, `src/commands/mod.rs:285`)
 - **Conflict resolution**: Live conflicts order by `(updated_at, device_id, SHA-256(synced fields))` — never reintroduce role-dependent `>=` server-wins comparisons; deletion wins over live content regardless of timestamp (deep dive: `architecture/sync.md`)
 - **Push-only counter**: `completed` should increment regardless of `has_failures` (`src/sync_commands.rs:838,841`)
 

@@ -147,7 +147,7 @@ in `.toml`; and the reserved name `all` (`model.rs:179-225`).
 
 ## TOML persistence
 
-### `load_library(path) / save_library(path, snippets)` — `persistence.rs:158-297`
+### `load_library(path) / save_library(path, snippets)` — `persistence.rs:199-338`
 
 ```rust
 pub fn load_library(path: &Path) -> SnipResult<Snippets>
@@ -158,21 +158,21 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>>
 
 - **Load fails closed on malformed TOML**: best-effort copy to
   `<file>.toml.corrupt.bak`, then `SnipError::toml_error` — never
-  synthesize a writable empty library (`persistence.rs:170-196`).
+  synthesize a writable empty library (`persistence.rs:211-237`).
   Missing file or empty/whitespace file returns `Snippets::default()`
-  (`persistence.rs:159-166`). A missing file and an empty file are
+  (`persistence.rs:200-207`). A missing file and an empty file are
   different cases and must stay different.
 - **Save path**: gates on interrupted transactions, acquires the
   local-data lock, calls `backup_library()`, sorts by `updated_at`
   descending through a borrowed `SortedSnippetsView` (no payload clone),
   writes verbatim `toml::to_string_pretty` output via
   `write_private_atomic`, then invalidates the TOML cache
-  (`persistence.rs:217-297`).
+  (`persistence.rs:258-338`).
 
 ### The save path never post-processes TOML
 
 `save_library` writes the output of `toml::to_string_pretty` **verbatim**
-(`persistence.rs:208-216`). There is exactly one serialization-then-write
+(`persistence.rs:249-257`). There is exactly one serialization-then-write
 site, and nothing may run between them.
 
 Any post-processing pass (re-indenting, key sorting, trimming, "fixing"
@@ -211,13 +211,13 @@ would have caught your bug.
 directory**, not from the target library path:
 
 ```rust
-let sync_state_dir = crate::config::derive_sync_state_dir();  // persistence.rs:223
-let transaction_dir = crate::local_data::transaction_dir();   // persistence.rs:224
+let sync_state_dir = crate::config::derive_sync_state_dir();  // persistence.rs:264
+let transaction_dir = crate::local_data::transaction_dir();   // persistence.rs:265
 crate::transaction::gate_mutation_on_interrupted_transactions(
     &sync_state_dir,
     &transaction_dir,
-)?;                                                            // persistence.rs:225-228
-let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?; // persistence.rs:233
+)?;                                                            // persistence.rs:266-269
+let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?; // persistence.rs:274
 ```
 
 Deriving these from the target library path meant a unit test that saved to
@@ -232,7 +232,7 @@ restores the previous value on drop, including on assertion panic. Because
 it is thread-local, parallel unit tests do not race on a process-global
 `XDG_CONFIG_HOME` mutation.
 
-`save_library_internal` (`persistence.rs:251-263`) skips the gate and the
+`save_library_internal` (`persistence.rs:292-304`) skips the gate and the
 lock. It is valid only for callers that already hold the local-data lock and
 have already passed the gate — restore uses it so the global gate does not
 see restore's *own* journal as interrupted and roll it back mid-flight.
@@ -249,7 +249,7 @@ library format depends on.
 
 ## Deterministic ID normalization
 
-`normalize_snippet_ids` (`persistence.rs:36-61`) runs on every load and has
+`normalize_snippet_ids` (`persistence.rs:38-102`) runs on every load and has
 exactly two branches:
 
 | Branch | Condition | Action |
@@ -266,11 +266,11 @@ sequence regardless of which branch processes them. This keeps IDs
 deterministic for a fixed file order; inserting or reordering
 identical-content snippets can shift provisional IDs of unrelated
 missing-ID snippets (accepted churn after sync merges)
-(`persistence.rs:30-35`).
+(`persistence.rs:32-37`).
 
 ### The digest preimage
 
-`deterministic_legacy_id` (`persistence.rs:87-116`) hashes:
+`deterministic_legacy_id` (`persistence.rs:128-157`) hashes:
 
 ```
 "snip-it-legacy-id-v1\0" + description + "\0" + command + "\0"
@@ -278,7 +278,7 @@ missing-ID snippets (accepted churn after sync merges)
 + favorite-as-one-byte + "\0" + device_id + "\0" + occurrence.to_le_bytes()
 ```
 
-`deterministic_duplicate_id` (`persistence.rs:119-149`) hashes the same
+`deterministic_duplicate_id` (`persistence.rs:160-190`) hashes the same
 fields prefixed with `"snip-it-duplicate-id-v1\0"` and the original ID.
 
 Both render as `legacy-<64 lowercase hex chars>`. The full lifecycle rules
@@ -291,7 +291,7 @@ are in [../docs/IDENTITY_CONTRACT.md](../docs/IDENTITY_CONTRACT.md).
 
 ### The content fingerprint
 
-`snippet_content_key` (`persistence.rs:64-84`) builds the occurrence
+`snippet_content_key` (`persistence.rs:105-125`) builds the occurrence
 counter key from the same field set — description, command, tags, output,
 folders, `favorite` as `"1"`/`"0"`, and `device_id` — joined by NUL.
 
@@ -302,19 +302,19 @@ folders, `favorite` as `"1"`/`"0"`, and `device_id` — joined by NUL.
 `src/library/manager.rs`
 
 ```rust
-pub fn new() -> SnipResult<Self>                                  // manager.rs:41
-pub fn ensure_library_mode(&mut self) -> SnipResult<()>           // manager.rs:163
-pub fn migrate_from_single_file(&mut self) -> SnipResult<()>      // manager.rs:181
-pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> // manager.rs:363
-pub fn delete_library(&mut self, filename: &str) -> SnipResult<()>      // manager.rs:429
-pub fn set_primary(&mut self, filename: &str) -> SnipResult<()>         // manager.rs:499
+pub fn new() -> SnipResult<Self>                                  // manager.rs:43
+pub fn ensure_library_mode(&mut self) -> SnipResult<()>           // manager.rs:165
+pub fn migrate_from_single_file(&mut self) -> SnipResult<()>      // manager.rs:183
+pub fn create_library(&mut self, filename: &str) -> SnipResult<PathBuf> // manager.rs:376
+pub fn delete_library(&mut self, filename: &str) -> SnipResult<()>      // manager.rs:442
+pub fn set_primary(&mut self, filename: &str) -> SnipResult<()>         // manager.rs:512
 pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()>
 pub fn link_server_library(&mut self, filename: &str, server_id: &str) -> SnipResult<()>
 pub fn relink_server_library(&mut self, filename: &str, server_id: &str, last_sync: Option<i64>) -> SnipResult<()>
 pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()>
 pub fn add_existing_library(&mut self, filename: &str) -> SnipResult<()>
 pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()>
-pub fn add_server_library(&mut self, server_name: &str, server_id: &str) -> SnipResult<PathBuf> // manager.rs:648
+pub fn add_server_library(&mut self, server_name: &str, server_id: &str) -> SnipResult<PathBuf> // manager.rs:678
 ```
 
 ### `ensure_library_mode()` — the MUTATING path
@@ -329,8 +329,8 @@ pub fn ensure_library_mode(&mut self) -> SnipResult<()> {
 ```
 
 `is_single_file_mode()` is `!self.libraries_dir.exists()`
-(`manager.rs:153-155`). `ensure_library_mode` therefore **mutates**:
-`migrate_from_single_file` (`manager.rs:181-209`) creates `libraries/`,
+(`manager.rs:155-157`). `ensure_library_mode` therefore **mutates**:
+`migrate_from_single_file` (`manager.rs:183-222`) creates `libraries/`,
 copies the legacy `~/.config/snp/snippets.toml` to
 `libraries/snippets.toml`, registers it as primary, bumps `generation`, and
 saves `libraries.toml`. The original legacy file is left behind as a second,
@@ -346,20 +346,20 @@ effect of a read.
 pub fn resolve_readonly_sources(
     &self,
     library: Option<&str>,
-) -> SnipResult<Vec<ResolvedLibrarySource>>            // manager.rs:248-289
+) -> SnipResult<Vec<ResolvedLibrarySource>>            // manager.rs:261-302
 
 pub fn readonly_library_sources(
     library: Option<&str>,
-) -> SnipResult<Vec<ResolvedLibrarySource>>             // manager.rs:784-787
+) -> SnipResult<Vec<ResolvedLibrarySource>>             // manager.rs:815-818
 ```
 
 `readonly_library_sources` is the process-level entry point: it constructs a
 `LibraryManager` and delegates to `resolve_readonly_sources`. It performs no
-migration and creates no files or directories (`manager.rs:779-787`).
+migration and creates no files or directories (`manager.rs:810-818`).
 
 `resolve_readonly_sources` never calls `ensure_library_mode`, never creates
 directories or files, and never rewrites metadata
-(`manager.rs:237-243`). Scope semantics:
+(`manager.rs:250-256`). Scope semantics:
 
 | `library` argument | Result |
 |--------------------|--------|
@@ -370,15 +370,15 @@ directories or files, and never rewrites metadata
 
 In legacy single-file mode the resolver represents the legacy file as an
 implicit `snippets` library so normal CLI resolution keeps working
-(`manager.rs:252-269`).
+(`manager.rs:265-282`).
 
-Consumers: `commands::load_readonly_snippets` (`src/commands/mod.rs:127-147`,
+Consumers: `commands::load_readonly_snippets` (`src/commands/mod.rs:169-189`,
 used by `snp list`), `selector::resolve_selector_readonly()` (`snp get`), MCP
 `tools.rs` list/search/get.
 
 > **`snp list` was migrated by a read.** Before the fix, `snp list` resolved
 > through `get_library_path`, which calls the *mutating*
-> `ensure_library_mode()` (`src/commands/mod.rs:91-115`). On a legacy
+> `ensure_library_mode()` (`src/commands/mod.rs:91-157`). On a legacy
 > single-file checkout a plain `snp list` created `libraries/`, copied the
 > legacy file (leaving the original behind as a second, now-inert copy),
 > wrote `libraries.toml`, and bumped the generation. `list` now resolves via
@@ -386,7 +386,7 @@ used by `snp list`), `selector::resolve_selector_readonly()` (`snp get`), MCP
 > (`src/commands/list_cmd.rs:65-77`), which routes `"all"` through
 > `LibraryScope::from_filter_arg` so `--library all` means the same thing
 > here as on `snp get`, exact-mode `run`/`clip`/`edit`, and MCP
-> (`src/commands/mod.rs:117-126`).
+> (`src/commands/mod.rs:159-168`).
 >
 > `snp search` rejects `--library all` outright, because the interactive
 > selector edits and deletes within a single library file
@@ -395,43 +395,43 @@ used by `snp list`), `selector::resolve_selector_readonly()` (`snp get`), MCP
 ### Index inspection
 
 ```rust
-pub fn inspect_library_index(&self) -> LibraryIndexInspection  // manager.rs:297
+pub fn inspect_library_index(&self) -> LibraryIndexInspection  // manager.rs:310
 ```
 
 Existence checks + directory listing only. `doctor`, `validate`, `repair`,
 `status` render this shared state into their own diagnostic types; no
-generic finding DSL was introduced (`manager.rs:291-297`).
+generic finding DSL was introduced (`manager.rs:304-310`).
 
 ### CRUD and linkage
 
-- **Migration single → multi** (`manager.rs:181-209`): copies legacy
+- **Migration single → multi** (`manager.rs:183-222`): copies legacy
   `~/.config/snp/snippets.toml` to `libraries/snippets.toml`, registers
   it as primary, bumps `generation`, saves config. Empty/missing legacy
   file is a no-op.
 - **Create**: validates name, rejects case-insensitive duplicates and
   existing files, writes `snippets = []` starter via `write_library_file`,
-  first library becomes primary (`manager.rs:363-423`).
+  first library becomes primary (`manager.rs:376-436`).
 - **Delete**: saves config *before* removing the file (crash leaves a
   recoverable orphan file, never a stale index pointer); promotes another
   library when primary is removed, preferring a server-linked one
-  (`manager.rs:429-496`). Restores the pre-delete config if file removal
+  (`manager.rs:442-509`). Restores the pre-delete config if file removal
   fails.
 - Every mutating method calls `gate_mutation()` + acquires the
   local-data lock first; `save_config()` writes `libraries.toml` via
-  `write_private_atomic` + cache invalidation (`manager.rs:766-776`).
+  `write_private_atomic` + cache invalidation (`manager.rs:797-807`).
 - `gate_mutation()` runs *before* any in-memory mutation, so a refused call
   leaves the manager clean for a retry after `snp repair`
-  (`manager.rs:636-642`).
+  (`manager.rs:666-672`).
 
 ### Config loading — fail closed
 
-`LibraryManager::new()` (`manager.rs:41-92`) parses `libraries.toml`. A
+`LibraryManager::new()` (`manager.rs:43-94`) parses `libraries.toml`. A
 **malformed** file is copied to `libraries.toml.corrupt` on a best-effort
 basis and then returns `SnipError::toml_error` — it never synthesizes a
-writable empty config (`manager.rs:56-81`). A **missing** file yields
-`LibraryConfig::default()` (`manager.rs:82-84`).
+writable empty config (`manager.rs:58-83`). A **missing** file yields
+`LibraryConfig::default()` (`manager.rs:84-86`).
 
-`LibraryManager::with_config_dir` (`manager.rs:98-140`) is the `#[cfg(test)]`
+`LibraryManager::with_config_dir` (`manager.rs:100-142`) is the `#[cfg(test)]`
 counterpart of `new()` that roots the manager at an explicit directory
 without mutating process-wide environment variables.
 
@@ -512,8 +512,8 @@ cross-library scope keyword in
 - Save path does NOT post-process `toml::to_string_pretty` — tabs,
   trailing spaces, CRLF in the golden corpus must survive verbatim.
 - Malformed library/`libraries.toml` fails closed (backup + error);
-  missing/empty files give defaults (`manager.rs:53-84`,
-  `persistence.rs:158-166`).
+  missing/empty files give defaults (`manager.rs:55-86`,
+  `persistence.rs:199-207`).
 - `output`/`folders`/`favorite` are local-only: excluded from the sync
   fingerprint, `output` not in `ProtoSnippet` (see [output.md](output.md)).
 - Library names: non-empty, ≤50 chars, no `/`, `\`, NUL, `.`/`..`, no

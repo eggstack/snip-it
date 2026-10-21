@@ -68,21 +68,21 @@ qualified service name is `snip_proto.SnippetSync`
 
 | # | RPC | Request | Response | Server impl | Used by the `snip-it` client |
 |---|-----|---------|----------|-------------|-------------------------------|
-| 1 | `GetSnippets` | `GetSnippetsRequest` | `SnippetList` | `snip-sync/src/lib.rs:1049` | **No** |
-| 2 | `PushSnippets` | `PushSnippetsRequest` | `PushSnippetsResponse` | `snip-sync/src/lib.rs:1160` | Yes — `src/sync.rs:838` |
-| 3 | `Sync` | `SyncRequest` | `SyncResponse` | `snip-sync/src/lib.rs:1347` | Yes — `src/sync.rs:886` |
-| 4 | `Health` | `HealthRequest` | `HealthResponse` | `snip-sync/src/lib.rs:961` | Yes — `src/sync.rs:899` |
-| 5 | `Register` | `RegisterRequest` | `RegisterResponse` | `snip-sync/src/lib.rs:978` | Yes — `src/sync.rs:934` |
-| 6 | `CreateLibrary` | `CreateLibraryRequest` | `CreateLibraryResponse` | `snip-sync/src/lib.rs:1583` | Yes — `src/sync.rs:1027` |
-| 7 | `ListLibraries` | `ListLibrariesRequest` | `ListLibrariesResponse` | `snip-sync/src/lib.rs:1640` | Yes — `src/sync.rs:981` |
-| 8 | `DeleteLibrary` | `DeleteLibraryRequest` | `DeleteLibraryResponse` | `snip-sync/src/lib.rs:1701` | **No** |
-| 9 | `ListPremadeLibraries` | `ListPremadeLibrariesRequest` | `ListPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1761` | Yes — `src/sync.rs:1062` |
-| 10 | `GetPremadeLibrary` | `GetPremadeLibraryRequest` | `GetPremadeLibraryResponse` | `snip-sync/src/lib.rs:1813` | Yes — `src/sync.rs:1095` |
-| 11 | `SearchPremadeLibraries` | `SearchPremadeLibrariesRequest` | `SearchPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1885` | Yes — `src/sync.rs:1139` |
+| 1 | `GetSnippets` | `GetSnippetsRequest` | `SnippetList` | `snip-sync/src/lib.rs:1070` | **No** |
+| 2 | `PushSnippets` | `PushSnippetsRequest` | `PushSnippetsResponse` | `snip-sync/src/lib.rs:1181` | Yes — `src/sync.rs:938` |
+| 3 | `Sync` | `SyncRequest` | `SyncResponse` | `snip-sync/src/lib.rs:1375` | Yes — `src/sync.rs:1011` |
+| 4 | `Health` | `HealthRequest` | `HealthResponse` | `snip-sync/src/lib.rs:982` | Yes — `src/sync.rs:1024` |
+| 5 | `Register` | `RegisterRequest` | `RegisterResponse` | `snip-sync/src/lib.rs:999` | Yes — `src/sync.rs:1059` |
+| 6 | `CreateLibrary` | `CreateLibraryRequest` | `CreateLibraryResponse` | `snip-sync/src/lib.rs:1641` | Yes — `src/sync.rs:1152` |
+| 7 | `ListLibraries` | `ListLibrariesRequest` | `ListLibrariesResponse` | `snip-sync/src/lib.rs:1698` | Yes — `src/sync.rs:1106` |
+| 8 | `DeleteLibrary` | `DeleteLibraryRequest` | `DeleteLibraryResponse` | `snip-sync/src/lib.rs:1759` | **No** |
+| 9 | `ListPremadeLibraries` | `ListPremadeLibrariesRequest` | `ListPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1819` | Yes — `src/sync.rs:1187` |
+| 10 | `GetPremadeLibrary` | `GetPremadeLibraryRequest` | `GetPremadeLibraryResponse` | `snip-sync/src/lib.rs:1871` | Yes — `src/sync.rs:1220` |
+| 11 | `SearchPremadeLibraries` | `SearchPremadeLibrariesRequest` | `SearchPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1943` | Yes — `src/sync.rs:1264` |
 
 The server implements all 11. The client calls **9** — it never calls
 `GetSnippets` (it always uses the bidirectional `Sync`) and never calls
-`DeleteLibrary` (the client's `delete_library` at `src/library/manager.rs:429`
+`DeleteLibrary` (the client's `delete_library` at `src/library/manager.rs:442`
 is a *local* library delete, unrelated to the RPC).
 
 ### Generated Rust surface
@@ -170,8 +170,8 @@ Tombstone visibility differs by RPC:
 
 | RPC | `include_deleted` | Tombstones returned? | Site |
 |-----|-------------------|----------------------|------|
-| `GetSnippets` | `false` | **No** | `snip-sync/src/lib.rs:1116` |
-| `Sync` | `true` | **Yes** | `snip-sync/src/lib.rs:1501` |
+| `GetSnippets` | `false` | **No** | `snip-sync/src/lib.rs:1137` |
+| `Sync` | `true` | **Yes** | `snip-sync/src/lib.rs:1557` |
 
 The schema comment states this directly: *"Deletion tombstone. Tombstones are
 returned by Sync, not GetSnippets."*
@@ -191,7 +191,7 @@ from the API key, which the server also receives as a bearer token — see
 When the client encrypts a snippet it blanks the other plaintext fields:
 
 ```rust
-// src/sync.rs:1283-1293
+// src/sync.rs:1408-1418
 Ok(crate::proto::Snippet {
     id: snippet.id.clone(),
     description: String::new(),
@@ -206,7 +206,7 @@ Ok(crate::proto::Snippet {
 ```
 
 The server validates the two shapes separately
-(`snip-sync/src/lib.rs:848-956`):
+(`snip-sync/src/lib.rs:869-977`):
 
 | Condition | Limit applied |
 |-----------|---------------|
@@ -236,7 +236,7 @@ message Library {
 Library IDs are **scoped to the authenticated account**
 (`snip-proto/proto/sync.proto:31`); an unowned library ID yields
 `Status::not_found("Library not found")`, not a permission error
-(`snip-sync/src/lib.rs:1094`).
+(`snip-sync/src/lib.rs:1115`).
 
 ### PremadeLibrary
 
@@ -272,13 +272,13 @@ Server defaults and clamps:
 
 | RPC | `limit = 0` default | Clamp | Site |
 |-----|---------------------|-------|------|
-| `GetSnippets` | 100 | `clamp(1, MAX_REQUEST_LIMIT)` | `snip-sync/src/lib.rs:1107-1111` |
-| `Sync` | 1000 | `clamp(1, MAX_REQUEST_LIMIT)` | `snip-sync/src/lib.rs:1485-1489` |
+| `GetSnippets` | 100 | `clamp(1, MAX_REQUEST_LIMIT)` | `snip-sync/src/lib.rs:1128-1132` |
+| `Sync` | 1000 | `clamp(1, MAX_REQUEST_LIMIT)` | `snip-sync/src/lib.rs:1537-1541` |
 
-`MAX_REQUEST_LIMIT = 1000` (`snip-sync/src/lib.rs:108`).
+`MAX_REQUEST_LIMIT = 1000` (`snip-sync/src/lib.rs:117`).
 
 `has_more` is computed as `offset + page_len < total` **OR** the page was
-byte-truncated (`snip-sync/src/lib.rs:1147`, `:1536`) — a page that had
+byte-truncated (`snip-sync/src/lib.rs:1168`, `:1536`) — a page that had
 rows dropped for size still reports `has_more`, so the client does not stop
 early and lose data.
 
@@ -296,14 +296,14 @@ Two different fields carry the incremental-sync watermark, and they are
 SQL is:
 
 ```sql
--- snip-sync/src/db.rs:501-505
+-- snip-sync/src/db.rs:634-635
 WHERE user_id = ?
   AND library_id = ?
   AND updated_at >= ?
   AND (? OR deleted = 0)
 ```
 
-and the reason is stated in the source (`snip-sync/src/db.rs:493-498`):
+and the reason is stated in the source (`snip-sync/src/db.rs:626-631`):
 timestamps have **second granularity** and the watermark returned to the
 client is `MAX(updated_at)`. With `>`, a row written in the same second as
 the previous sync's watermark would be skipped by every future incremental
@@ -325,8 +325,8 @@ snippet identity.
 **`last_sync_timestamp` does not gate the upload.** It selects the page of
 *returned* records; every record in `SyncRequest.local_snippets` is merged
 regardless of the watermark, using that record's own `updated_at` for
-conflict resolution (`snip-sync/src/lib.rs:1423-1470`,
-`snip-sync/src/db.rs:596`, `:647`).
+conflict resolution (`snip-sync/src/lib.rs:1457-1509`,
+`snip-sync/src/db.rs:679`, `:647`).
 
 > The `.proto` schema comment is **correct**: *"Every local record is considered
 > for insertion or conflict resolution; `last_sync_timestamp` only selects the
@@ -343,7 +343,7 @@ When `has_more` is true the server returns the **incoming**
 `last_sync_timestamp` as `server_timestamp`, not a fresh watermark:
 
 ```rust
-// snip-sync/src/lib.rs:1538-1551 (shape)
+// snip-sync/src/lib.rs:1596-1609 (shape)
 let timestamp = if has_more {
     // Don't advance timestamp when paginating — client needs to fetch remaining pages
     req.last_sync_timestamp
@@ -353,7 +353,7 @@ let timestamp = if has_more {
 ```
 
 `get_latest_timestamp` is `MAX(updated_at)` over the library
-(`snip-sync/src/db.rs:690-700`). Advancing the watermark while records
+(`snip-sync/src/db.rs:773-783`). Advancing the watermark while records
 remain would silently skip them on the next incremental sync.
 
 ## Authentication
@@ -373,7 +373,7 @@ The remaining request messages (`CreateLibraryRequest`, `ListLibrariesRequest`,
 
 The server accepts the key from the authorization metadata first and falls
 back to the message field on every authenticated RPC — e.g.
-`snip-sync/src/lib.rs:1058` for `GetSnippets`, `:1169` for `PushSnippets`,
+`snip-sync/src/lib.rs:1079` for `GetSnippets`, `:1169` for `PushSnippets`,
 `:1353` for `Sync`.
 
 `RegisterResponse.api_key` (`snip-proto/proto/sync.proto:139`) is the **one
@@ -383,22 +383,22 @@ exception** — that is where the key is *issued*.
 
 | Limit | Value | Where |
 |-------|-------|-------|
-| gRPC max message size (server) | 4 MiB | `snip-sync/src/lib.rs:104` — `DEFAULT_GRPC_MAX_MESSAGE_SIZE` |
+| gRPC max message size (server) | 4 MiB | `snip-sync/src/lib.rs:113` — `DEFAULT_GRPC_MAX_MESSAGE_SIZE` |
 | Client request ceiling | 3.5 MiB (`3_584 * 1024`) | `src/sync.rs:46` — `DEFAULT_CLIENT_REQUEST_CEILING` |
-| Max records per page | 1000 | `snip-sync/src/lib.rs:108` — `MAX_REQUEST_LIMIT` |
-| Max command length (plaintext) | 1024 | `snip-sync/src/lib.rs:86` |
-| Max description length | 1024 | `snip-sync/src/lib.rs:94` |
-| Max tags | 50 | `snip-sync/src/lib.rs:95` |
-| Max tag length | 100 | `snip-sync/src/lib.rs:96` |
-| Max snippets per request | 10 000 | `snip-sync/src/lib.rs:100` — `DEFAULT_MAX_SYNC_SNIPPETS` (checked at `:1218` and `:1363`) |
-| Max snippet ID length | 128 | `snip-sync/src/lib.rs:97` |
-| Max device ID length | 128 | `snip-sync/src/lib.rs:98` |
-| Max API key length | 512 | `snip-sync/src/lib.rs:99` |
+| Max records per page | 1000 | `snip-sync/src/lib.rs:117` — `MAX_REQUEST_LIMIT` |
+| Max command length (plaintext) | 1024 | `snip-sync/src/lib.rs:95` |
+| Max description length | 1024 | `snip-sync/src/lib.rs:103` |
+| Max tags | 50 | `snip-sync/src/lib.rs:104` |
+| Max tag length | 100 | `snip-sync/src/lib.rs:105` |
+| Max snippets per request | 10 000 | `snip-sync/src/lib.rs:109` — `DEFAULT_MAX_SYNC_SNIPPETS` (checked at `:1218` and `:1363`) |
+| Max snippet ID length | 128 | `snip-sync/src/lib.rs:106` |
+| Max device ID length | 128 | `snip-sync/src/lib.rs:107` |
+| Max API key length | 512 | `snip-sync/src/lib.rs:108` |
 
 The client ceiling is deliberately **below** the server's 4 MiB limit. The
 client measures its request with Prost's `encoded_len()` — not a character
 count — so the encoded size is what it bounds
-(`src/sync.rs:1360-1395`).
+(`src/sync.rs:1496-1531`).
 
 ## Code Generation
 
@@ -437,7 +437,7 @@ stub retains the old wording until the next explicit regen.
 
 | Topic | `snip-proto/proto/sync.proto` | `snip-proto/src/snip_proto.rs` | Reality |
 |-------|--------------------|---------------------|---------|
-| `since` filter | *"…updated_at greater than or equal to since (>=)"* (corrected) | *"strictly greater than since"* (`:357-358`, `:642`) | **`>=`** — `snip-sync/src/db.rs:501-505` |
+| `since` filter | *"…updated_at greater than or equal to since (>=)"* (corrected) | *"strictly greater than since"* (`:357-358`, `:642`) | **`>=`** — `snip-sync/src/db.rs:634-635` |
 | `last_sync_timestamp` | *"Every local record is considered for insertion or conflict resolution; `last_sync_timestamp` only selects the page of server rows returned."* (corrected) | *"The server uses each record's own timestamp for conflict resolution; `last_sync_timestamp` only selects returned data."* (`:48-49`) | Both correct — the stub was right first |
 
 Doc comments do not affect the wire format, so the drift is harmless to
@@ -481,7 +481,7 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 | `src/sync.rs` | The client: 9 RPCs, the retry macro, the byte ceiling |
 | `src/sync_commands.rs:423-437` | `From<&Snippet> for ProtoSnippet` — what reaches the wire |
 | `snip-sync/src/lib.rs` | The server: all 11 RPCs, validation, paging |
-| `snip-sync/src/db.rs:481-528` | The `>=` download filter |
+| `snip-sync/src/db.rs:165-210` | The `>=` download filter |
 
 ## Invariants
 
@@ -531,4 +531,4 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 - **The `encrypted` flag is not set by the generic conversion.**
   `From<&Snippet> for ProtoSnippet` always sets `encrypted: false`
   (`src/sync_commands.rs:434`); the encrypted form is built explicitly in
-  `src/sync.rs:1283-1293`.
+  `src/sync.rs:1408-1418`.

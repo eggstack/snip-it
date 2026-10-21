@@ -37,7 +37,9 @@ impl LibraryManager {
     /// Creates a new `LibraryManager`, loading configuration from disk.
     ///
     /// Handles macOS config directory migration and parses `libraries.toml`.
-    /// Returns defaults if the config file is missing or corrupted.
+    /// Returns defaults if the config file is missing or empty. A malformed
+    /// `libraries.toml` fails closed: the file is backed up on a best-effort
+    /// basis and an error is returned.
     pub fn new() -> SnipResult<Self> {
         // Migrate legacy macOS config dir if needed
         if let Err(e) = crate::utils::config::migrate_macos_config_dir() {
@@ -195,8 +197,19 @@ impl LibraryManager {
         }
 
         let new_path = self.libraries_dir.join("snippets.toml");
-        fs::copy(&legacy_path, &new_path)
-            .map_err(|e| SnipError::io_error("migrate snippets file", new_path.clone(), e))?;
+        // Write through the atomic layer: an interrupted in-place copy would
+        // leave a truncated `libraries/snippets.toml`, and because the
+        // libraries directory now exists the legacy file is orphaned and
+        // never read again.
+        crate::utils::atomic::write_private_atomic(&new_path, &content, "snippets").map_err(
+            |e| {
+                SnipError::io_error(
+                    "migrate snippets file",
+                    new_path.clone(),
+                    std::io::Error::other(e.to_string()),
+                )
+            },
+        )?;
 
         let mut meta = LibraryMeta::new("snippets");
         meta.is_primary = true;
@@ -523,12 +536,13 @@ snippets = []
     pub fn update_library_id(&mut self, filename: &str, library_id: &str) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
-        if let Some(lib) = self.get_library_by_filename_mut(filename) {
-            lib.library_id = library_id.to_string();
+        let lib = self
+            .get_library_by_filename_mut(filename)
+            .ok_or_else(|| Self::library_not_found_error(filename))?;
+        lib.library_id = library_id.to_string();
 
-            self.bump_generation();
-            self.save_config()?;
-        }
+        self.bump_generation();
+        self.save_config()?;
         Ok(())
     }
 
@@ -536,13 +550,14 @@ snippets = []
     pub fn link_server_library(&mut self, filename: &str, server_id: &str) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
-        if let Some(lib) = self.get_library_by_filename_mut(filename) {
-            lib.library_id = server_id.to_string();
-            lib.server_id = Some(server_id.to_string());
+        let lib = self
+            .get_library_by_filename_mut(filename)
+            .ok_or_else(|| Self::library_not_found_error(filename))?;
+        lib.library_id = server_id.to_string();
+        lib.server_id = Some(server_id.to_string());
 
-            self.bump_generation();
-            self.save_config()?;
-        }
+        self.bump_generation();
+        self.save_config()?;
         Ok(())
     }
 
@@ -555,14 +570,15 @@ snippets = []
     ) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
-        if let Some(lib) = self.get_library_by_filename_mut(filename) {
-            lib.library_id = server_id.to_string();
-            lib.server_id = Some(server_id.to_string());
-            lib.last_sync = last_sync;
+        let lib = self
+            .get_library_by_filename_mut(filename)
+            .ok_or_else(|| Self::library_not_found_error(filename))?;
+        lib.library_id = server_id.to_string();
+        lib.server_id = Some(server_id.to_string());
+        lib.last_sync = last_sync;
 
-            self.bump_generation();
-            self.save_config()?;
-        }
+        self.bump_generation();
+        self.save_config()?;
         Ok(())
     }
 
@@ -570,13 +586,14 @@ snippets = []
     pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
-        if let Some(lib) = self.get_library_by_filename_mut(filename) {
-            lib.library_id.clear();
-            lib.server_id = None;
+        let lib = self
+            .get_library_by_filename_mut(filename)
+            .ok_or_else(|| Self::library_not_found_error(filename))?;
+        lib.library_id.clear();
+        lib.server_id = None;
 
-            self.bump_generation();
-            self.save_config()?;
-        }
+        self.bump_generation();
+        self.save_config()?;
         Ok(())
     }
 
@@ -611,13 +628,26 @@ snippets = []
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
-        if let Some(lib) = self.get_library_by_filename_mut(filename) {
-            lib.last_sync = Some(timestamp);
+        let lib = self
+            .get_library_by_filename_mut(filename)
+            .ok_or_else(|| Self::library_not_found_error(filename))?;
+        lib.last_sync = Some(timestamp);
 
-            self.bump_generation();
-            self.save_config()?;
-        }
+        self.bump_generation();
+        self.save_config()?;
         Ok(())
+    }
+
+    /// Error returned by mutators that target an unregistered library.
+    ///
+    /// Mirrors the wording used by [`Self::set_primary`] and
+    /// [`Self::delete_library`] so every mutator reports a missing library
+    /// the same way instead of silently succeeding.
+    fn library_not_found_error(filename: &str) -> SnipError {
+        SnipError::runtime_error(
+            "Library not found",
+            Some(&format!("No library with filename '{filename}'")),
+        )
     }
 
     /// Acquires the local-data lock to serialize against backup snapshot capture.
@@ -715,6 +745,7 @@ snippets = []
     /// Validates the filename against path traversal attacks before writing.
     /// Returns the path to the saved file.
     pub fn save_premade_library(&self, filename: &str, content: &str) -> SnipResult<PathBuf> {
+        self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         self.init_premade_dir()?;
 

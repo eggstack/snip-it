@@ -476,10 +476,10 @@ This is the single most important isolation fact in the suite.
 
 Unit tests run **in the same process** as each other, in parallel threads.
 `save_library` derives its transaction-gate and local-data-lock paths from
-the **config directory** (`src/library/persistence.rs:223-224`):
+the **config directory** (`src/library/persistence.rs:264-265`):
 
 ```rust
-// src/library/persistence.rs:223-224
+// src/library/persistence.rs:264-265
 let sync_state_dir = crate::config::derive_sync_state_dir();
 let transaction_dir = crate::local_data::transaction_dir();
 crate::transaction::gate_mutation_on_interrupted_transactions(
@@ -862,7 +862,7 @@ pub mod test_observer;
 `test_observer` provides the `TestRequestObserver` trait and
 `InMemoryObserver`, which retain sanitized request telemetry only — no API
 key, authorization header, raw body, or plaintext payload
-(`snip-sync/src/test_observer.rs:1-22`).
+(`snip-sync/src/test_observer.rs:1-23`).
 
 The `snip-it` crate pulls `snip-sync` in as a dev-dependency with the feature
 already on (`Cargo.toml:152`):
@@ -1457,7 +1457,7 @@ See [Production Seam Proof](#production-seam-proof).
 - **`tests/identity_contract.rs` now isolates the config directory.** *(Fixed.)*
   It calls `save_library` in-process, which runs the
   mutation gate and acquires the local-data lock — both derived from the
-  **config directory** (`src/library/persistence.rs:223-224` →
+  **config directory** (`src/library/persistence.rs:264-265` →
   `src/utils/config.rs:227-232` → `src/local_data.rs:398-400`). It
   previously set neither `XDG_CONFIG_HOME` nor a `ScopedConfigDir`, so the
   gate and the lock resolved against the developer's real `~/.config/snp/`:

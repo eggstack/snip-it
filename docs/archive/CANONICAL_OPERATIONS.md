@@ -59,17 +59,17 @@ This is the only significant loader variant. It is used by `list_cmd` and `new_c
 
 | Caller | Location | Adapts? |
 |--------|----------|---------|
-| `save_snippets(s, config)` | `src/commands/mod.rs:163` | Yes — resolves path via `get_config_path(config)`, uses `backup_library` but different temp-file/atomic-write path. **Semantics differ: does not sort by `updated_at`.** |
+| `save_snippets(s, config)` | `src/commands/mod.rs:205` | Yes — resolves path via `get_config_path(config)`, uses `backup_library` but different temp-file/atomic-write path. **Semantics differ: does not sort by `updated_at`.** |
 | `sync_commands::merge_and_save` | `src/sync_commands.rs:350` | No — direct call |
 | `edit_cmd::run` | `src/commands/edit_cmd.rs:108` | No |
 | `import_cmd` (4 sites) | `src/commands/import_cmd.rs:295,386,394,416` | No |
 | `new_cmd::run` | `src/commands/new_cmd.rs:568` | No |
-| `mod.rs:310` | `src/commands/mod.rs:310` | No |
+| `mod.rs:310` | `src/commands/mod.rs:352` | No |
 | `sync_cmd` (3 sites) | `src/commands/sync_cmd.rs:37,81,969` | No |
 
 ### Duplicates / Concern
 
-`save_snippets` (`src/commands/mod.rs:163`) is a **parallel implementation** that skips the `updated_at` sort. Used only by `new_cmd` fallback.
+`save_snippets` (`src/commands/mod.rs:205`) is a **parallel implementation** that skips the `updated_at` sort. Used only by `new_cmd` fallback.
 
 ---
 
@@ -142,7 +142,7 @@ These are **not duplicates** — `rank_snippets` is for non-interactive list out
 
 | Caller | Location | Adapts? |
 |--------|----------|---------|
-| `expand_snippet_command` | `src/commands/mod.rs:236` | No — called after TUI prompt collects values |
+| `expand_snippet_command` | `src/commands/mod.rs:278` | No — called after TUI prompt collects values |
 
 ### Duplicates
 
@@ -195,7 +195,7 @@ Called after snippet execution/clip via `run_snippet_selection` → `process_fn`
 
 | Caller | Location |
 |--------|----------|
-| `run_snippet_selection` | `src/commands/mod.rs:272` |
+| `run_snippet_selection` | `src/commands/mod.rs:314` |
 | `list_cmd::run` | `src/commands/list_cmd.rs:86` |
 
 ### Duplicates
@@ -385,7 +385,7 @@ None. Single canonical status persistence path.
 | Function | Location | Purpose |
 |----------|----------|---------|
 | `pending::record_success` | `src/auto_sync/pending.rs:136` | Delegates to `clear_if_generation_matches` |
-| `worker::clear_after_explicit_sync` | `src/auto_sync/worker.rs:736` | Wraps with sync_succeeded check |
+| `worker::clear_after_explicit_sync` | `src/auto_sync/worker.rs:745` | Wraps with sync_succeeded check |
 | `notification::clear_pending_after_explicit_sync` | `src/auto_sync/notification.rs:136` | Resolves state_dir, delegates |
 
 ### Callers — `clear_if_generation_matches`
@@ -393,8 +393,8 @@ None. Single canonical status persistence path.
 | Caller | Location |
 |--------|----------|
 | `pending::record_success` | `src/auto_sync/pending.rs:140` |
-| `worker::execute_sync` (success path) | `src/auto_sync/worker.rs:256` |
-| `worker::clear_after_explicit_sync` | `src/auto_sync/worker.rs:744` |
+| `worker::execute_sync` (success path) | `src/auto_sync/worker.rs:267` |
+| `worker::clear_after_explicit_sync` | `src/auto_sync/worker.rs:753` |
 | `sync_cmd::run_discard_pending` | `src/commands/sync_cmd.rs:671` |
 | `sync_cmd::run_repair` | `src/commands/sync_cmd.rs:574` |
 
@@ -402,7 +402,7 @@ None. Single canonical status persistence path.
 
 | Caller | Location |
 |--------|----------|
-| `commands/mod.rs` (run/clip/search post-sync) | `src/commands/mod.rs:329,402` |
+| `commands/mod.rs` (run/clip/search post-sync) | `src/commands/mod.rs:371,402` |
 | `sync_cmd::run` | `src/commands/sync_cmd.rs:328` |
 
 ### Duplicates
@@ -476,7 +476,7 @@ None. `doctor` is read-only diagnostics; `repair` is write-capable state recover
 | Issue | Severity | Location |
 |-------|----------|----------|
 | `load_snippets` parallel implementation | Medium | `src/commands/mod.rs:114` vs `src/library.rs:659` — no ID dedup, no cached_read_toml, returns error not default |
-| `save_snippets` parallel implementation | Low | `src/commands/mod.rs:163` vs `src/library.rs:726` — no `updated_at` sort |
+| `save_snippets` parallel implementation | Low | `src/commands/mod.rs:205` vs `src/library.rs:726` — no `updated_at` sort |
 | Inline sync direction resolution | Low | `src/commands/sync_cmd.rs:253` vs `src/auto_sync/policy.rs` — equivalent logic, duplication risk |
 | No export function | Info | Export is implicit via `save_library` to arbitrary path |
 

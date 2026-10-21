@@ -7,9 +7,14 @@
 //!
 //! The server acquires this lock nonblocking at startup. While the lock
 //! is held, current owner metadata is published in the persistent lock file
-//! and the listeners run. Dropping the guard releases the kernel lock; the
-//! persistent lock file remains on disk. Current servers do not create a
-//! separate PID file.
+//! (and, atomically, in an `*.owner` record beside it) while the listeners
+//! run. Dropping the guard releases the kernel lock; the persistent lock
+//! file remains on disk. Current servers do not create a separate PID file.
+//!
+//! The owner record is published to a sidecar file through a temporary file
+//! and a rename, because the in-place record inside the lock file is
+//! truncated and rewritten: a concurrent reader could otherwise observe it
+//! empty and lose the ability to identify (and stop) the running server.
 //!
 //! A new server can start after a crashed owner exits because the kernel
 //! releases the lock when the previous owner closes its file descriptor
@@ -42,6 +47,9 @@ pub struct ServerLockIdentity {
 
 const SERVER_LOCK_NAME: &str = "snip-sync.server.lock";
 const SERVER_LOCK_SCHEMA_VERSION: u32 = 1;
+/// Name of the legacy PID file, kept as a bounded upgrade fallback for
+/// identifying the owner of a busy lock.
+const LEGACY_PID_FILE_NAME: &str = "snip-sync.pid";
 
 /// Errors from [`ServerLock::try_acquire`].
 #[derive(Debug)]
@@ -160,6 +168,58 @@ pub fn server_lock_path(state_dir: &Path) -> PathBuf {
     state_dir.join(SERVER_LOCK_NAME)
 }
 
+/// Path of the atomically published owner record beside the server lock
+/// file.
+///
+/// The record lives in its own file because the lock file itself is
+/// truncated and rewritten in place, so a concurrent reader could observe
+/// it empty and lose the ability to identify the running server.
+fn server_owner_path(lock_path: &Path) -> PathBuf {
+    let mut name = lock_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(".owner");
+    lock_path.with_file_name(name)
+}
+
+/// True when the error means "the call was interrupted by a signal" and can
+/// be retried unchanged.
+#[cfg(unix)]
+fn is_retryable_lock_error(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EINTR)
+}
+
+#[cfg(not(unix))]
+fn is_retryable_lock_error(_error: &std::io::Error) -> bool {
+    false
+}
+
+/// Try to take the exclusive `flock` without blocking.
+///
+/// Returns `Ok(false)` when the lock is held by somebody else. A call
+/// interrupted by a signal (`EINTR`) is retried: it is a transient
+/// condition, not an I/O failure, and must not abort server startup with a
+/// misleading error.
+#[cfg(unix)]
+fn acquire_unix_lock(file: &File) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    loop {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if is_retryable_lock_error(&error) {
+            continue;
+        }
+        if matches!(error.raw_os_error(), Some(libc::EWOULDBLOCK)) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+}
+
 impl ServerLock {
     /// Try to acquire the singleton server lock without waiting.
     pub fn try_acquire(state_dir: &Path) -> Result<Self, ServerLockError> {
@@ -177,15 +237,13 @@ impl ServerLock {
 
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd;
-            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-            if rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if matches!(err.raw_os_error(), Some(libc::EWOULDBLOCK)) {
-                    let owner = read_owner(&path);
+            match acquire_unix_lock(&file) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let owner = busy_owner(state_dir, &path);
                     return Err(ServerLockError::Busy { owner });
                 }
-                return Err(ServerLockError::Io(err));
+                Err(error) => return Err(ServerLockError::Io(error)),
             }
         }
 
@@ -213,7 +271,7 @@ impl ServerLock {
             if ok == 0 {
                 let err = std::io::Error::last_os_error();
                 if matches!(err.raw_os_error(), Some(33) | Some(32)) {
-                    let owner = read_owner(&path);
+                    let owner = busy_owner(state_dir, &path);
                     return Err(ServerLockError::Busy { owner });
                 }
                 return Err(ServerLockError::Io(err));
@@ -243,7 +301,7 @@ impl ServerLock {
             }
         }
 
-        if let Err(e) = publish_identity(&mut file, &identity) {
+        if let Err(e) = publish_identity(&path, &mut file, &identity) {
             #[cfg(unix)]
             release_unix_lock(Some(&file));
             #[cfg(windows)]
@@ -259,23 +317,128 @@ impl ServerLock {
     }
 }
 
-fn publish_identity(file: &mut File, identity: &ServerLockIdentity) -> std::io::Result<()> {
-    file.set_len(0)?;
-    file.seek(std::io::SeekFrom::Start(0))?;
+/// Publish the owner identity.
+///
+/// The authoritative record is written to a temporary file beside the owner
+/// path and renamed over it, so a concurrent reader always observes a
+/// complete record. The in-place copy inside the lock file is kept as a
+/// diagnostic record for operators.
+fn publish_identity(
+    lock_path: &Path,
+    file: &mut File,
+    identity: &ServerLockIdentity,
+) -> std::io::Result<()> {
     let serialized = toml::to_string_pretty(identity)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    publish_owner_sidecar(&server_owner_path(lock_path), serialized.as_bytes())?;
+
+    file.set_len(0)?;
+    file.seek(std::io::SeekFrom::Start(0))?;
     file.write_all(serialized.as_bytes())?;
     file.sync_all()?;
     Ok(())
 }
 
+/// Write `contents` to `owner_path` atomically: a uniquely named temporary
+/// file next to the target is written, fsynced, and renamed over the target.
+fn publish_owner_sidecar(owner_path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = owner_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = owner_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{SERVER_LOCK_NAME}.owner"));
+    let temp_path = parent.join(format!("{file_name}.tmp-{}", uuid::Uuid::new_v4()));
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut temp = {
+            #[cfg(unix)]
+            {
+                // Owner-private permissions, set at creation time (no
+                // chmod window), like the lock file itself.
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut options = OpenOptions::new();
+                options.write(true).create_new(true).mode(0o600);
+                options.open(&temp_path)
+            }
+            #[cfg(not(unix))]
+            {
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temp_path)
+            }
+        }?;
+        temp.write_all(contents)?;
+        temp.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    if let Err(error) = std::fs::rename(&temp_path, owner_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    // Make the rename itself durable.
+    if let Ok(directory) = File::open(parent) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
+}
+
 /// Best-effort read of the on-disk server lock metadata.
+///
+/// The atomically published owner record is preferred; the in-place record
+/// inside the lock file is the fallback for metadata written by an older
+/// build.
 pub fn read_owner(path: &Path) -> Option<ServerLockIdentity> {
+    if let Some(identity) = read_identity_file(&server_owner_path(path)) {
+        return Some(identity);
+    }
+    read_identity_file(path)
+}
+
+fn read_identity_file(path: &Path) -> Option<ServerLockIdentity> {
     let raw = std::fs::read_to_string(path).ok()?;
     if raw.trim().is_empty() {
         return None;
     }
     toml::from_str(&raw).ok()
+}
+
+/// Resolve the owner of a busy lock.
+///
+/// The published owner record is authoritative. When it cannot be read at
+/// all, the legacy PID file is consulted as a bounded upgrade fallback, so
+/// `stop` can still act on a live server instead of dead-ending on missing
+/// metadata.
+fn busy_owner(state_dir: &Path, lock_path: &Path) -> Option<ServerLockIdentity> {
+    read_owner(lock_path).or_else(|| legacy_pid_owner(state_dir))
+}
+
+/// Build an owner identity from a legacy PID file.
+fn legacy_pid_owner(state_dir: &Path) -> Option<ServerLockIdentity> {
+    let pid_path = state_dir.join(LEGACY_PID_FILE_NAME);
+    let (pid, start_token) = match crate::process::parse_pid_file(&pid_path) {
+        crate::process::ParsedPidFile::Structured(record) => (record.pid, record.start_token),
+        crate::process::ParsedPidFile::LegacyPid(pid) => (pid, None),
+        crate::process::ParsedPidFile::Empty | crate::process::ParsedPidFile::Malformed(_) => {
+            return None;
+        }
+    };
+    Some(ServerLockIdentity {
+        schema_version: SERVER_LOCK_SCHEMA_VERSION,
+        pid,
+        start_token,
+        nonce: format!("legacy-pid-{pid}"),
+        // The acquisition time of a legacy record is unknown; the moment the
+        // record was observed is recorded instead.
+        acquired_at_unix_ms: unix_now_ms(),
+    })
 }
 
 fn unix_now_ms() -> u64 {
@@ -456,5 +619,61 @@ mod tests {
         let s = toml::to_string_pretty(&id).unwrap();
         let back: ServerLockIdentity = toml::from_str(&s).unwrap();
         assert_eq!(id, back);
+    }
+
+    #[test]
+    fn busy_path_recovers_the_owner_when_the_lock_file_record_is_torn() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let guard = ServerLock::try_acquire(dir.path()).unwrap();
+        let path = server_lock_path(dir.path());
+        // Simulate the in-place record being observed while it is rewritten:
+        // the lock file is truncated while the owner is still running.
+        std::fs::write(&path, "").unwrap();
+
+        match ServerLock::try_acquire(dir.path()) {
+            Err(ServerLockError::Busy { owner }) => {
+                let owner = owner.expect("the busy path must resolve an owner");
+                assert_eq!(owner.pid, std::process::id());
+                assert_eq!(owner.nonce, guard.nonce());
+            }
+            other => panic!("expected Busy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn busy_path_falls_back_to_the_legacy_pid_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = ServerLock::try_acquire(dir.path()).unwrap();
+        let path = server_lock_path(dir.path());
+        // No owner record can be read at all: neither the atomically
+        // published record nor the in-place one.
+        std::fs::write(&path, "").unwrap();
+        std::fs::remove_file(server_owner_path(&path)).unwrap();
+        std::fs::write(
+            dir.path().join(LEGACY_PID_FILE_NAME),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+
+        match ServerLock::try_acquire(dir.path()) {
+            Err(ServerLockError::Busy { owner }) => {
+                let owner = owner.expect("the legacy PID file must resolve an owner");
+                assert_eq!(owner.pid, std::process::id());
+            }
+            other => panic!("expected Busy, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retryable_lock_error_is_only_eintr() {
+        let interrupted = std::io::Error::from_raw_os_error(libc::EINTR);
+        assert!(is_retryable_lock_error(&interrupted));
+
+        let would_block = std::io::Error::from_raw_os_error(libc::EAGAIN);
+        assert!(!is_retryable_lock_error(&would_block));
+
+        let other = std::io::Error::other("not an errno");
+        assert!(!is_retryable_lock_error(&other));
     }
 }

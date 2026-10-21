@@ -7,7 +7,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Snippet files could be silently corrupted on load.** The TOML escape repair
+  in `src/utils/toml_helpers.rs` rebuilt a repaired string from raw bytes, so
+  (a) every valid TOML escape other than `\\` and `\"` (`\t`, `\r`, `\n`,
+  `\b`, `\f`, `\uXXXX`, `\UXXXXXXXX`) was frozen into two literal characters,
+  and (b) every non-ASCII byte was mapped through Latin-1, turning `café` into
+  `cafÃ©`. A snippet whose command held a lone CR plus the legacy `\<`
+  convention round-tripped through save → load with the CR byte destroyed — the
+  repair silently changed what the snippet *executes*. The repair now slices
+  the string out of the original source, decodes it to the value it denotes,
+  and re-emits it (raw literal when the value allows one, basic string with
+  proper escapes otherwise), so the **parsed value is unchanged**. Non-ASCII
+  bare keys and table headers, which the old scanner corrupted unconditionally,
+  are copied a whole character at a time now.
+- **Two snippets could share one ID.** `normalize_snippet_ids` minted a
+  provisional ID from a content fingerprint whose occurrence index was only
+  advanced for snippets that took the empty-ID branch, so a snippet already
+  holding `legacy-<hash(content, 0)>` did not consume index 0 — and a later
+  sibling with the same content and an empty ID was handed the very same ID.
+  One of the two was then unreachable by ID and collapsed into a single row on
+  the server. Every ID the file already carries is now reserved before any
+  provisional ID is minted, which makes the outcome independent of file order.
+- **`snp register` could print the complete API key.** The mask compared byte
+  length but did arithmetic on character count, so a short multibyte key either
+  printed in full or underflowed (`chars.len() - 4`). The API key is
+  server-supplied and arbitrary. Both the guard and the arithmetic now use
+  character counts.
+- **`snp select` migrated a legacy checkout although it is classified
+  read-only.** It routed through the mutating library resolver, so a plain
+  `snp select` created `libraries/`, copied the legacy file, wrote
+  `libraries.toml`, and bumped the generation. It now uses the canonical
+  read-only resolver — the same one `snp list`, `snp get`, and `snp validate`
+  use.
+- **`snip-sync` listed zero premade libraries.** Two independent defects: the
+  shipped `bash-scripts.toml` contained an invalid `\$` TOML escape and failed
+  to parse, and the server's deserializer required `Command` while all 23
+  shipped files use `command` — so every snippet was dropped for an empty
+  command. The server now accepts both spellings, matching the client's model.
+- **A remote tombstone was reported as "overwritten by another device".**
+  `overwritten_by_remote` counted every server row the merge preferred, which
+  includes a remote deletion. A tombstone is a deletion, not an overwrite.
+- **The TUI could execute the wrong snippet.** The filter rebuild is debounced
+  by 35 ms, and Enter broke the event loop without flushing a pending
+  rebuild, so the selection could be resolved against the pre-edit list. The
+  pending rebuild is now flushed before the selection is resolved and before
+  the copy path reads the selection.
+- **`snp edit --output-stdin` consumed stdin before validating `--filter`.**
+  An invalid invocation blocked until Ctrl-D and swallowed a piped input
+  before exiting non-zero. The requirement is now checked first.
+- **A corrupt lock was reported as "Live".** `is_process_alive` cast a `u32`
+  PID to `i32` without a range check, so `0xFFFF_FFFF` became `-1` and
+  `kill(-1, 0)` signalled every process the caller may signal.
+- **Local-only commands still built a multi-threaded Tokio runtime.**
+  `bool::then_some(&RUNTIME)` evaluates its argument unconditionally, so the
+  `LazyLock` was forced even when `--sync` was not set. The closure form
+  `then(|| &*RUNTIME)` is lazy.
+- **Five `LibraryManager` mutators silently succeeded for an unknown
+  library.** `update_library_id`, `link_server_library`,
+  `relink_server_library`, `unlink_server_library`, and `update_last_sync`
+  returned `Ok(())` when no library matched. They now return the same
+  `Library not found` error as `delete_library` and `set_primary`.
+- **Two mutations skipped the transaction gate.** `save_premade_library` and
+  `save_sync_settings` wrote into the config tree without
+  `gate_mutation_on_interrupted_transactions()`, so a write could land in the
+  tree an interrupted restore is about to roll back.
+- **The legacy migration and the migration rollback were not atomic.** Both
+  used `fs::copy`, which truncates the destination and does not fsync: a crash
+  mid-copy left `libraries/snippets.toml` truncated while the good legacy file
+  was orphaned. Both go through the atomic write layer now.
+- **Backup rotation deleted another library's backups.** The cleanup filter
+  matched `foo.bar.<ts>.toml.bak` for the stem `foo`. The matcher now requires
+  exactly `<stem>.<timestamp>.toml.bak`.
+- **`snip-sync`'s `Sync` RPC reported success after a database failure.**
+  Upsert errors were logged and counted as validation skips, and the handler
+  still returned `success: true` — a misleading success signal and a
+  permanently-retrying client. A database error now rolls the transaction
+  back and returns `Status::internal`, matching `push_snippets`, and is
+  counted by a new `snip_sync_db_errors_total` metric.
+- **`/metrics` returned an empty body when the real registry was
+  unavailable.** `Metrics::fallback()` never registered its handles.
+- **A zero-length rate-limit window disabled rate limiting entirely.** A
+  zero-length window is now clamped to one second.
+- **The rate limiter used the wall clock,** so a backwards clock jump locked
+  clients out. The window bookkeeping uses a monotonic clock now.
+- **The gRPC `Bearer` scheme was matched case-sensitively.** `bearer <key>` was
+  rejected although the HTTP auth scheme is case-insensitive.
+- **`snip-sync stop` could dead-end.** The owner record was written into the
+  lock file, which is truncated and rewritten in place, so a concurrent reader
+  could observe it empty and lose the ability to identify the running server.
+  The owner record is now published to a sidecar file through a temp file and
+  an atomic rename; the `flock` stays on the canonical inode, so the kernel
+  lock is not weakened.
+- **`flock` interrupted by a signal aborted server startup** with a
+  misleading I/O error. `EINTR` is now retried.
+- **The self-update staged the binary under a predictable name** through
+  `fs::copy`, which follows a symlink. The staging file is now created with
+  `create_new` under an unguessable name.
+- **The self-update did not fsync the install directory** after the rename,
+  so the replacement could be lost on a crash.
+
+### Changed
+
+- **The sync upload path no longer deep-clones the request on every retry.**
+  `tonic::Request::from_shared` does not exist in tonic 0.14, so the `Sync`
+  RPC now goes through a codec that encodes an `Arc<SyncRequest>`; the request
+  is built once and shared by every attempt. The bytes on the wire are
+  identical to the generated client's.
+- **The encryption phase is now inside the sync budget and off the runtime
+  thread.** `ensure_budget` was a pre-flight check only — the deadline
+  covered the RPC but not the Argon2id derivations — and the batch ran
+  synchronously on the tokio worker thread, which for the auto-sync worker is
+  the only runtime thread. A large library therefore burned the whole budget
+  deriving keys, then timed out on the first RPC and was retried forever. The
+  budget is now checked before every snippet, and the batch runs on the
+  blocking pool. The salt scope is unchanged: one salt per encrypted payload.
+- **`searchable_text` no longer allocates twice per snippet per query.** The
+  output is byte-identical to the previous implementation — proven by a test
+  that keeps the old implementation as an oracle.
+- **The auto-sync worker no longer busy-polls the pending marker** every
+  250 ms when the deadline is far away; the poll interval scales with the
+  remaining time.
+- **The backup copy is now durable.** `fs::copy` does not fsync, so a backup
+  could be torn; the copy is fsynced (best-effort) after it is written.
+- **`snip-sync`'s delta page no longer runs a second full `COUNT(*)` scan**
+  when the page can prove the answer. `total` and `has_more` are unchanged.
+- **The test observer no longer removes from the front of a `Vec`** on every
+  request; both buffers are `VecDeque`s. The public API is unchanged.
+
+### Security
+
+- The API-key mask disclosure is a security fix — see `Fixed`. The complete
+  key could be printed to stdout for a short multibyte server-supplied key.
+
+### Known limitations
+
+- **A snippet pushed with an old `updated_at` can still become invisible to
+  other devices.** The server's delta cursor is `updated_at`, which the
+  client controls, so a device with a clock behind (or restored from an old
+  backup) can push a row that no other device ever pulls. The fix — a
+  monotonic per-library write sequence as the cursor — needs a protocol and
+  schema change and is recorded, not yet implemented, in
+  `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+- **`snip-sync` still holds one write transaction across a whole upsert
+  batch.** Releasing it sooner means splitting the batch into several
+  transactions, which changes the all-or-nothing contract the code and its
+  tests rely on. That is a design decision, not a patch.
+
 ### Documentation
+- **`README.md` rewritten around the quickstart.** It is now a short
+  install → store → list → use → script walkthrough with the verified output of
+  every example, and the detail (libraries, shell integration, pet import,
+  sync, MCP, themes, diagnostics) is a one-line table that points at
+  `docs/USER_GUIDE.md` and the other contract documents. Two claims were
+  corrected while doing it: there is no `snp theme` subcommand (themes are
+  picked with `e` in the TUI or set in `themes.toml`), and `snp doctor`
+  requires a mode (`--library`, `--pet-file`, `--compatibility`, `--sync`, or
+  `--check-shell`).
 - **`docs/` re-verified against source**: every contract doc was audited
   line-by-line against the current tree. The most consequential fixes — the
   durability-class column in `PERSISTENCE_INVENTORY.md` was wrong for

@@ -73,6 +73,17 @@ pub struct Library {
     pub snippet_count: i64,
 }
 
+/// One page of snippets plus the paging facts derived from the page.
+#[derive(Debug, Clone)]
+pub struct SnippetPage {
+    /// The rows of this page (never more than the requested limit).
+    pub snippets: Vec<Snippet>,
+    /// True when rows exist beyond this page.
+    pub has_more: bool,
+    /// Exact number of rows in the filtered range.
+    pub total: i32,
+}
+
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
@@ -138,6 +149,103 @@ fn saturating_i32(v: i64) -> i32 {
 }
 
 type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
+
+/// Count the rows of the filtered range.
+///
+/// `>=` (not `>`) is required for delta correctness: timestamps have second
+/// granularity and the watermark returned to the client is `MAX(updated_at)`.
+/// With `>`, a row written in the same second as the previous sync's
+/// watermark would be skipped by every future incremental sync.
+/// Re-delivering boundary rows is safe — merges are idempotent by snippet
+/// identity.
+async fn count_snippets(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    library_id: &str,
+    since: i64,
+    include_deleted: bool,
+) -> DbResult<i32> {
+    let total: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM snippets \
+         WHERE user_id = ? \
+           AND library_id = ? \
+           AND updated_at >= ? \
+           AND (? OR deleted = 0)",
+    )
+    .bind(user_id)
+    .bind(library_id)
+    .bind(since)
+    .bind(include_deleted)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    Ok(saturating_i32(total.0))
+}
+
+/// Read one page of the filtered range, newest first.
+async fn fetch_snippets(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    library_id: &str,
+    since: i64,
+    limit: i32,
+    offset: i32,
+    include_deleted: bool,
+) -> DbResult<Vec<Snippet>> {
+    let rows: Vec<SnippetRow> = sqlx::query_as(
+        "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
+         FROM snippets \
+         WHERE user_id = ? \
+           AND library_id = ? \
+           AND updated_at >= ? \
+           AND (? OR deleted = 0) \
+         ORDER BY updated_at DESC, id DESC \
+         LIMIT ? OFFSET ?",
+    )
+    .bind(user_id)
+    .bind(library_id)
+    .bind(since)
+    .bind(include_deleted)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    rows.into_iter()
+        .map(
+            |(
+                id,
+                description,
+                command,
+                tags_str,
+                created_at,
+                updated_at,
+                device_id,
+                deleted,
+                encrypted,
+            )| {
+                // Surface corruption to repair flows instead of
+                // silently substituting an empty tag list.
+                let tags: Vec<String> = serde_json::from_str(&tags_str).map_err(|e| {
+                    DbError::Internal(format!(
+                        "corrupt tags JSON for snippet {id} (row must be repaired): {e}"
+                    ))
+                })?;
+                Ok(Snippet {
+                    id,
+                    description,
+                    command,
+                    tags,
+                    created_at,
+                    updated_at,
+                    device_id,
+                    deleted: deleted != 0,
+                    encrypted: encrypted != 0,
+                })
+            },
+        )
+        .collect::<DbResult<Vec<Snippet>>>()
+}
 
 const MIGRATION_BATCH_SIZE: i64 = 100;
 
@@ -488,86 +596,61 @@ impl Database {
         offset: i32,
         include_deleted: bool,
     ) -> DbResult<(Vec<Snippet>, i32)> {
+        let page = self
+            .get_snippets_page(user_id, library_id, since, limit, offset, include_deleted)
+            .await?;
+        Ok((page.snippets, page.total))
+    }
+
+    /// Fetch one page of snippets together with the paging facts derived
+    /// from it.
+    ///
+    /// The page is read with `LIMIT limit + 1`, so `has_more` comes from the
+    /// rows themselves instead of a second `COUNT(*)` scan over the same
+    /// range. The exact `total` is taken from the page whenever the page is
+    /// the last one (the range then holds exactly `offset + rows` rows); when
+    /// the range continues past the page — or the requested offset is past
+    /// the end of the range — the range is still counted so `total` keeps
+    /// its exact meaning.
+    pub async fn get_snippets_page(
+        &self,
+        user_id: &str,
+        library_id: &str,
+        since: i64,
+        limit: i32,
+        offset: i32,
+        include_deleted: bool,
+    ) -> DbResult<SnippetPage> {
         let mut tx = self.pool.begin().await?;
 
-        // `>=` (not `>`) is required for delta correctness: timestamps have
-        // second granularity and the watermark returned to the client is
-        // `MAX(updated_at)`. With `>`, a row written in the same second as
-        // the previous sync's watermark would be skipped by every future
-        // incremental sync. Re-delivering boundary rows is safe — merges are
-        // idempotent by snippet identity.
-        let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM snippets \
-             WHERE user_id = ? \
-               AND library_id = ? \
-               AND updated_at >= ? \
-               AND (? OR deleted = 0)",
+        let page_limit = limit.max(0);
+        let mut snippets = fetch_snippets(
+            &mut tx,
+            user_id,
+            library_id,
+            since,
+            page_limit.saturating_add(1),
+            offset,
+            include_deleted,
         )
-        .bind(user_id)
-        .bind(library_id)
-        .bind(since)
-        .bind(include_deleted)
-        .fetch_one(&mut *tx)
         .await?;
 
-        let rows: Vec<SnippetRow> = sqlx::query_as(
-            "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
-             FROM snippets \
-             WHERE user_id = ? \
-               AND library_id = ? \
-               AND updated_at >= ? \
-               AND (? OR deleted = 0) \
-             ORDER BY updated_at DESC, id DESC \
-             LIMIT ? OFFSET ?",
-        )
-        .bind(user_id)
-        .bind(library_id)
-        .bind(since)
-        .bind(include_deleted)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&mut *tx)
-        .await?;
+        let has_more = snippets.len() > page_limit as usize;
+        snippets.truncate(page_limit as usize);
+
+        let total = if !has_more && (!snippets.is_empty() || offset == 0) {
+            offset.saturating_add(snippets.len() as i32)
+        } else {
+            count_snippets(&mut tx, user_id, library_id, since, include_deleted).await?
+        };
 
         tx.commit().await?;
 
-        let snippets = rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    description,
-                    command,
-                    tags_str,
-                    created_at,
-                    updated_at,
-                    device_id,
-                    deleted,
-                    encrypted,
-                )| {
-                    // Surface corruption to repair flows instead of
-                    // silently substituting an empty tag list.
-                    let tags: Vec<String> = serde_json::from_str(&tags_str).map_err(|e| {
-                        DbError::Internal(format!(
-                            "corrupt tags JSON for snippet {id} (row must be repaired): {e}"
-                        ))
-                    })?;
-                    Ok(Snippet {
-                        id,
-                        description,
-                        command,
-                        tags,
-                        created_at,
-                        updated_at,
-                        device_id,
-                        deleted: deleted != 0,
-                        encrypted: encrypted != 0,
-                    })
-                },
-            )
-            .collect::<DbResult<Vec<Snippet>>>()?;
-
-        Ok((snippets, saturating_i32(total.0)))
+        Ok(SnippetPage {
+            snippets,
+            has_more,
+            total,
+        })
     }
 
     #[cfg(test)]

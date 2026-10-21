@@ -208,7 +208,7 @@ recovers the inner value instead of panicking.
 
 `ThemeManager::init_themes_dir` (`src/ui/theme.rs:477-494`) extracts the
 bundled themes into `~/.config/snp/themes/`. It is **not** called at startup —
-its only caller is `ensure_theme_picker_ready` (`src/ui/mod.rs:425`), which
+its only caller is `ensure_theme_picker_ready` (`src/ui/mod.rs:540`), which
 runs the first time the user opens the theme picker. Consequences:
 
 - On a fresh install the `themes/` directory does not exist until the picker
@@ -267,7 +267,7 @@ the selection index, the latter are the theme definitions.
 
 ### The theme picker
 
-The picker overlay lives in the TUI loop (`src/ui/mod.rs:414-497` and
+The picker overlay lives in the TUI loop (`src/ui/mod.rs:529-612` and
 `:1368-1554`); see [tui.md](tui.md#theme-picker). It:
 
 - snapshots the in-memory `Theme` before opening (`theme_picker_original`),
@@ -424,15 +424,15 @@ at all — all highlighting lives in `src/ui/highlight.rs`.
 The highlighter is **lazy and budgeted**, not precomputed at startup:
 
 - `highlighted_commands: Vec<Option<Line<'static>>>` is allocated once
-  (`src/ui/mod.rs:573`) and filled on demand.
-- `command_line_for_display` (`src/ui/mod.rs:329-343`) returns the cached
+  (`src/ui/mod.rs:688`) and filled on demand.
+- `command_line_for_display` (`src/ui/mod.rs:444-458`) returns the cached
   line, or falls back to unstyled text when the cache is cold.
-- `warm_visible_highlights` (`src/ui/mod.rs:345-371`) fills the cache for the
+- `warm_visible_highlights` (`src/ui/mod.rs:460-486`) fills the cache for the
   visible rows only, under a **2 ms per-frame budget**
-  (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:634`), and only when no input is
+  (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:749`), and only when no input is
   pending (`:1271-1289`).
 - A theme change invalidates the whole cache (`pending_rehighlight` →
-  `fill_with(|| None)`, `src/ui/mod.rs:703-708`).
+  `fill_with(|| None)`, `src/ui/mod.rs:828-833`).
 
 ## Key Files
 
@@ -445,9 +445,9 @@ The highlighter is **lazy and budgeted**, not precomputed at startup:
 | `src/utils/variables.rs` (1947 lines) | Variable grammar — `parse_variables`, `expand_command`, `strip_escape_sequences` |
 | `scripts/build_themes.py` | The only legitimate writer of the generated themes file |
 | `themes/*.toml` (50 files) | Halloy theme sources, including `Cyber Red.toml` (the embedded default) |
-| `src/ui/mod.rs:414-497` | Theme-picker plumbing: `ensure_theme_picker_ready`, preview, commit, cancel |
+| `src/ui/mod.rs:529-612` | Theme-picker plumbing: `ensure_theme_picker_ready`, preview, commit, cancel |
 | `src/ui/theme.rs:639` | `ACTIVE_THEME` — the process-global `RwLock<Theme>` |
-| `src/ui/mod.rs:345-371` | `warm_visible_highlights` — the 2 ms per-frame highlighting budget |
+| `src/ui/mod.rs:460-486` | `warm_visible_highlights` — the 2 ms per-frame highlighting budget |
 
 ## Invariants
 
@@ -482,7 +482,7 @@ The highlighter is **lazy and budgeted**, not precomputed at startup:
   `python3 scripts/build_themes.py` after changing anything under `themes/`.
   The generated header says so at `src/ui/_generated_bundled_themes.rs:1-3`.
 - **`themes/` is seeded lazily**, on the first theme-picker open
-  (`src/ui/mod.rs:425`) — not on first launch. A fresh install has no
+  (`src/ui/mod.rs:540`) — not on first launch. A fresh install has no
   `themes/` directory until then.
 - **`themes.toml` and `themes/*.toml` are different files.** The first is the
   selection index (`active = "…"`), the second are the definitions.
@@ -515,4 +515,4 @@ The highlighter is **lazy and budgeted**, not precomputed at startup:
   names.** The former is the modal prompt UI; the latter is the grammar and
   expander. `src/utils/mod.rs:20-23` re-exports only the latter's helpers.
 - **`get_theme()` takes a read lock on every call.** The draw loop snapshots
-  it once per frame (`src/ui/mod.rs:886`); do not call it per span.
+  it once per frame (`src/ui/mod.rs:977`); do not call it per span.

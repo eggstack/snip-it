@@ -235,7 +235,7 @@ Each of these is a distinct recovery state that `snp repair` must classify and r
 | `--json` | stdout | the serialized `RestoreReport` (`:1736-1740`) |
 | default | stderr | `Restore complete (mode: …)`, files restored, conflict list, skipped list, pre-restore backup path (`:1741-1759`) |
 
-`snp restore` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:423-426`). Failures are `SnipError`s mapped through `src/outcome.rs:48-72`.
+`snp restore` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:449-452`). Failures are `SnipError`s mapped through `src/outcome.rs:48-72`.
 
 ## Interaction with the transaction journal and locks
 

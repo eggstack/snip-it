@@ -1,5 +1,5 @@
 use super::model::validate_library_name;
-use super::persistence::deterministic_legacy_id;
+use super::persistence::{deterministic_legacy_id, is_backup_name_for_stem};
 use super::*;
 use crate::config::cached_read_toml;
 use std::collections::HashSet;
@@ -1698,6 +1698,92 @@ fn test_legacy_ids_include_folder_favorite_and_device() {
     assert_ne!(base_id, deterministic_legacy_id(&device_variant, 0));
 }
 
+#[test]
+fn test_persisted_id_is_not_re_minted_for_identical_sibling() {
+    // A snippet that already owns `legacy-<hash(content, 0)>` must not let a
+    // later empty-ID sibling with the same content take that ID again: the
+    // two would share one identity, so the snippet would be unreachable by
+    // ID and would collapse into a single row on the server.
+    let temp_dir = TestDir::new();
+    let path = temp_dir.path().join("sibling.toml");
+
+    let content = Snippet {
+        description: "dup".to_string(),
+        command: "echo dup".to_string(),
+        ..Default::default()
+    };
+    let persisted_id = deterministic_legacy_id(&content, 0);
+
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+[[snippets]]
+id = "{persisted_id}"
+description = "dup"
+command = "echo dup"
+
+[[snippets]]
+id = ""
+description = "dup"
+command = "echo dup"
+"#
+        ),
+    )
+    .unwrap();
+
+    let loaded = load_library(&path).unwrap();
+    assert_eq!(loaded.snippets.len(), 2);
+
+    let ids: HashSet<&str> = loaded.snippets.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "snippet IDs must be unique: {ids:?}");
+    assert!(
+        ids.contains(persisted_id.as_str()),
+        "the persisted ID must be kept: {ids:?}"
+    );
+}
+
+#[test]
+fn test_load_never_yields_duplicate_ids() {
+    // The empty-ID sibling may appear *before* the persisted one; the
+    // reserved-ID pass makes the outcome independent of file order.
+    let temp_dir = TestDir::new();
+    let path = temp_dir.path().join("order.toml");
+
+    let content = Snippet {
+        description: "dup".to_string(),
+        command: "echo dup".to_string(),
+        ..Default::default()
+    };
+    let persisted_id = deterministic_legacy_id(&content, 0);
+
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+[[snippets]]
+id = ""
+description = "dup"
+command = "echo dup"
+
+[[snippets]]
+id = "{persisted_id}"
+description = "dup"
+command = "echo dup"
+"#
+        ),
+    )
+    .unwrap();
+
+    let loaded = load_library(&path).unwrap();
+    let ids: HashSet<&str> = loaded.snippets.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "snippet IDs must be unique: {ids:?}");
+    assert!(
+        ids.contains(persisted_id.as_str()),
+        "the persisted ID must be kept: {ids:?}"
+    );
+}
+
 // ── Plan 009: canonical read-only resolution + shared inspection ──
 
 fn write_index(dir: &std::path::Path, libs: &[LibraryMeta]) {
@@ -1872,5 +1958,230 @@ fn test_find_orphaned_ids_shared_classifier() {
     assert_eq!(
         find_orphaned_ids(&active, &usage),
         vec!["c".to_string(), "d".to_string()]
+    );
+}
+
+// ─── Manager mutation contracts (bugs.md #11) ───
+
+#[test]
+fn test_mutators_report_unknown_library() {
+    let temp_dir = TestDir::new();
+    let mut mgr = LibraryManager::with_config_dir(temp_dir.path().to_path_buf()).unwrap();
+
+    // Every mutator must report the missing library instead of silently
+    // succeeding: a silent no-op made sync re-create and re-link the same
+    // library on every run.
+    let errors = [
+        mgr.update_library_id("missing", "server-id").unwrap_err(),
+        mgr.link_server_library("missing", "server-id").unwrap_err(),
+        mgr.relink_server_library("missing", "server-id", Some(0))
+            .unwrap_err(),
+        mgr.unlink_server_library("missing").unwrap_err(),
+        mgr.update_last_sync("missing", 42).unwrap_err(),
+    ];
+    for err in &errors {
+        assert!(
+            err.to_string().contains("Library not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // Nothing was written and no generation was consumed.
+    assert!(!temp_dir.path().join("libraries.toml").exists());
+    assert_eq!(mgr.generation(), 0);
+}
+
+#[test]
+fn test_mutators_update_known_library() {
+    let temp_dir = TestDir::new();
+    let mut mgr = LibraryManager::with_config_dir(temp_dir.path().to_path_buf()).unwrap();
+    mgr.add_existing_library("known").unwrap();
+
+    mgr.update_library_id("known", "library-id").unwrap();
+    mgr.link_server_library("known", "server-id").unwrap();
+    mgr.relink_server_library("known", "server-id", Some(7))
+        .unwrap();
+    assert_eq!(
+        mgr.get_library_by_filename("known").unwrap().last_sync,
+        Some(7)
+    );
+
+    mgr.unlink_server_library("known").unwrap();
+    let meta = mgr.get_library_by_filename("known").unwrap();
+    assert!(meta.library_id.is_empty());
+    assert!(meta.server_id.is_none());
+
+    mgr.update_last_sync("known", 99).unwrap();
+    assert_eq!(
+        mgr.get_library_by_filename("known").unwrap().last_sync,
+        Some(99)
+    );
+}
+
+// ─── Backup rotation is per library (bugs.md #12) ───
+
+#[test]
+fn test_backup_name_matcher_only_accepts_own_library() {
+    // This library's own backup.
+    assert!(is_backup_name_for_stem(
+        "foo.20260101_120000_000000.toml.bak",
+        "foo"
+    ));
+    // Another library whose name starts with `foo`.
+    assert!(!is_backup_name_for_stem(
+        "foo.bar.20260101_120000_000000.toml.bak",
+        "foo"
+    ));
+    // …but that library's backup still belongs to its own stem.
+    assert!(is_backup_name_for_stem(
+        "foo.bar.20260101_120000_000000.toml.bak",
+        "foo.bar"
+    ));
+    // Not a backup file at all.
+    assert!(!is_backup_name_for_stem("foo.toml", "foo"));
+    assert!(!is_backup_name_for_stem(
+        "foo.20260101_120000_000000.toml",
+        "foo"
+    ));
+    // A different library entirely.
+    assert!(!is_backup_name_for_stem(
+        "bar.20260101_120000_000000.toml.bak",
+        "foo"
+    ));
+}
+
+#[test]
+fn test_backup_rotation_keeps_other_libraries_backups() {
+    let temp_dir = TestDir::new();
+    let foo = temp_dir.path().join("foo.toml");
+    let foo_bar = temp_dir.path().join("foo.bar.toml");
+    std::fs::write(&foo, "foo content").unwrap();
+    std::fs::write(&foo_bar, "foo.bar content").unwrap();
+
+    // Backups of `foo.bar`, named exactly the way `backup_library` names them.
+    let backup_dir = temp_dir.path().join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    let mut foreign = Vec::new();
+    for i in 0..11 {
+        let name = format!("foo.bar.20260101_0000{i:02}_000000.toml.bak");
+        std::fs::write(backup_dir.join(&name), "foo.bar content").unwrap();
+        foreign.push(name);
+    }
+
+    // Saving `foo` must not count `foo.bar`'s backups as its own.
+    backup_library(&foo).unwrap();
+
+    for name in &foreign {
+        assert!(
+            backup_dir.join(name).exists(),
+            "`foo`'s backup rotation deleted another library's backup: {name}"
+        );
+    }
+}
+
+#[test]
+fn test_backup_rotation_caps_backups_per_library() {
+    let temp_dir = TestDir::new();
+    let foo = temp_dir.path().join("foo.toml");
+    std::fs::write(&foo, "foo content").unwrap();
+
+    for _ in 0..15 {
+        backup_library(&foo).unwrap();
+    }
+
+    let backup_dir = temp_dir.path().join("backups");
+    let names: Vec<String> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+
+    // Rotation still caps this library's own backups (cleanup runs before the
+    // new backup is written, so the steady state is 10 kept + 1 new).
+    assert!(
+        names.len() <= 11,
+        "rotation must cap `foo`'s backups, got {names:?}"
+    );
+    for name in &names {
+        assert!(
+            is_backup_name_for_stem(name, "foo"),
+            "unexpected backup name: {name}"
+        );
+    }
+}
+
+// ─── Premade libraries honour the mutation gate (bugs.md #13) ───
+
+#[test]
+fn test_save_premade_library_refuses_while_journal_is_corrupt() {
+    let temp_dir = TestDir::new();
+    let config_dir = temp_dir.path().to_path_buf();
+    let transaction_dir = config_dir.join(".transaction");
+    std::fs::create_dir_all(&transaction_dir).unwrap();
+    // A journal file that cannot be parsed is classified as corrupt and
+    // blocks every local mutation (fail-closed).
+    std::fs::write(
+        transaction_dir.join("txn-corrupt.toml"),
+        "this is not [valid toml",
+    )
+    .unwrap();
+
+    let mgr = LibraryManager {
+        config_dir: config_dir.clone(),
+        libraries_dir: config_dir.join("libraries"),
+        premade_dir: config_dir.join("premade"),
+        config: Default::default(),
+    };
+
+    let err = mgr.save_premade_library("blocked", "content").unwrap_err();
+    assert!(
+        err.to_string().contains("corrupt transaction journal"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !config_dir.join("premade").join("blocked.toml").exists(),
+        "the premade library must not be written while a transaction is unresolved"
+    );
+}
+
+// ─── Legacy single-file migration writes atomically (bugs.md #18) ───
+
+#[test]
+fn test_migrate_from_single_file_writes_library_atomically() {
+    let temp_dir = TestDir::new();
+    // Use the resolved config dir so `get_default_snippets_path()` (which the
+    // migration reads) points at the same place as `self.config_dir`.
+    let config_dir = crate::utils::config::get_config_dir();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let legacy_path = config_dir.join("snippets.toml");
+    let legacy_content =
+        "snippets = [{ description = \"Legacy one\", command = \"echo legacy\", tag = [] }]\n";
+    std::fs::write(&legacy_path, legacy_content).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&legacy_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let mut mgr = LibraryManager {
+        config_dir: config_dir.clone(),
+        libraries_dir: config_dir.join("libraries"),
+        premade_dir: temp_dir.path().join("premade"),
+        config: Default::default(),
+    };
+
+    mgr.migrate_from_single_file().unwrap();
+
+    let migrated = mgr.libraries_dir.join("snippets.toml");
+    assert_eq!(std::fs::read_to_string(&migrated).unwrap(), legacy_content);
+
+    // The atomic layer writes private files. An in-place `fs::copy` would
+    // have carried the legacy file's 0o644 mode over to the new library.
+    #[cfg(unix)]
+    assert_eq!(file_mode(&migrated), 0o600);
+
+    // The legacy file is left untouched.
+    assert_eq!(
+        std::fs::read_to_string(&legacy_path).unwrap(),
+        legacy_content
     );
 }

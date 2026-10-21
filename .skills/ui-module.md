@@ -33,8 +33,8 @@ src/ui/
 ## Syntax Highlighting
 - **Lazy and budgeted**, not pre-computed at startup: `warm_visible_highlights` fills the
   highlighted lines for the currently visible rows during the draw loop, under a
-  2 ms/frame budget (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:634`, called at
-  `src/ui/mod.rs:1274-1281`)
+  2 ms/frame budget (`HIGHLIGHT_WARM_BUDGET`, `src/ui/mod.rs:749`, called at
+  `src/ui/mod.rs:1365-1372`)
 - Uses `SHELL_KEYWORDS_SET` for keyword detection (O(1) via `HashSet::contains()`)
 - Colors: keyword, string, comment, flag, variable, escape, default
 - Theme-aware: string and escape colors adapt to active theme
@@ -49,22 +49,22 @@ src/ui/
 - Normal builds consume the checked-in generated file; there is no root `build.rs` hook
 - Seeded into `~/.config/snp/themes/` lazily, when the theme picker is first
   opened (`ensure_theme_picker_ready` → `ThemeManager::init_themes_dir`,
-  `src/ui/mod.rs:414-425`) — seeding is idempotent and never overwrites a
+  `src/ui/mod.rs:529-540`) — seeding is idempotent and never overwrites a
   user-edited file
 - Active theme persisted in `~/.config/snp/themes.toml`
 - Default theme: `Cyber Red` (hardcoded fallback)
 
 ### Theme Picker
-- Press `e` in normal mode to open theme picker (`src/ui/mod.rs:1891-1893`)
+- Press `e` in normal mode to open theme picker (`src/ui/mod.rs:2028-2030`)
 - `j`/`k` (or arrow keys) to preview themes live
 - `i` to filter themes by name (enters the picker's insert mode)
 - `Enter` to save selection
 - `e`/`q`/`Esc` to cancel — in the picker's *normal* mode; in insert mode `Esc`
-  only returns to normal mode (`src/ui/mod.rs:1371-1375`)
+  only returns to normal mode (`src/ui/mod.rs:1462-1466`)
 - **Known limitation:** in the picker's insert mode the `j`/`k` arms are matched
   before the generic character arm, so typing a filter that contains `j` or `k`
   usually moves the preview instead of inserting the letter (they only insert at
-  the list boundary) (`src/ui/mod.rs:1376-1388`, `src/ui/mod.rs:1389-1399`)
+  the list boundary) (`src/ui/mod.rs:1467-1479`, `src/ui/mod.rs:1480-1490`)
 
 ### Legacy Fallback
 - `SNP_THEME` env var still works (`dark`/`bright`/`light`/`auto`)

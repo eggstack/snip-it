@@ -31,14 +31,14 @@ auto-sync worker and its scheduling policy (see
 ## Client Construction
 
 ```rust
-// src/sync.rs:311-315
+// src/sync.rs:393-404
 pub struct SyncClient {
     client: SnippetSyncClient<Channel>,
     settings: SyncSettings,
     limits: Option<SyncRunLimits>,
 }
 
-// src/sync.rs:332-356
+// src/sync.rs:415-440
 pub async fn create(settings: SyncSettings) -> SnipResult<Self>
 pub(crate) async fn create_with_limits(
     settings: SyncSettings,
@@ -48,14 +48,14 @@ pub(crate) async fn create_with_limits(
 
 `create` delegates to `create_with_limits(settings, None)`. The client is
 constructed over a tonic `Channel`; a connect failure is mapped to
-`SyncFailureKind::ConnectFailed` (`src/sync.rs:344-349`).
+`SyncFailureKind::ConnectFailed` (`src/sync.rs:427-432`).
 
 Two guards run before every network call:
 
-- `ensure_budget` (`src/sync.rs:318-329`) — fails with
+- `ensure_budget` (`src/sync.rs:407-412`) — fails with
   `SyncFailureKind::Timeout` when the auto-sync deadline has already elapsed.
   It is a no-op for manual sync (`limits == None`).
-- `require_api_key` (`src/sync.rs:800-808`) — fails fast with a typed error
+- `require_api_key` (`src/sync.rs:900-908`) — fails fast with a typed error
   naming `snp register --force`. `sync.toml` deserializes `api_key` with
   `#[serde(default)]`, so a headerless legacy config parses with an empty key;
   without this guard every RPC would burn the whole retry ladder on a request
@@ -63,32 +63,32 @@ Two guards run before every network call:
 
 ### Authentication
 
-`add_api_key_metadata` (`src/sync.rs:291-299`) puts `Bearer <api_key>` into the
+`add_api_key_metadata` (`src/sync.rs:306-314`) puts `Bearer <api_key>` into the
 gRPC `authorization` metadata header. The request body's `api_key` field is
 left empty on purpose — the key must not travel in the body. An empty key is
 logged as an error and the header is omitted rather than panicking.
 
 ### Transport Security
 
-`create_tls_channel` (`src/sync.rs:1208-1261`):
+`create_tls_channel` (`src/sync.rs:1333-1386`):
 
 - Plaintext `http://` to a non-loopback host is refused unless
-  `SNIP_SYNC_ALLOW_HTTP=true` (`src/sync.rs:1216-1222`).
+  `SNIP_SYNC_ALLOW_HTTP=true` (`src/sync.rs:1341-1347`).
 - For `https://`, the client configures `ClientTlsConfig::new()
   .with_enabled_roots().domain_name(host).assume_http2(true)`
-  (`src/sync.rs:1246-1257`). `domain_name` pins SNI/certificate verification to
+  (`src/sync.rs:1371-1382`). `domain_name` pins SNI/certificate verification to
   the URI host; `assume_http2(true)` skips ALPN negotiation so a server without
   ALPN still works instead of surfacing a confusing framing error.
 - `SNP_SYNC_CONNECT_TIMEOUT` (default 10 s) and `SNP_SYNC_REQUEST_TIMEOUT`
   (default 30 s) bound the connect and the per-request timeout
-  (`src/sync.rs:1230-1244`; constants at `src/sync.rs:38-39`). When
+  (`src/sync.rs:1355-1369`; constants at `src/sync.rs:38-39`). When
   `SyncRunLimits` supplies a `request_timeout`, the smaller of the two wins.
 
 ## Retry and Backoff
 
 ### The `retry_grpc_unified!` Macro
 
-`src/sync.rs:194-256` is the **sole** implementation of retry/backoff/deadline
+`src/sync.rs:209-271` is the **sole** implementation of retry/backoff/deadline
 control flow. It replaced the former `retry_grpc!` / `retry_grpc_limited!` pair
 and the hand-rolled `push_snippets_batch` / `sync_with_retry` loops.
 
@@ -108,22 +108,22 @@ retry_grpc_unified!($limits, $op, $name, $backoff)
 | Total attempts | 1 initial + `max_retries` retries = **4** | `src/sync.rs:35`, `:200-251` |
 | Initial delay | 100 ms | `src/sync.rs:36` |
 | Delay cap (Standard) | 5 s | `src/sync.rs:37` |
-| Jitter multiplier | `0.5 + (combined % 1000) / 1000` → **[0.5, 1.5)** | `src/sync.rs:123-131` |
-| Deadline expiry | `SyncFailureKind::Timeout` | `src/sync.rs:206-209`, `:215-218`, `:244-247` |
+| Jitter multiplier | `0.5 + (combined % 1000) / 1000` → **[0.5, 1.5)** | `src/sync.rs:138-146` |
+| Deadline expiry | `SyncFailureKind::Timeout` | `src/sync.rs:221-224`, `:215-218`, `:244-247` |
 
 Attempt count math: `attempt` starts at 0 and the loop breaks when
-`attempt >= config.max_retries` (`src/sync.rs:224-226`), so with
+`attempt >= config.max_retries` (`src/sync.rs:239-241`), so with
 `max_retries = 3` the RPC is attempted 4 times.
 
 With `$limits = None` (manual sync, register, premade) the macro runs
-unbounded except for the transport request timeout (`src/sync.rs:213`). With
+unbounded except for the transport request timeout (`src/sync.rs:228`). With
 `$limits = Some` (automatic sync) each RPC is wrapped in
 `tokio::time::timeout(remaining)`, and a backoff sleep that would overrun the
 deadline is refused rather than slept through.
 
 ### Retryable gRPC Codes
 
-`SyncRetryConfig::is_retryable_grpc_error` (`src/sync.rs:106-116`) retries
+`SyncRetryConfig::is_retryable_grpc_error` (`src/sync.rs:121-131`) retries
 **every** code except:
 
 | Non-retryable code | Why |
@@ -141,25 +141,25 @@ limiting, and `RetryBackoff::RateLimitAware` gives it a dedicated backoff.
 ### `RetryBackoff` Variants
 
 ```rust
-// src/sync.rs:141-145
+// src/sync.rs:156-160
 enum RetryBackoff {
     Standard,
     RateLimitAware,
 }
 ```
 
-- `Standard` (`src/sync.rs:155`): `delay = (delay * 2).min(max_delay_ms)` —
+- `Standard` (`src/sync.rs:170`): `delay = (delay * 2).min(max_delay_ms)` —
   100 ms → 200 → 400 → 800 … capped at 5 s.
-- `RateLimitAware` (`src/sync.rs:156-162`): on `ResourceExhausted`,
+- `RateLimitAware` (`src/sync.rs:171-177`): on `ResourceExhausted`,
   `delay = (delay * 4).min(120_000)` — 100 ms → 400 → 1 600 → 6 400 … capped
   at 120 s. Any other failure falls back to the Standard progression.
 
-Only the `Sync` RPC uses `RateLimitAware` (`src/sync.rs:889`); every other RPC
+Only the `Sync` RPC uses `RateLimitAware` (`src/sync.rs:1014`); every other RPC
 (`PushSnippets`, `Health`, library/premade calls) uses `Standard`.
 
 ### Terminal Error Mapping
 
-`grpc_error_to_snip_error` (`src/sync.rs:262-283`) maps the final failure:
+`grpc_error_to_snip_error` (`src/sync.rs:277-298`) maps the final failure:
 
 | gRPC status | Result |
 |-------------|--------|
@@ -172,7 +172,7 @@ Only the `Sync` RPC uses `RateLimitAware` (`src/sync.rs:889`); every other RPC
 ### Run Limits
 
 ```rust
-// src/sync.rs:64-74
+// src/sync.rs:64-89
 pub(crate) struct SyncRunLimits {
     pub deadline: std::time::Instant,
     pub request_timeout: Duration,
@@ -191,7 +191,7 @@ impl SyncRunLimits {
 ### Byte-Bounded Batching
 
 ```rust
-// src/sync.rs:1408-1414
+// src/sync.rs:1544-1550
 pub(crate) fn build_upload_batches(
     mut encrypted_snippets: Vec<crate::proto::Snippet>,
     library_id: &str,
@@ -203,29 +203,29 @@ pub(crate) fn build_upload_batches(
 
 The client ceiling is **3.5 MiB** (`DEFAULT_CLIENT_REQUEST_CEILING =
 3_584 * 1024`, `src/sync.rs:46`), deliberately below the server's 4 MiB gRPC
-limit (`snip-sync/src/lib.rs:104`).
+limit (`snip-sync/src/lib.rs:113`).
 
 Accounting is by **Prost encoded length**, not by item count:
 
-- `sync_request_base_encoded_len` (`src/sync.rs:1386-1388`) measures the
+- `sync_request_base_encoded_len` (`src/sync.rs:1522-1524`) measures the
   envelope once — `SyncRequest::encoded_len()` with an empty snippet list
-  (`src/sync.rs:1360-1375`).
-- `snippet_field_encoded_len` (`src/sync.rs:1390-1395`) adds
+  (`src/sync.rs:1496-1511`).
+- `snippet_field_encoded_len` (`src/sync.rs:1526-1531`) adds
   `1 + varint_len + snippet.encoded_len()` per item, because `local_snippets`
   is a repeated message field (tag + length varint + payload).
 
 Batches are built incrementally: tentatively append one snippet, measure, and
 either keep it or finalize the batch. The snippet list is sorted by id first so
-retry ordering is deterministic (`src/sync.rs:1416`). If a **single** snippet
+retry ordering is deterministic (`src/sync.rs:1552`). If a **single** snippet
 exceeds the ceiling, the function returns `SyncFailureKind::RequestTooLarge`
-*before any batch is sent* (`src/sync.rs:1429-1441`). After an overflow split
+*before any batch is sent* (`src/sync.rs:1565-1577`). After an overflow split
 the new singleton is re-validated immediately, so an oversized item that
 follows a small one is caught before any remote mutation
-(`src/sync.rs:1463-1474`).
+(`src/sync.rs:1599-1610`).
 
 ### Upload Strategy — Zero / One / Many Batches
 
-`sync_prepared_encrypted_inner` (`src/sync.rs:441-621`) owns all three cases:
+`sync_prepared_encrypted_inner` (`src/sync.rs:541-721`) owns all three cases:
 
 | Batches | Transport | Rationale |
 |---------|-----------|-----------|
@@ -235,11 +235,11 @@ follows a small one is caught before any remote mutation
 
 All upload batches are sent before any response page is requested, so
 `has_more == false` on the first response can never truncate uploads
-(`src/sync.rs:365-376`).
+(`src/sync.rs:449-460`).
 
 ### Per-Record Refusals Do Not Abort the Batch
 
-`push_snippets_batch` (`src/sync.rs:815-861`) returns the number of records the
+`push_snippets_batch` (`src/sync.rs:915-961`) returns the number of records the
 server refused:
 
 - `!inner.success && rejected == 0` → whole-request failure (auth, unknown
@@ -252,17 +252,17 @@ server refused:
   blocked every remaining batch.
 
 `PushSnippetsResponse` carries counts but no per-record ids, so those refusals
-fold into `skipped_count` only (`src/sync.rs:772-775`).
+fold into `skipped_count` only (`src/sync.rs:872-875`).
 
 ### Skipped-Id Accounting
 
-`accumulate_page` (`src/sync.rs:736-759`) extends the client's own skipped-id
+`accumulate_page` (`src/sync.rs:836-859`) extends the client's own skipped-id
 list with the server's `response.skipped_ids` before decrypting the page. The
 server reports rows it refused to store (validation failure, upsert failure, or
 an id already held under a different user or library); discarding them made
 `skipped_count` dishonest.
 
-`build_sync_response` (`src/sync.rs:762-790`) aggregates:
+`build_sync_response` (`src/sync.rs:862-890`) aggregates:
 
 ```
 total_skipped = all_skipped_ids.len() + push_rejected_count
@@ -276,14 +276,14 @@ skip keeps `success == true` and is surfaced through `skipped_count`.
 
 ### Client Pagination
 
-`paginate_remaining` (`src/sync.rs:628-733`) fetches the remaining pages after
+`paginate_remaining` (`src/sync.rs:728-833`) fetches the remaining pages after
 the first response page. It stops when `has_more` is false or a page comes back
 empty. A hard bound of `MAX_PAGINATION_PAGES = 10_000`
 (`src/sync.rs:53`) aborts a buggy or malicious server that answers
 `has_more = true` forever.
 
 The offset advances by the number of rows actually returned
-(`src/sync.rs:541`, `:599`), not by the requested page size.
+(`src/sync.rs:641`, `:599`), not by the requested page size.
 
 ### Server-Side Page Trimming
 
@@ -294,15 +294,15 @@ library whose rows happen to be large could be pushed successfully and then
 
 The server therefore trims each response page to the encoded byte budget:
 
-- `page_byte_ceiling` (`snip-sync/src/lib.rs:117-121`) =
+- `page_byte_ceiling` (`snip-sync/src/lib.rs:126-130`) =
   `grpc_ceiling − RESPONSE_ENVELOPE_RESERVE_BYTES (64 KiB) − envelope_bytes`.
-- `fit_page_to_byte_ceiling` (`snip-sync/src/lib.rs:131-156`) drops trailing
+- `fit_page_to_byte_ceiling` (`snip-sync/src/lib.rs:140-165`) drops trailing
   rows until the page fits, **always keeping at least one row** (returning an
   empty page would stall the client's pagination loop rather than make
   progress), and reports whether anything was dropped.
 - `has_more` is then `has_more_by_rows || truncated`
-  (`snip-sync/src/lib.rs:1536`), and the timestamp watermark is withheld
-  whenever rows remain (`snip-sync/src/lib.rs:1538-1541`).
+  (`snip-sync/src/lib.rs:1594`), and the timestamp watermark is withheld
+  whenever rows remain (`snip-sync/src/lib.rs:1596-1599`).
 
 ## Merge and Conflict Resolution
 
@@ -370,26 +370,26 @@ fn choose_version(local: &Snippet, remote: &ProtoSnippet) -> VersionWinner
 
 The remote-tombstone arm of `merge_snippets` uses
 `updated_at: local.updated_at.max(server.updated_at)`
-(`src/sync_commands.rs:1281`), matching the local-tombstone arm
-(`src/sync_commands.rs:1307`). Taking the server timestamp verbatim would
+(`src/sync_commands.rs:1290`), matching the local-tombstone arm
+(`src/sync_commands.rs:1316`). Taking the server timestamp verbatim would
 lower the local timestamp whenever the tombstone is older, regressing the
 record below a watermark other clients already synced past. No resurrection is
 implied — the record is still marked deleted.
 
 ### Tombstone Handling in Both Directions
 
-`merge_snippets` (`src/sync_commands.rs:1252-1376`) has four arms per id:
+`merge_snippets` (`src/sync_commands.rs:1261-1385`) has four arms per id:
 
 | Situation | Result |
 |-----------|--------|
-| Remote tombstone wins over a live local | record kept as a local tombstone, `updated_at = max(local, remote)`, local `output`/`folders`/`favorite` preserved (`src/sync_commands.rs:1264-1284`) |
-| Remote live copy wins over a live local | remote fields win; local `output`/`folders`/`favorite` preserved; `created_at = min(local, remote)` (`src/sync_commands.rs:1285-1297`) |
-| Local tombstone wins over a live remote | local tombstone retained, `updated_at = max(local, remote)` (`src/sync_commands.rs:1298-1310`) |
-| Both tombstones | `Equivalent if local_snip.deleted` → the record is retired (`src/sync_commands.rs:1312`) |
+| Remote tombstone wins over a live local | record kept as a local tombstone, `updated_at = max(local, remote)`, local `output`/`folders`/`favorite` preserved (`src/sync_commands.rs:1273-1293`) |
+| Remote live copy wins over a live local | remote fields win; local `output`/`folders`/`favorite` preserved; `created_at = min(local, remote)` (`src/sync_commands.rs:1294-1306`) |
+| Local tombstone wins over a live remote | local tombstone retained, `updated_at = max(local, remote)` (`src/sync_commands.rs:1307-1319`) |
+| Both tombstones | `Equivalent if local_snip.deleted` → the record is retired (`src/sync_commands.rs:1321`) |
 
 **Server-only tombstones are dropped.** A tombstone for an id the local device
 never observed carries no local deletion to preserve, so it is discarded
-(`src/sync_commands.rs:1316-1322`) — the no-resurrection policy for deletions
+(`src/sync_commands.rs:1325-1331`) — the no-resurrection policy for deletions
 that were never synced to this device.
 
 **Local tombstones absent from the server response are retained.** The server
@@ -401,7 +401,7 @@ live copy would resurrect on the next sync that did cross the watermark. The
 tombstone is retained so it is re-uploaded until the server acknowledges it, at
 which point the id appears in `seen_ids` and the `Equivalent if
 local_snip.deleted` arm retires the record
-(`src/sync_commands.rs:1339-1358`).
+(`src/sync_commands.rs:1348-1367`).
 
 ### Conflict Counting
 
@@ -409,7 +409,7 @@ Conflict counts come from the merge itself, not from the presence of a foreign
 `device_id`:
 
 ```rust
-// src/sync_commands.rs:1235-1250
+// src/sync_commands.rs:1235-1259
 fn overwritten_by_remote(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Vec<String>
 ```
 
@@ -544,7 +544,7 @@ is always `None` (`src/sync_commands.rs:633-642`).
 The merge is sorted by `(Reverse(updated_at), Reverse(local_version_key))` with
 `sort_by_cached_key`, which computes each snippet's version key once (O(n)
 hashes) instead of re-running the full SHA-256 fingerprint on every comparison
-(O(n log n) hashes per sync) (`src/sync_commands.rs:1360-1370`).
+(O(n log n) hashes per sync) (`src/sync_commands.rs:1369-1379`).
 
 ## Result and Counter Semantics
 
@@ -654,7 +654,7 @@ Only `Transient` and `Internal` allow automatic retry
 (`src/sync_failure.rs:147-149`); `Configuration` is *deferred* — it waits for
 the user to fix something (`src/sync_failure.rs:151-153`).
 
-`add_batch_context` (`src/sync.rs:1492-1511`) adds a `batch N/M` prefix while
+`add_batch_context` (`src/sync.rs:1628-1647`) adds a `batch N/M` prefix while
 **preserving the original classification**. Re-wrapping every kind as
 `SyncRequestFailed` would classify persistent server-side faults (e.g. gRPC
 `internal`, which maps to `Runtime` → `Internal`) as `Transient` and retry them
@@ -665,10 +665,10 @@ forever instead of escalating.
 | Limit | Value | Source |
 |-------|-------|--------|
 | Client request byte ceiling | 3.5 MiB (`3_584 * 1024`) | `src/sync.rs:46` |
-| Server gRPC message ceiling | 4 MiB | `snip-sync/src/lib.rs:104` |
-| Server max request page size | 1 000 rows | `snip-sync/src/lib.rs:108` |
-| Server max encrypted payload | 1 MiB | `snip-sync/src/lib.rs:93`, enforced at `:880-885` |
-| Response envelope reserve | 64 KiB | `snip-sync/src/lib.rs:112` |
+| Server gRPC message ceiling | 4 MiB | `snip-sync/src/lib.rs:113` |
+| Server max request page size | 1 000 rows | `snip-sync/src/lib.rs:117` |
+| Server max encrypted payload | 1 MiB | `snip-sync/src/lib.rs:102`, enforced at `:880-885` |
+| Response envelope reserve | 64 KiB | `snip-sync/src/lib.rs:121` |
 | Client pagination page bound | 10 000 pages | `src/sync.rs:53` |
 | Client default page size | `sync_limit_value()` → 1 000 | `src/config/sync_settings.rs:196-198` |
 

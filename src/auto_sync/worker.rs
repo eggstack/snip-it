@@ -213,6 +213,17 @@ fn adopt_generation_reset(current: &PendingState, latest: PendingState) -> Optio
     }
 }
 
+/// Poll interval for the pending-marker watch.
+///
+/// Short deadlines keep the historical 250 ms cadence. Longer deadlines
+/// scale the interval with the remaining time (`remaining / 20`, floored at
+/// 250 ms and capped by the remaining time), so a five-minute debounce
+/// window does not re-read, re-parse, and CRC-verify the marker four times
+/// a second while still waking promptly once the deadline is near.
+fn poll_interval(remaining: Duration) -> Duration {
+    remaining.min(Duration::from_millis(250).max(remaining / 20))
+}
+
 pub fn debounce(
     state_dir: &Path,
     observed: PendingState,
@@ -268,9 +279,7 @@ pub fn debounce(
                 Err(error) => return DebounceResult::Failed(error.to_string()),
             }
         }
-        let sleep_for = deadline
-            .saturating_duration_since(clock.now_instant())
-            .min(Duration::from_millis(250));
+        let sleep_for = poll_interval(deadline.saturating_duration_since(clock.now_instant()));
         clock.sleep(sleep_for);
         match pending::read_state_from_dir(state_dir) {
             Ok(latest) if latest.generation > current.generation => {
@@ -607,7 +616,7 @@ pub fn observed_pending_generation(state_dir: &Path) -> Result<Option<u64>, pend
 
 #[cfg(test)]
 mod tests {
-    use super::{DebounceResult, WorkerOutcome, follow_up_allowed, preflight_check};
+    use super::{Clock, DebounceResult, WorkerOutcome, follow_up_allowed, preflight_check};
     use crate::auto_sync::pending::{self, PendingSnapshot};
     use crate::auto_sync::policy::MutationKind;
     use std::path::Path;
@@ -792,6 +801,116 @@ mod tests {
         assert!(
             matches!(result, DebounceResult::Failed(_)),
             "generation reset with older timestamp should be rejected as corrupt"
+        );
+    }
+
+    /// Clock that records every sleep and advances its own instant, so the
+    /// debounce loop terminates without real waiting.
+    struct RecordingClock {
+        base: Instant,
+        slept: std::cell::RefCell<Vec<Duration>>,
+    }
+
+    impl RecordingClock {
+        fn new() -> Self {
+            Self {
+                base: Instant::now(),
+                slept: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        fn sleeps(&self) -> Vec<Duration> {
+            self.slept.borrow().clone()
+        }
+    }
+
+    impl super::Clock for RecordingClock {
+        fn now_instant(&self) -> Instant {
+            let total: Duration = self.slept.borrow().iter().copied().sum();
+            self.base + total
+        }
+
+        fn now_unix_ms(&self) -> u64 {
+            1_700_000_000_000
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.slept.borrow_mut().push(duration);
+        }
+    }
+
+    #[test]
+    fn poll_interval_keeps_short_windows_and_scales_long_ones() {
+        // Short deadlines keep the historical 250 ms cadence.
+        assert_eq!(
+            super::poll_interval(Duration::from_millis(100)),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            super::poll_interval(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            super::poll_interval(Duration::from_secs(1)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            super::poll_interval(Duration::from_secs(5)),
+            Duration::from_millis(250)
+        );
+
+        // Long deadlines scale with the remaining time.
+        assert_eq!(
+            super::poll_interval(Duration::from_secs(60)),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            super::poll_interval(Duration::from_secs(300)),
+            Duration::from_secs(15)
+        );
+        // Never overshoots the deadline.
+        assert_eq!(super::poll_interval(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn debounce_does_not_busy_poll_a_long_deadline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let base_ms: u64 = 1_700_000_000_000;
+        write_marker(dir.path(), 1, base_ms);
+
+        let observed = super::PendingState {
+            generation: 1,
+            snapshot: mutation_snapshot(),
+            created_at_unix_ms: base_ms,
+        };
+
+        let clock = RecordingClock::new();
+        let start = clock.now_instant();
+        let result = super::debounce(
+            dir.path(),
+            observed,
+            start + Duration::from_secs(60),
+            start,
+            Duration::from_secs(300),
+            Duration::from_secs(60),
+            &clock,
+        );
+        assert!(
+            matches!(result, DebounceResult::Ready(_)),
+            "expected Ready, got {result:?}"
+        );
+
+        let sleeps = clock.sleeps();
+        assert!(!sleeps.is_empty(), "debounce never polled the marker");
+        // The first poll waits a twentieth of the remaining window instead of
+        // the fixed 250 ms.
+        assert_eq!(sleeps[0], Duration::from_secs(3));
+        // The old fixed cadence needed 60 s / 250 ms = 240 polls for the same
+        // window.
+        assert!(
+            sleeps.len() < 240,
+            "expected fewer than 240 polls, got {}",
+            sleeps.len()
         );
     }
 

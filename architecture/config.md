@@ -74,9 +74,9 @@ or world bits, `src/utils/config.rs:94-105`).
 ```
 
 `libraries/`, `premade/`, `libraries.toml` come from
-`src/library/manager.rs:49-51`; `.transaction/` from
-`src/library/manager.rs:628` and `src/local_data.rs:398-400`; `backups/` from
-`src/library/persistence.rs:316` and `src/commands/backup_cmd.rs:63`;
+`src/library/manager.rs:51-53`; `.transaction/` from
+`src/library/manager.rs:658` and `src/local_data.rs:398-400`; `backups/` from
+`src/library/persistence.rs:357` and `src/commands/backup_cmd.rs:63`;
 `logs/` from `src/logging.rs:72`; `audit.log` from `src/logging.rs:380-384`.
 
 `logs/` and `audit.log` are created lazily; `snp version` and
@@ -109,7 +109,7 @@ pending marker lives) and the transaction directory (where journals and locks
 live):
 
 ```rust
-// src/library/persistence.rs:223-228
+// src/library/persistence.rs:264-269
 let sync_state_dir = crate::config::derive_sync_state_dir();
 let transaction_dir = crate::local_data::transaction_dir();
 crate::transaction::gate_mutation_on_interrupted_transactions(
@@ -302,7 +302,7 @@ SyncConfigSettings { sync: SyncSettings } }`
 (`src/config/sync_settings.rs:452-461`). The first line is the CRC32
 integrity header; everything after it is the TOML body.
 
-### Load / Save — `src/config/sync_settings.rs:464-563`
+### Load / Save — `src/config/sync_settings.rs:464-571`
 
 ```rust
 pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()>  // :464
@@ -310,7 +310,7 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings>              // :498
 pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // :555
 ```
 
-**Save** (`src/config/sync_settings.rs:464-496`):
+**Save** (`src/config/sync_settings.rs:464-504`):
 
 1. Rejects a non-positive `sync_limit` (`:465-470`).
 2. Acquires the local-data lock on the transaction directory
@@ -322,7 +322,7 @@ pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // 
    (`:492-493`). The clipboard call is a known cross-layer dependency noted
    in `src/config/mod.rs:8-10`.
 
-**Load** (`src/config/sync_settings.rs:498-553`):
+**Load** (`src/config/sync_settings.rs:506-561`):
 
 1. A missing file yields `SyncSettings::default()` (`:501-503`).
 2. The content is read through `cached_read_toml` (`:505`).
@@ -330,7 +330,7 @@ pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // 
    `sync.toml.corrupt.bak`, a warning is printed on stderr, and the defaults
    are returned (`:507-533`).
 4. The header is stripped and invalid TOML escapes are repaired
-   (`:535-536`, `src/utils/toml_helpers.rs:205-209`).
+   (`:535-536`, `src/utils/toml_helpers.rs:348-352`).
 5. The TOML is parsed and the `settings.sync` table is extracted (`:538-541`).
 6. An existing plaintext API key is migrated into the keychain, keeping the
    plaintext value in memory so the current operation still authenticates
@@ -434,7 +434,7 @@ pub(crate) fn strip_integrity_line(content: &str) -> String       // :244-248
 
 Every writer must call `invalidate_toml_cache(path)` after mutating:
 `save_library` (via the library persistence path), `save_config`, and
-`save_sync_settings` (`src/config/sync_settings.rs:492`). `invalidate_toml_cache`
+`save_sync_settings` (`src/config/sync_settings.rs:500`). `invalidate_toml_cache`
 removes the canonical key **and** the alternative string forms — the
 parent+filename key and the raw path key — because the cache key can diverge
 when a symlink is atomically replaced (`src/config/toml_cache.rs:83-112`).
@@ -485,7 +485,7 @@ Test-only vars are inert in production builds (proven by `scripts/ci/test-produc
 - `src/config/tests.rs` — defaults, limits, round-trips, integrity cases.
 - `src/local_data.rs:398-400` — `transaction_dir()`, built on
   `derive_sync_state_dir()`.
-- `src/library/persistence.rs:217-236` — `save_library`, whose gate and lock
+- `src/library/persistence.rs:258-277` — `save_library`, whose gate and lock
   paths come from the config directory.
 
 ## Invariants and Gotchas
