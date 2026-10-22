@@ -309,13 +309,27 @@ pub(crate) fn atomic_write_backup(
                     SnipError::io_error("create staging subdirectory", parent.to_path_buf(), e)
                 })?;
             }
-            fs::write(&dst, bytes)
-                .map_err(|e| SnipError::io_error("write to staging", dst.clone(), e))?;
+            // The body must survive power loss: write it through the
+            // sanctioned atomic/durable path (file fsync + parent-dir fsync)
+            // instead of a plain `fs::write`, which leaves a truncated body
+            // behind after a crash while the manifest still looks correct.
+            if let Err(e) = crate::utils::atomic::atomic_write_bytes(
+                &dst,
+                bytes,
+                crate::utils::atomic::Durability::DurableUserData,
+            ) {
+                return Err(SnipError::runtime_error(
+                    "write backup body to staging",
+                    Some(&format!("{}: {e}", dst.display())),
+                ));
+            }
         }
         let manifest_path = staging_dir.join("manifest.toml");
         let manifest_str = toml::to_string_pretty(manifest)
             .map_err(|e| SnipError::toml_error("serialize backup manifest", e))?;
         crate::utils::atomic::write_private_atomic(&manifest_path, &manifest_str, "manifest")?;
+        // Make the staging directory entries durable before the publish.
+        crate::utils::atomic::sync_directory(staging_dir)?;
         if let Some(parent) = final_dir.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 SnipError::io_error("create backup parent directory", parent.to_path_buf(), e)
@@ -324,6 +338,12 @@ pub(crate) fn atomic_write_backup(
         fs::rename(staging_dir, final_dir).map_err(|e| {
             SnipError::io_error("atomic rename staging to final", final_dir.to_path_buf(), e)
         })?;
+        // Make the published directory entry durable: without this the
+        // backup can vanish after a power loss even though every body was
+        // fsynced.
+        if let Some(parent) = final_dir.parent() {
+            crate::utils::atomic::sync_directory(parent)?;
+        }
         Ok(())
     })();
     if result.is_err() {

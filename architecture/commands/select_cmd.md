@@ -16,7 +16,7 @@ modals in raw mode. It is the machine-facing endpoint behind the
 | Flag | Type | Default | Meaning |
 |------|------|---------|---------|
 | `-f/--filter` | `Option<String>` | – | Initial TUI filter |
-| `--query` | `Option<String>` | – | Alias pre-fill for `--filter` (`filter.or(query)` in `src/main.rs:627`) |
+| `--query` | `Option<String>` | – | Alias pre-fill for `--filter`; **conflicts** with `--filter`, so passing both is a usage error (exit 2) rather than a silent drop |
 | `-l/--library` | `Option<String>` | – | Library scope |
 | `--raw` | bool | `false` | Emit stored bytes verbatim (conflicts with `--expanded`) |
 | `--expanded` | bool | `false` | Prompt for variables, emit expanded text (conflicts with `--raw`) |

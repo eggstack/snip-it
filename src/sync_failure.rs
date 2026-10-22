@@ -42,6 +42,7 @@ impl FailureClass {
                 SyncFailureKind::AuthenticationFailed => FailureClass::Configuration,
                 SyncFailureKind::SyncRequestFailed => FailureClass::Transient,
                 SyncFailureKind::CreateLibraryFailed => FailureClass::Configuration,
+                SyncFailureKind::CreateLibraryConflict => FailureClass::Configuration,
                 SyncFailureKind::GetPremadeLibraryFailed => FailureClass::Transient,
                 SyncFailureKind::RegistrationFailed => FailureClass::Configuration,
                 SyncFailureKind::LibraryManagerInitFailed => FailureClass::LocalFailure,

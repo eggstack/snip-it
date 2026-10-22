@@ -153,7 +153,7 @@ type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 /// Count the rows of the filtered range.
 ///
 /// `>=` (not `>`) is required for delta correctness: timestamps have second
-/// granularity and the watermark returned to the client is `MAX(updated_at)`.
+/// granularity and the watermark returned to the client is `MAX(visible_at)`.
 /// With `>`, a row written in the same second as the previous sync's
 /// watermark would be skipped by every future incremental sync.
 /// Re-delivering boundary rows is safe — merges are idempotent by snippet
@@ -169,7 +169,7 @@ async fn count_snippets(
         "SELECT COUNT(*) FROM snippets \
          WHERE user_id = ? \
            AND library_id = ? \
-           AND updated_at >= ? \
+           AND visible_at >= ? \
            AND (? OR deleted = 0)",
     )
     .bind(user_id)
@@ -197,7 +197,7 @@ async fn fetch_snippets(
          FROM snippets \
          WHERE user_id = ? \
            AND library_id = ? \
-           AND updated_at >= ? \
+           AND visible_at >= ? \
            AND (? OR deleted = 0) \
          ORDER BY updated_at DESC, id DESC \
          LIMIT ? OFFSET ?",
@@ -347,6 +347,7 @@ impl Database {
                 device_id TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0,
                 encrypted INTEGER NOT NULL DEFAULT 0,
+                visible_at INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (library_id) REFERENCES libraries(id)
             )
@@ -367,6 +368,14 @@ impl Database {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_snippets_user_library_updated \
              ON snippets(user_id, library_id, updated_at, deleted)",
+        )
+        .execute(&pool)
+        .await?;
+        // The delta cursor lives in `visible_at`, not in the client-chosen
+        // `updated_at`; this index serves the `visible_at >= since` range.
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_snippets_user_library_visible \
+             ON snippets(user_id, library_id, visible_at, deleted)",
         )
         .execute(&pool)
         .await?;
@@ -546,9 +555,10 @@ impl Database {
 
         sqlx::query(
             "UPDATE snippets
-             SET deleted = 1, updated_at = MAX(updated_at, ?)
+             SET deleted = 1, updated_at = MAX(updated_at, ?), visible_at = MAX(visible_at, ?)
              WHERE library_id = ? AND user_id = ? AND deleted = 0",
         )
+        .bind(now)
         .bind(now)
         .bind(library_id)
         .bind(user_id)
@@ -660,41 +670,12 @@ impl Database {
         user_id: &str,
         library_id: &str,
     ) -> DbResult<()> {
-        let tags_json = serde_json::to_string(&snippet.tags).unwrap_or_else(|_| "[]".to_string());
-        let deleted = snippet.deleted as i32;
-        let encrypted = snippet.encrypted as i32;
-
-        sqlx::query(
-            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(id) DO UPDATE SET
-                 description = excluded.description,
-                 command = excluded.command,
-                 tags = excluded.tags,
-                 updated_at = excluded.updated_at,
-                 device_id = excluded.device_id,
-                 deleted = excluded.deleted,
-                 encrypted = excluded.encrypted
-              WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
-            AND (excluded.updated_at > snippets.updated_at \
-                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id) \
-                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command > snippets.command) \
-                 OR (excluded.updated_at = snippets.updated_at AND excluded.device_id = snippets.device_id AND excluded.command = snippets.command AND excluded.description > snippets.description))",
-        )
-        .bind(&snippet.id)
-        .bind(user_id)
-        .bind(library_id)
-        .bind(&snippet.description)
-        .bind(&snippet.command)
-        .bind(&tags_json)
-        .bind(snippet.created_at)
-        .bind(snippet.updated_at)
-        .bind(&snippet.device_id)
-        .bind(deleted)
-        .bind(encrypted)
-        .execute(&self.pool)
-        .await?;
-
+        // Delegate to the production write path so a test fixture gets the
+        // same cursor bookkeeping as a real push.
+        let mut tx = self.pool.begin().await?;
+        self.upsert_snippet_in_tx(&mut tx, snippet, user_id, library_id)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -709,15 +690,35 @@ impl Database {
         let deleted = snippet.deleted as i32;
         let encrypted = snippet.encrypted as i32;
 
+        // The delta cursor is the library's `visible_at` watermark, not the
+        // client-chosen `updated_at`: a row stored *below* the watermark would
+        // never be delivered to any client, because the delta pull filters on
+        // `visible_at >= since`. The stored `updated_at` keeps the client's
+        // logical modification time verbatim — that is what the server's
+        // last-write-wins rule and the client's merge order compare — while
+        // `visible_at` carries the cursor position the row is delivered at.
+        let (watermark,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(visible_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        let visible_at = snippet.updated_at.max(watermark);
+
         // Upsert with last-write-wins conflict resolution.
         // Tie-breaking uses device_id string comparison, which is correct for
         // lowercase hex UUIDs (lexicographic == numeric for lowercase hex).
         // When updated_at and device_id are equal, fall back to content
         // comparison (command, description) to provide a deterministic
         // winner that mirrors the client's fingerprint tie-break.
+        //
+        // The conflict comparison uses the client's raw `updated_at`, so the
+        // rule is unchanged by the cursor bookkeeping; only `visible_at`
+        // moves, and it never moves backwards.
         let result = sqlx::query(
-            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted, visible_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
                  description = excluded.description,
                  command = excluded.command,
@@ -725,7 +726,8 @@ impl Database {
                  updated_at = excluded.updated_at,
                  device_id = excluded.device_id,
                  deleted = excluded.deleted,
-                 encrypted = excluded.encrypted
+                 encrypted = excluded.encrypted,
+                 visible_at = MAX(snippets.visible_at, excluded.visible_at)
               WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
             AND (excluded.updated_at > snippets.updated_at \
                  OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id) \
@@ -743,6 +745,7 @@ impl Database {
         .bind(&snippet.device_id)
         .bind(deleted)
         .bind(encrypted)
+        .bind(visible_at)
         .execute(&mut **tx)
         .await?;
 
@@ -771,8 +774,11 @@ impl Database {
     }
 
     pub async fn get_latest_timestamp(&self, user_id: &str, library_id: &str) -> DbResult<i64> {
+        // The cursor is the `visible_at` watermark, not `MAX(updated_at)`:
+        // `updated_at` is chosen by the client and may sit below the current
+        // watermark, which would make the cursor non-monotone.
         let (timestamp,): (i64,) = sqlx::query_as(
-            "SELECT COALESCE(MAX(updated_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
+            "SELECT COALESCE(MAX(visible_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
         )
         .bind(user_id)
         .bind(library_id)
@@ -780,6 +786,39 @@ impl Database {
         .await?;
 
         Ok(timestamp)
+    }
+
+    /// Add the `visible_at` cursor column to an existing database.
+    ///
+    /// The column carries the delta cursor position of a row; `updated_at`
+    /// keeps the client's logical modification time. Existing rows are
+    /// backfilled with their current `updated_at`, so a migrated database
+    /// selects exactly the same rows as before the migration and every
+    /// client's stored cursor stays valid.
+    pub async fn migrate_snippet_visible_at(&self) -> DbResult<bool> {
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('snippets')")
+                .fetch_all(&self.pool)
+                .await?;
+        if columns.iter().any(|name| name == "visible_at") {
+            return Ok(false);
+        }
+
+        sqlx::query("ALTER TABLE snippets ADD COLUMN visible_at INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("UPDATE snippets SET visible_at = updated_at")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_snippets_user_library_visible \
+             ON snippets(user_id, library_id, visible_at, deleted)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        tracing::info!("Migrated snippets table: added the visible_at delta-cursor column");
+        Ok(true)
     }
 
     pub async fn migrate_plaintext_api_keys(&self) -> DbResult<usize> {
@@ -991,8 +1030,8 @@ mod tests {
         assert_eq!(snippets[0].tags, vec!["test"]);
     }
 
-    /// Delta queries must include rows at exactly the watermark: timestamps
-    /// have second granularity and the client stores `MAX(updated_at)` as
+    /// Delta queries must include rows at exactly the watermark: the cursor
+    /// has second granularity and the client stores `MAX(visible_at)` as
     /// `last_sync`. With strict `>`, a row written in the same second as the
     /// watermark was invisible to every later incremental sync.
     #[tokio::test]
@@ -1019,13 +1058,215 @@ mod tests {
         let latest = db.get_latest_timestamp(&user_id, &lib_id).await.unwrap();
         assert_eq!(latest, 500);
 
-        // A subsequent incremental sync sends `since = MAX(updated_at)`.
+        // A subsequent incremental sync sends `since = MAX(visible_at)`.
         let (snippets, total) = db
             .get_snippets(&user_id, &lib_id, latest, 10, 0, false)
             .await
             .unwrap();
         assert_eq!(total, 1, "row at exactly `since` must be returned");
         assert_eq!(snippets[0].id, "boundary-snip");
+    }
+
+    /// A row whose client-chosen `updated_at` sits *below* the library's
+    /// watermark must still be delivered: the delta cursor lives in
+    /// `visible_at`, which is clamped to the watermark, while `updated_at`
+    /// keeps the client's logical modification time.
+    #[tokio::test]
+    async fn test_insert_below_watermark_is_still_delivered() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let make = |id: &str, updated_at: i64| Snippet {
+            id: id.to_string(),
+            description: format!("desc-{id}"),
+            command: format!("echo {id}"),
+            tags: vec![],
+            created_at: updated_at,
+            updated_at,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        let mut tx = db.pool.begin().await.unwrap();
+        assert_eq!(
+            db.upsert_snippet_in_tx(&mut tx, &make("newer", 1000), &user_id, &lib_id)
+                .await
+                .unwrap(),
+            UpsertOutcome::Written
+        );
+        assert_eq!(
+            db.upsert_snippet_in_tx(&mut tx, &make("older", 500), &user_id, &lib_id)
+                .await
+                .unwrap(),
+            UpsertOutcome::Written
+        );
+        tx.commit().await.unwrap();
+
+        let watermark = db.get_latest_timestamp(&user_id, &lib_id).await.unwrap();
+        assert_eq!(watermark, 1000);
+
+        let (snippets, total) = db
+            .get_snippets(&user_id, &lib_id, watermark, 10, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            total, 2,
+            "the row pushed below the watermark must still be delivered by a delta pull"
+        );
+
+        // The stored logical time is the client's own value, unchanged.
+        let older = snippets
+            .iter()
+            .find(|s| s.id == "older")
+            .expect("the older row must be present");
+        assert_eq!(older.updated_at, 500);
+    }
+
+    /// The cursor bookkeeping must not change the server's last-write-wins
+    /// rule: the comparison uses the client's raw `updated_at`, so a newer
+    /// push of a row that was stored below the watermark still wins.
+    #[tokio::test]
+    async fn test_update_below_the_watermark_still_uses_the_raw_timestamp() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let make = |id: &str, command: &str, updated_at: i64| Snippet {
+            id: id.to_string(),
+            description: "desc".to_string(),
+            command: command.to_string(),
+            tags: vec![],
+            created_at: 0,
+            updated_at,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+
+        // `other` sets the watermark at 1000.
+        let mut tx = db.pool.begin().await.unwrap();
+        db.upsert_snippet_in_tx(
+            &mut tx,
+            &make("other", "echo other", 1000),
+            &user_id,
+            &lib_id,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // This row lands below the watermark.
+        let mut tx = db.pool.begin().await.unwrap();
+        assert_eq!(
+            db.upsert_snippet_in_tx(&mut tx, &make("row", "echo one", 500), &user_id, &lib_id)
+                .await
+                .unwrap(),
+            UpsertOutcome::Written
+        );
+        tx.commit().await.unwrap();
+
+        // A newer push of the same row must win: the comparison reads the raw
+        // `updated_at`, not the clamped cursor.
+        let mut tx = db.pool.begin().await.unwrap();
+        assert_eq!(
+            db.upsert_snippet_in_tx(&mut tx, &make("row", "echo two", 700), &user_id, &lib_id)
+                .await
+                .unwrap(),
+            UpsertOutcome::Written
+        );
+        tx.commit().await.unwrap();
+
+        // A genuinely older push is still rejected.
+        let mut tx = db.pool.begin().await.unwrap();
+        assert_eq!(
+            db.upsert_snippet_in_tx(&mut tx, &make("row", "echo older", 600), &user_id, &lib_id)
+                .await
+                .unwrap(),
+            UpsertOutcome::Stale
+        );
+        tx.commit().await.unwrap();
+
+        let (snippets, _) = db
+            .get_snippets(&user_id, &lib_id, 0, 10, 0, false)
+            .await
+            .unwrap();
+        let row = snippets
+            .iter()
+            .find(|s| s.id == "row")
+            .expect("the updated snippet must be present");
+        assert_eq!(row.command, "echo two");
+        assert_eq!(row.updated_at, 700);
+    }
+
+    /// An existing database is upgraded in place: the backfill keeps every
+    /// row at its current cursor position, so the rows a client pulls do not
+    /// change across the migration.
+    #[tokio::test]
+    async fn test_migrate_snippet_visible_at_backfills_the_cursor() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("legacy.sqlite");
+        let db = Database::connect(db_path.to_str().unwrap(), 1)
+            .await
+            .unwrap();
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        // Simulate a pre-migration database: the column does not exist.
+        sqlx::query("DROP INDEX IF EXISTS idx_snippets_user_library_visible")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE snippets DROP COLUMN visible_at")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let snippet = Snippet {
+            id: "legacy-1".to_string(),
+            description: "legacy".to_string(),
+            command: "echo legacy".to_string(),
+            tags: vec![],
+            created_at: 100,
+            updated_at: 100,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        };
+        sqlx::query(
+            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&snippet.id)
+        .bind(&user_id)
+        .bind(&lib_id)
+        .bind(&snippet.description)
+        .bind(&snippet.command)
+        .bind("[]")
+        .bind(snippet.created_at)
+        .bind(snippet.updated_at)
+        .bind(&snippet.device_id)
+        .bind(0)
+        .bind(0)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        assert!(db.migrate_snippet_visible_at().await.unwrap());
+        // A second run is a no-op.
+        assert!(!db.migrate_snippet_visible_at().await.unwrap());
+
+        assert_eq!(
+            db.get_latest_timestamp(&user_id, &lib_id).await.unwrap(),
+            100
+        );
+        let (snippets, total) = db
+            .get_snippets(&user_id, &lib_id, 100, 10, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(snippets[0].id, "legacy-1");
+        assert_eq!(snippets[0].updated_at, 100);
     }
 
     #[tokio::test]

@@ -190,6 +190,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused edit still left a new file (and possibly `libraries/`) on disk.
   The gate now runs first.
 
+- **A snippet pushed with an old `updated_at` could become invisible to every
+  other device.** The server's delta cursor was `MAX(updated_at)` over the
+  library — a value the *client* chooses — and the delta pull filtered on
+  `updated_at >= since`. A device with a clock behind (or restored from an old
+  backup) pushed a row below the watermark, and no client ever received it
+  again: the snippet lived only on the server and on the pushing device. The
+  server now stores the cursor position of a row in `snippets.visible_at`,
+  clamped to the library watermark on every write, and filters on that. The
+  stored `updated_at` keeps the client's logical modification time verbatim,
+  so the server's last-write-wins rule and the client's merge order are
+  untouched. Existing databases are migrated in place
+  (`migrate_snippet_visible_at`); the protocol is unchanged, so old and new
+  clients interoperate. See `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+- **The sync server's rate limiter had a single global bucket.** The bucket
+  key was read from a `std::net::SocketAddr` in the request extensions, but
+  tonic inserts a `tonic::transport::server::TcpConnectInfo` — never a bare
+  socket address — so the lookup always missed and every caller shared one
+  `"unknown"` bucket. The peer address is now read from the extension tonic
+  actually populates, and the limiter runs in two stages: a generous
+  pre-authentication bucket that bounds the API-key lookup, and the
+  per-caller budget, which only a request with a *valid* key can spend.
+- **`snip-sync` could panic on a malformed `x-forwarded-for`.** `strip_port`
+  sliced `addr[1..0]` when the header started with `]:`, which aborted the
+  process. The value is attacker-influenced behind a trusted proxy; it is now
+  returned unchanged instead.
+- **A retry of `Register` left a second live API key on the server.** The
+  server mints a fresh account and a fresh key on every call and discards the
+  request body, so there is no idempotency key to deduplicate on: a retry
+  after a lost response left an untracked credential behind. The RPC is now
+  attempted exactly once.
+- **A lost response to `CreateLibrary` permanently wedged the local library
+  link.** The retry came back as `ALREADY_EXISTS` and the client reported the
+  failure, so every later sync repeated the same doomed call. The client now
+  adopts the existing server library instead of failing.
+- **A restore could install a backup artifact that no longer matched the
+  manifest.** The manifest gate hashed every artifact, but the staged bytes
+  came from a later, independent read, so an artifact substituted in between
+  was installed while the manifest still "verified". The staged bytes are now
+  hashed themselves and compared against the manifest before they are used.
+- **`snp sync run --servers` reported success after a failed request.** The
+  failure was printed on stderr and the command still exited 0, so a script
+  polling it could not detect it. It now fails with a non-zero exit status.
+- **`snp list --json` printed nothing at all when no library existed.** An
+  empty stdout is indistinguishable from a truncated stream, so the
+  machine-readable modes now always emit a parseable document (`[]` for JSON,
+  the header row for CSV).
+- **Usage errors exited 1 instead of 2.** Argument conflicts enforced in Rust
+  (mutually exclusive output modes, a missing selector, a missing required
+  option) were reported as operational failures, while the same conflicts
+  enforced by clap exited 2. A typed `SnipError::UsageError` now maps to the
+  documented usage exit code.
+- **`snp edit --filter` was silently dropped when an exact selector was
+  given.** `--filter` and the exact selectors are alternatives, never
+  combined; the combination is now a clap conflict, exactly like `snp run`
+  and `snp clip`.
+- **`snp select` accepted `--filter` and `--query` together** and silently
+  dropped one of them. The two are now a clap conflict.
+- **`snp sync config` without any flag exited 0** after printing a usage
+  line to stderr. It is now a usage error.
+- **A corrupt `sync.toml` was replaced by writable defaults.** The CRC
+  failure path returned `SyncSettings::default()` — a *writable* state — so
+  the next writer (`snp sync config --auto-sync on`) persisted those defaults
+  over the user's configuration, destroying exactly what the `.corrupt.bak`
+  copy was taken to preserve. The CRC path now fails closed, like the parse
+  path.
+- **The `sync.toml` corruption warning was printed twice.** The settings are
+  loaded more than once per command (the plaintext→keychain migration loads
+  them before the command does); the warning is now emitted once per process.
+- **The `sync.toml` corruption warning claimed the file had been reset.** It
+  never was — the file is left unchanged. The message now says so and names
+  the backup copy.
+- **`snp register` reset the credential revision counter.** The counter is
+  the only signal that can detect a credential replacement (the API key value
+  is deliberately excluded from the config fingerprint), so a constant value
+  left a deferred auto-sync failure waiting forever. The counter now advances
+  on every registration.
+- **`snp get --expanded` expanded text it had just substituted.** The
+  expansion replaced tokens in the already-substituted result, so a value that
+  happened to look like `<other>` was expanded again. The expansion is now a
+  single left-to-right pass over the original command, matching the
+  interactive path.
+- **A gRPC error status was classified by substring matching.** `ALREADY_EXISTS`
+  and `PERMISSION_DENIED` both became untyped runtime errors, and the
+  classification then guessed from the English status text — landing
+  `PERMISSION_DENIED` in the local-failure class instead of the
+  authentication one. Both codes now map to typed `SyncFailureKind` values.
+- **A backup body could be torn by a power loss.** Only the manifest went
+  through the sanctioned durable write path; the bodies were plain
+  `fs::write` calls and the publish was not dir-fsynced, so `snp backup`
+  could print "Backup created" for a backup whose bodies were truncated. The
+  bodies are now written through the atomic/durable path, and the staging and
+  final directories are fsynced around the publish.
+- **An API key that could not be encoded as gRPC metadata was dropped
+  silently.** The request then went out unauthenticated and the server
+  reported an invalid credential for a credential that was never transmitted.
+  The failure is now logged, and the header is built in a zeroizing buffer.
+- **The decrypted plaintext was not wiped.** The cipher's key schedule was
+  not zeroized (the `aes-gcm` `zeroize` feature was off) and the recovered
+  plaintext was dropped unwiped on the UTF-8 error path. Both are zeroized
+  now.
+- **The pre-restore backup followed symlinks and missed two files.** The
+  snapshot is the recovery point the user is told about, but it copied the
+  *target* of a symlinked library file and covered neither `usage.toml` nor
+  `sync.toml` — both of which a replace-mode restore overwrites. The snapshot
+  now skips symlinked and non-regular entries and covers every file the
+  restore can overwrite.
+- **The audit log did not escape the library id.** Every other free-text
+  field was pipe-escaped, so a `|` in a library name shifted the remaining
+  fields of the record.
+
 ### Changed
 
 - **The sync upload path no longer deep-clones the request on every retry.**
@@ -225,12 +335,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known limitations
 
-- **A snippet pushed with an old `updated_at` can still become invisible to
-  other devices.** The server's delta cursor is `updated_at`, which the
-  client controls, so a device with a clock behind (or restored from an old
-  backup) can push a row that no other device ever pulls. The fix — a
-  monotonic per-library write sequence as the cursor — needs a protocol and
-  schema change and is recorded, not yet implemented, in
+- **The server's delta cursor is still a timestamp, not a write sequence.**
+  The cursor is now server-assigned (`snippets.visible_at`, clamped to the
+  library watermark) and monotone by construction, so a row can no longer
+  become invisible because of a client-chosen `updated_at`. What remains is
+  the second-granularity wart: the `>=` filter re-delivers boundary rows.
+  A monotonic per-library write sequence needs a protocol and schema change
+  and is recorded, not yet implemented, in
   `plans/adrs/ADR-0001-sync-delta-cursor.md`.
 - **`snip-sync` still holds one write transaction across a whole upsert
   batch.** Releasing it sooner means splitting the batch into several

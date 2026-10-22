@@ -342,16 +342,10 @@ fn test_edit_output_by_id() {
     let (_tmp, config_dir) = setup_test_env();
     create_exact_test_library(&config_dir);
 
+    // The exact selector and `--filter` are alternatives, never combined:
+    // supplying both is a usage error (see `tests/cli_usage_errors.rs`).
     let output = snp_in(&config_dir)
-        .args([
-            "edit",
-            "--id",
-            "exc-1",
-            "--output",
-            "test-value",
-            "--filter",
-            "test run exact",
-        ])
+        .args(["edit", "--id", "exc-1", "--output", "test-value"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -369,8 +363,6 @@ fn test_edit_ambiguous_returns_exit_5() {
             "ambiguous desc",
             "--output",
             "val",
-            "--filter",
-            "ambiguous desc",
         ])
         .output()
         .unwrap();

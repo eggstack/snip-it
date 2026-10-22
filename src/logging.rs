@@ -431,7 +431,11 @@ fn write_audit_log_entry_sync(entry: &AuditLogEntry) -> std::io::Result<()> {
         entry.action,
         escape_pipe(&entry.snippet_id),
         escape_pipe(&entry.description),
-        entry.library_id,
+        // The library id is part of the pipe-delimited record and can come
+        // from a user-supplied library name, so it must be escaped like every
+        // other free-text field — otherwise a `|` in the name shifts the
+        // remaining fields.
+        escape_pipe(&entry.library_id),
         escape_pipe(&entry.device_id),
     );
 

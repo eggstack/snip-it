@@ -503,6 +503,78 @@ pub fn save_sync_settings(settings: &SyncSettings) -> SnipResult<()> {
     Ok(())
 }
 
+/// Returns `true` the first time a corruption warning is emitted for `path`
+/// in this process, and `false` afterwards.
+///
+/// `load_sync_settings` is called more than once per command (the
+/// plaintext→keychain migration loads the settings before the command does),
+/// and the corruption warning must reach the user exactly once — not once per
+/// call.
+fn claim_corrupt_config_warning(path: &std::path::Path) -> bool {
+    static WARNED: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+    let mut warned = WARNED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if warned.as_deref() == Some(path) {
+        return false;
+    }
+    *warned = Some(path.to_path_buf());
+    true
+}
+
+/// Report a corrupt `sync.toml` and fail closed.
+///
+/// The file is never modified: it is only copied aside so the user can
+/// inspect it. Returning the defaults would be a *writable* state, and the
+/// next writer (`snp sync config --auto-sync on`, for instance) would persist
+/// those defaults over the user's configuration — destroying the very
+/// settings the backup copy was taken to preserve.
+fn fail_closed_on_corrupt_config(
+    path: &std::path::Path,
+    reason: &str,
+    detail: Option<&str>,
+) -> SnipError {
+    let backup_path = path.with_extension("toml.corrupt.bak");
+    let backup_error = fs::copy(path, &backup_path).err();
+
+    if claim_corrupt_config_warning(path) {
+        match &backup_error {
+            Some(backup_err) => {
+                tracing::error!("Failed to backup {reason} sync config: {backup_err}");
+                eprintln!(
+                    "warning: {} {reason} and may be corrupted; \
+                     it was left unchanged and sync settings could not be loaded \
+                     (the backup copy also failed: {backup_err}). \
+                     Repair or remove the file, then run 'snp register --force' to reconfigure.",
+                    path.display()
+                );
+            }
+            None => {
+                tracing::info!(
+                    "Backed up {reason} sync config to {}",
+                    backup_path.display()
+                );
+                eprintln!(
+                    "warning: {} {reason} and may be corrupted; \
+                     it was backed up to {} and left unchanged, and sync settings could not be loaded. \
+                     Repair or remove the file, then run 'snp register --force' to reconfigure.",
+                    path.display(),
+                    backup_path.display()
+                );
+            }
+        }
+    }
+
+    let mut message = format!(
+        "{} {reason} and may be corrupted; it was left unchanged",
+        path.display()
+    );
+    if let Some(detail) = detail {
+        message.push_str(&format!(": {detail}"));
+    }
+    SnipError::runtime_error("sync config could not be loaded", Some(&message))
+}
+
 pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let path = get_sync_config_path();
 
@@ -513,31 +585,13 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let content = cached_read_toml(&path)?;
 
     if !verify_integrity(&content) {
-        tracing::warn!("sync.toml integrity check failed — file may be corrupted. Using defaults.");
-        // Backup corrupted file before returning defaults
-        let backup_path = path.with_extension("toml.corrupt.bak");
-        if let Err(backup_err) = fs::copy(&path, &backup_path) {
-            tracing::error!("Failed to backup corrupted sync config: {}", backup_err);
-            eprintln!(
-                "warning: {} failed its integrity check and may be corrupted; \
-                 sync settings were reset to defaults (backup also failed: {backup_err}). \
-                 Run 'snp sync config' to reconfigure.",
-                path.display()
-            );
-        } else {
-            tracing::info!(
-                "Backed up corrupted sync config to {}",
-                backup_path.display()
-            );
-            eprintln!(
-                "warning: {} failed its integrity check and may be corrupted; \
-                 it was backed up to {} and sync settings were reset to defaults. \
-                 Run 'snp sync config' to reconfigure.",
-                path.display(),
-                backup_path.display()
-            );
-        }
-        return Ok(SyncSettings::default());
+        // Fail closed: a corrupt config must never be silently replaced by a
+        // writable default.
+        return Err(fail_closed_on_corrupt_config(
+            &path,
+            "failed its integrity check",
+            None,
+        ));
     }
 
     let content = strip_integrity_line(&content);
@@ -552,32 +606,13 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
             // treatment: back the file up and say so on stderr. Without it the
             // caller silently falls back to the defaults and the user sees
             // "sync disabled" with no explanation and no file to inspect.
-            let backup_path = path.with_extension("toml.corrupt.bak");
-            if let Err(backup_err) = fs::copy(&path, &backup_path) {
-                tracing::error!("Failed to backup unparseable sync config: {backup_err}");
-                eprintln!(
-                    "warning: {} could not be parsed and may be corrupted; \
-                     sync settings were reset to defaults (backup also failed: {backup_err}). \
-                     Run 'snp sync config' to reconfigure.",
-                    path.display()
-                );
-            } else {
-                tracing::info!(
-                    "Backed up unparseable sync config to {}",
-                    backup_path.display()
-                );
-                eprintln!(
-                    "warning: {} could not be parsed and may be corrupted; \
-                     it was backed up to {} and sync settings were reset to defaults. \
-                     Run 'snp sync config' to reconfigure.",
-                    path.display(),
-                    backup_path.display()
-                );
-            }
-            return Err(SnipError::toml_error("parse sync config", e));
+            return Err(fail_closed_on_corrupt_config(
+                &path,
+                "could not be parsed",
+                Some(&e.to_string()),
+            ));
         }
     };
-
     let settings = config.settings.sync;
 
     // NOTE: loading the settings is a pure read. The plaintext→keychain

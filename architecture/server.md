@@ -499,6 +499,19 @@ about the payload rather than a transient condition
 (`src/sync.rs:109-131`). `InvalidArgument`, `NotFound`, `AlreadyExists`,
 `PermissionDenied`, and `Unauthenticated` are also non-retryable.
 
+Two RPCs are deliberately **not** retried at all, because they are not
+idempotent and the server offers no way to deduplicate them:
+
+- `Register` mints a fresh account and a fresh API key on every call and
+  discards the request body, so there is no idempotency key. A retry after a
+  lost response would leave a second, live, untracked credential on the
+  server (`src/sync.rs:1070-1080`).
+- `CreateLibrary` mints a fresh library id on every call, but the server
+  enforces `UNIQUE(user_id, name)`, so a retry comes back as `ALREADY_EXISTS`.
+  The client resolves that conflict by **adopting** the existing server
+  library instead of failing, so the local library is never left permanently
+  unlinked (`src/sync.rs:1163-1215`).
+
 ## HTTP server (EggServe)
 
 **File**: `snip-sync/src/http.rs` (230 lines). One concrete two-route
@@ -596,9 +609,10 @@ Locked by socket tests in `tests/snip_sync_lifetime.rs`:
 
 ### Keying: the peer address, never the API key
 
-`peer_rate_limit_key()` (`snip-sync/src/lib.rs:778-795`) derives the
-bucket identity from the peer `SocketAddr` that tonic populates into
-`request.extensions()`.
+`peer_rate_limit_key()` (`snip-sync/src/lib.rs:781-806`) derives the
+bucket identity from the peer address that tonic populates into
+`request.extensions()` as a `tonic::transport::server::TcpConnectInfo`
+(`remote_addr()`).
 
 The limiter used to key on the **raw, request-supplied API key**, before
 validation. Because the key is not validated until `db.get_user_by_api_key`
@@ -607,27 +621,46 @@ runs, every attacker-chosen key got a fresh budget of
 ceiling** on the authenticated gRPC surface. The peer address is bounded
 by the number of real callers, so keying on it restores an aggregate
 ceiling. Every RPC now uses the peer-derived key: `register`
-(`snip-sync/src/lib.rs:1010`), `get_snippets` (`:1057`),
-`push_snippets` (`:1168`), `sync` (`:1352`), `create_library` (`:1592`),
-`list_libraries` (`:1649`), `delete_library` (`:1710`),
-`list_premade_libraries` (`:1769`), `get_premade_library` (`:1821`),
-`search_premade_libraries` (`:1893`).
+(`snip-sync/src/lib.rs:1058`), `get_snippets`, `push_snippets`, `sync`,
+`create_library`, `list_libraries`, `delete_library`,
+`list_premade_libraries`, `get_premade_library`, `search_premade_libraries`.
 
-The rate-limit check runs **before** the API-key lookup
-(`snip-sync/src/lib.rs:832-864`), so an unauthenticated flood is bounded
-by the same peer bucket. Over-limit calls return
-`Status::resource_exhausted` and increment
+The extension type matters: tonic inserts a `TcpConnectInfo`, never a bare
+`std::net::SocketAddr`, so a lookup for the latter yields `None` for every
+request and collapses every caller onto one global `"unknown"` bucket.
+
+### Two buckets: pre-authentication and authenticated
+
+The limiter runs in two stages so that an unauthenticated caller cannot
+spend the budget of a legitimate one:
+
+| Bucket | Key | Limit | Enforced |
+|--------|-----|-------|----------|
+| pre-auth | `pre-auth:<peer>` | `rate_limit_per_minute` × `PRE_AUTH_RATE_LIMIT_MULTIPLIER` (10) | before the API-key lookup |
+| authenticated | `<peer>` | `rate_limit_per_minute` | after a **valid** API key was accepted |
+| registration | `register:<peer>` | `rate_limit_per_minute` | `register` only (unauthenticated by nature) |
+
+The pre-auth bucket only has to bound the cost of the key lookup, so it is
+generous by design. The authenticated bucket is the per-caller ceiling: only
+a request that presented a valid key can spend it, so an invalid key can
+never lock out a legitimate caller behind the same peer address.
+`register` gets its own bucket for the same reason — it is unauthenticated
+and must not consume the authenticated budget.
+
+Over-limit calls return `Status::resource_exhausted` and increment
 `snip_sync_rate_limit_hits_total`.
 
 ### Trusted proxies and `x-forwarded-for`
 
 `x-forwarded-for` is honoured **only** when the peer address is listed in
-`trusted_proxies` (`snip-sync/src/lib.rs:784-794`). The trusted list
+`trusted_proxies` (`snip-sync/src/lib.rs:797-806`). The trusted list
 comes from the `TRUSTED_PROXIES` environment variable (comma-separated,
 entries that parse as `IpAddr` are kept) or `[server.rate_limit]
 trusted_proxies` (`snip-sync/src/lib.rs:470-478`). The first
 comma-separated element of the header is used, with any `:port` suffix
-stripped (`strip_port`, `snip-sync/src/lib.rs:78`). An untrusted peer
+stripped (`strip_port`, `snip-sync/src/lib.rs:79`). `strip_port` never
+panics on malformed input — it is attacker-influenced behind a trusted
+proxy and is only ever used as a bucket key. An untrusted peer
 that sends the header is ignored, and a request with no peer address
 falls back to the literal key `"unknown"`.
 

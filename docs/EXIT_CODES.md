@@ -11,7 +11,7 @@
 |------|----------|------|---------|
 | 0 | `SUCCESS` | Success | Operation completed successfully |
 | 1 | `GENERAL_ERROR` | General error | Unclassified operational failure |
-| 2 | `USAGE_ERROR` | Usage error | CLI usage or argument error (Clap-controlled) |
+| 2 | `USAGE_ERROR` | Usage error | CLI usage or argument error (Clap-enforced, or a Rust-side `SnipError::UsageError`) |
 | 3 | `NOT_FOUND` | Not found | Snippet or resource does not exist |
 | 4 | `CANCELLED` | Cancelled | User cancelled an interactive action |
 | 5 | `AMBIGUOUS` | Ambiguous | Multiple matches found, unique match expected |
@@ -52,7 +52,7 @@ pub enum CliOutcome {
 | `Cancelled` | 4 | `select` returns `CliOutcome::Cancelled` (`src/commands/select_cmd.rs:110`); `main.rs` turns it into exit 4 via `outcome.exit_code()` |
 | `ValidationFailed` | 6 | |
 | `PersistenceFailed` | 1 | Shares code with `GENERAL_ERROR` |
-| `SyncFailed` | 7 | **Reserved.** No command constructs this variant today — `main.rs` maps every command `Err` to `GENERAL_ERROR` (1). The code remains part of the stable contract. |
+| `SyncFailed` | 7 | **Reserved.** No command constructs this variant today — `main.rs` maps every command `Err` to `GENERAL_ERROR` (1), except `SnipError::UsageError`, which maps to `USAGE_ERROR` (2). The code remains part of the stable contract. |
 | `ExecutionFailed { child_code: None }` | 8 | Wrapper code when child exit is unknown |
 | `ExecutionFailed { child_code: Some(n) }` | n | Propagates child process exit code |
 | `ConflictOrRefused` | 9 | |
@@ -96,15 +96,24 @@ This ensures scripts can distinguish between `snp` infrastructure failures (exit
 
 ## Exit-Code Mapping in `main.rs`
 
-The central exit-code mapper in `src/main.rs:1055-1070` handles two paths:
+The central exit-code mapper in `src/main.rs:1055-1075` handles two paths:
 
-1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1.
+1. **`CliOutcome`** path: `Ok(Success)` → exit 0, `Ok(Cancelled)` → exit 4 via `outcome.exit_code()`, other outcomes → their stable codes, `Err(e)` → exit 1, except `Err(SnipError::UsageError { .. })` → exit 2.
 2. **`repair`** path: `RepairExitStatus::UnsafeOnly` → exit 10 and `PartialFailure` → exit 1 via `exit_on_repair_status` (`src/main.rs:401-414`) — there is **no** `CliOutcome` variant for exit 10, so it cannot be produced by the mapper above. `Clean`, `Repaired`, `FindingsSafe`, and `DryRun` all exit 0.
 
    `FindingsSafe` means the report-only invocation (no `--apply`, no
    `--dry-run`) found only `[auto]`-repairable issues. Those are *not* unsafe
    repairs pending an operator decision, so they do not claim exit 10 — a
    script can tell "nothing is blocked" from "a human must act".
+
+## Usage Errors
+
+`SnipError::UsageError` is the Rust-side counterpart of Clap's own argument
+conflicts. It is raised by validations the Clap schema cannot express
+(mutually exclusive output modes, a missing selector, a missing required
+option) and maps to the same exit code 2 that Clap produces, so the exit
+status tells "bad invocation" apart from "operation failed" regardless of
+which layer rejected the invocation.
 
 ```rust
 match dispatch_command(cli.command) {
@@ -114,7 +123,10 @@ match dispatch_command(cli.command) {
     }
     Err(e) => {
         eprintln!("error: {e}");
-        std::process::exit(1);
+        std::process::exit(match e {
+            SnipError::UsageError { .. } => exit_code::USAGE_ERROR,
+            _ => exit_code::GENERAL_ERROR,
+        });
     }
 }
 ```

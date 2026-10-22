@@ -12,13 +12,13 @@
 | Command | Interactive | Reads stdin | Writes stdout | Writes stderr | May prompt | May mutate | May clipboard | May execute shell | May network | Machine-output modes | Exit categories |
 |---------|------------|-------------|---------------|---------------|------------|------------|---------------|-------------------|-------------|---------------------|-----------------|
 | `new` | No (unless `--editor`) | Yes (`--command-stdin`) | Yes | Yes | Yes (`--tags`) | Yes | No | Yes (`--editor`) | No | None | 0, 1 |
-| `list` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--csv` | 0, 1 |
+| `list` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--csv` | 0, 1, 2 |
 | `run` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (execution) | No | Yes | No | None | 0, 1, 3, 5, 8 |
 | `clip` | Yes (TUI) or No (`--id`) | No | No | Yes | Yes | Yes (clipboard) | Yes | No | No | None | 0, 1, 3, 5 |
 | `search` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | None | 0, 1 |
-| `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 4 |
-| `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 3, 5 |
-| `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 3, 5 |
+| `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 2, 4 |
+| `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 2, 3, 5 |
+| `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 2, 3, 5 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
 | `doctor` | No | No | Yes | Yes | No | No | No | Yes (diagnostic probes) | No | `--report json` | 0, 1, 6 |
@@ -26,7 +26,7 @@
 | `restore` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1 |
 | `repair` | No | No | Yes | Yes | No | Yes (`--apply`) | No | No | No | `--json` | 0, 1, 10 |
 | `import` | No | No | Yes | Yes | No | Yes | No | No | No | `--report json` | 0, 1 |
-| `sync` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 6, 9 |
+| `sync` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1, 2, 6, 9 |
 | `register` | No | No | Yes | Yes | No | Yes | No | No | Yes | None | 0, 1 |
 | `cron` | No | No | Yes | Yes | Yes | Yes (clipboard copy) | Yes (on confirmation) | No | No | None | 0, 1 |
 | `library` | No | No | Yes | Yes | No | Yes | No | No | No | None | 0, 1 |
@@ -70,7 +70,7 @@ that client's configuration. See [`MCP.md`](MCP.md).
 |------|------|---------|
 | 0 | Success | Operation completed successfully |
 | 1 | General error | Unclassified operational failure |
-| 2 | `USAGE_ERROR` | CLI usage or argument error (Clap-controlled). Validation findings use **6**, not 2. |
+| 2 | `USAGE_ERROR` | CLI usage or argument error (Clap-enforced, or a Rust-side `SnipError::UsageError`). Validation findings use **6**, not 2. |
 | 3 | Not found | Requested resource does not exist |
 | 4 | Cancelled | User cancelled interactive action |
 | 5 | Ambiguous match | Multiple candidates, unique match expected |
@@ -80,7 +80,8 @@ that client's configuration. See [`MCP.md`](MCP.md).
 | 9 | Conflict/refused | Destructive action refused or generation changed |
 | 10 | Unsafe repairs | Every finding awaits an operator decision and was not applied |
 
-Every command can also exit **2** on a clap usage/argument error; the table's
+Every command can also exit **2** on a usage/argument error — enforced either
+by clap or by the Rust-side `SnipError::UsageError` variant; the table's
 "Exit categories" column lists only the command-level outcomes.
 
 Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code mapping.

@@ -1379,9 +1379,9 @@ fn merge_snippets(local: &Snippets, server_snippets: &[ProtoSnippet]) -> Snippet
         // uploaded; keep it.
         //
         // A *tombstone* absent from the server response is a deletion the
-        // server has not acknowledged yet. The response is a delta
-        // (`updated_at >= since`), so a tombstone is missing whenever the
-        // server row sits below the `last_sync` watermark — guaranteed in
+        // server has not acknowledged yet. The response is a delta (the
+        // server's cursor filter is inclusive), so a tombstone is missing
+        // whenever the server row sits below the `last_sync` watermark — guaranteed in
         // pull-only mode, where nothing is uploaded at all. Dropping it
         // here erased the record of the intent: the deletion could never be
         // propagated, and the server's live copy would resurrect on the next

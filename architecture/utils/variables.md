@@ -378,7 +378,7 @@ An odd number of backslashes before `<` escapes it; an even number does not.
 |------|------|
 | `src/utils/variables.rs` | The whole grammar: parsing, expansion, escape stripping, diagnostics |
 | `src/commands/mod.rs:316-335` | `expand_snippet_command` — parse → prompt → expand (interactive path) |
-| `src/commands/get_cmd.rs:279-330` | `expand_without_prompt` — the non-interactive `--var` path (does **not** use `expand_command`) |
+| `src/commands/get_cmd.rs:427-…` | `expand_without_prompt` — the non-interactive `--var` path (does **not** use `expand_command`, but applies the same single-pass rule) |
 | `src/ui/variables.rs:78` | `prompt_variables` — the TUI prompt dialog |
 | `src/ui/mod.rs:489-513`, `:1639` | Preview rendering and the visual-range multi-select copy |
 | `src/commands/import_cmd.rs:216-222` | Detects snippets that contain variables on import |
@@ -409,9 +409,12 @@ An odd number of backslashes before `<` escapes it; an even number does not.
   angle brackets and on `\\`. If a command relies on an unknown escape
   surviving expansion, that behaviour is not shared.
 - **`expand_command` is not the non-interactive path.** `snp get` uses its own
-  `expand_without_prompt` (`src/commands/get_cmd.rs:279-330`), which does
-  plain string replacement per kind and leaves an unassigned `Required`
-  variable **untouched** rather than substituting the bare name.
+  `expand_without_prompt` (`src/commands/get_cmd.rs:427-…`), which leaves an
+  unassigned `Required` variable **untouched** rather than substituting the
+  bare name. Both paths resolve every token against the **original** command
+  in a single left-to-right pass, so text produced by one substitution is
+  never re-scanned for another token: a value that happens to look like
+  `<other>` stays verbatim.
 - **The default is applied at expansion time, not at parse time.** The parsed
   `Variable` always carries the default; whether it is used depends on the
   values handed to the expander.

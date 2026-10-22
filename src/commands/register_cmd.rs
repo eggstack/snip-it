@@ -15,8 +15,12 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
     // Migrate a legacy plaintext API key before the settings are used. This
     // rewrites `sync.toml`, so it must run outside any lock-holding path.
     crate::config::migrate_plaintext_api_key_to_keychain();
+    // Load the settings once: a corrupt file must not print its recovery
+    // warning twice, and the credential revision must come from the same
+    // snapshot the "already registered" check used.
+    let loaded_settings = load_sync_settings().ok();
     if !force
-        && let Ok(settings) = load_sync_settings()
+        && let Some(settings) = loaded_settings.as_ref()
         && !settings.device_id.is_empty()
     {
         eprintln!("Already registered! Device ID: {}", settings.device_id);
@@ -30,7 +34,7 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
 
     let server_url = if server != DEFAULT_SERVER_URL {
         server.clone()
-    } else if let Ok(settings) = load_sync_settings() {
+    } else if let Some(settings) = loaded_settings.as_ref() {
         if !settings.server_url.is_empty() {
             settings.server_url.clone()
         } else {
@@ -40,6 +44,15 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
         server.clone()
     };
 
+    // Carry the previous credential revision forward so the counter advances
+    // monotonically across re-registrations. A failed load (missing or
+    // corrupt file) starts the counter at 0, so the first registration
+    // writes 1.
+    let previous_credential_revision = loaded_settings
+        .as_ref()
+        .map(|settings| settings.credential_revision)
+        .unwrap_or(0);
+
     match runtime.block_on(crate::sync::SyncClient::register(server_url.clone())) {
         Ok((api_key, device_id)) => {
             let mut sync_settings = SyncSettings::default();
@@ -47,7 +60,13 @@ pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> Sn
             sync_settings.server_url = server_url.clone();
             sync_settings.api_key = api_key.clone();
             sync_settings.device_id = device_id.clone();
-            sync_settings.credential_revision = 1;
+            // The API key value is deliberately excluded from the config
+            // fingerprint, so this counter is the *only* signal that can
+            // detect a credential replacement. It must advance whenever the
+            // credential changes — including a re-registration that rotates
+            // the key — otherwise a deferral waiting for a configuration
+            // change is never released.
+            sync_settings.credential_revision = previous_credential_revision + 1;
 
             if let Err(e) = save_sync_settings(&sync_settings) {
                 eprintln!("Failed to save sync settings: {e}");

@@ -273,7 +273,10 @@ macro_rules! retry_grpc_unified {
 /// Convert a gRPC error status into a typed `SnipError`.
 ///
 /// Distinguishes `NotFound` (library not found), `DeadlineExceeded` (timeout),
-/// and `InvalidArgument` (clock skew) from other non-retryable errors.
+/// `InvalidArgument` (clock skew), `AlreadyExists` (the server already has a
+/// library with this name) and `PermissionDenied` (the credential was
+/// refused) from other non-retryable errors, so the failure classification
+/// never depends on substring-matching an English gRPC status string.
 fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipError {
     if status.code() == Code::NotFound {
         SnipError::sync_failure(
@@ -283,6 +286,16 @@ fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipErro
     } else if status.code() == Code::DeadlineExceeded {
         SnipError::sync_failure(
             crate::error::SyncFailureKind::Timeout,
+            Some(&status.to_string()),
+        )
+    } else if status.code() == Code::AlreadyExists {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::CreateLibraryConflict,
+            Some(&status.to_string()),
+        )
+    } else if status.code() == Code::PermissionDenied {
+        SnipError::sync_failure(
+            crate::error::SyncFailureKind::AuthenticationFailed,
             Some(&status.to_string()),
         )
     } else if status.code() == Code::InvalidArgument {
@@ -303,13 +316,28 @@ fn grpc_error_to_snip_error(operation: &str, status: &tonic::Status) -> SnipErro
 /// empty key still reaches here the header is omitted and the request goes out
 /// unauthenticated, which the server rejects with a bare 401 — loud enough in
 /// the logs to diagnose, and never a panic.
+///
+/// A key that cannot be encoded as gRPC metadata is logged as an error too:
+/// dropping the header silently would make the server report an invalid
+/// credential for a credential that was never transmitted.
 pub(crate) fn add_api_key_metadata<T>(request: &mut tonic::Request<T>, api_key: &str) {
     if api_key.is_empty() {
         tracing::error!("refusing to attach an empty API key to a sync request");
         return;
     }
-    if let Ok(val) = format!("Bearer {api_key}").parse() {
-        request.metadata_mut().insert("authorization", val);
+    // The credential copy is zeroized when it goes out of scope.
+    let header_value = zeroize::Zeroizing::new(format!("Bearer {api_key}"));
+    match header_value.parse::<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>() {
+        Ok(val) => {
+            request.metadata_mut().insert("authorization", val);
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "failed to encode the API key as gRPC metadata; \
+                 the request will be sent without an authorization header"
+            );
+        }
     }
 }
 
@@ -1054,14 +1082,17 @@ impl SyncClient {
 
         let mut client = SnippetSyncClient::new(channel);
 
-        let response = retry_grpc_unified!(
-            None::<SyncRunLimits>,
-            client.register(tonic::Request::new(RegisterRequest {
+        // `Register` is deliberately NOT retried. The server mints a fresh
+        // account and a fresh API key on every call and discards the request
+        // body, so there is no idempotency key to deduplicate on: a retry
+        // after a lost response would leave a second, live, untracked
+        // credential on the server. One attempt, one account.
+        let response = client
+            .register(tonic::Request::new(RegisterRequest {
                 device_id: String::new(),
-            })),
-            "Register request",
-            RetryBackoff::Standard
-        )?;
+            }))
+            .await
+            .map_err(|e| grpc_error_to_snip_error("Register request", &e))?;
 
         let response = response.into_inner();
         if response.success {
@@ -1136,6 +1167,14 @@ impl SyncClient {
     }
 
     /// Creates a new library on the sync server.
+    ///
+    /// The RPC is not idempotent on the wire — the server mints a fresh
+    /// library id on every call — but the server enforces
+    /// `UNIQUE(user_id, name)`, so a retry after a lost response comes back
+    /// as `ALREADY_EXISTS`. That conflict is resolved by adopting the
+    /// existing server library instead of failing: otherwise the local
+    /// library would never be linked and every later sync would repeat the
+    /// same doomed call.
     pub async fn create_library(&mut self, name: &str) -> SnipResult<Library> {
         self.ensure_budget()?;
         self.require_api_key()?;
@@ -1153,7 +1192,31 @@ impl SyncClient {
             },
             "Create library",
             RetryBackoff::Standard
-        )?;
+        );
+
+        let response = match response {
+            Ok(response) => response,
+            Err(e) => {
+                if !matches!(
+                    &e,
+                    SnipError::SyncFailure {
+                        kind: crate::error::SyncFailureKind::CreateLibraryConflict,
+                        ..
+                    }
+                ) {
+                    return Err(e);
+                }
+                // The library already exists on the server: adopt it instead
+                // of leaving the local library permanently unlinked.
+                let existing = self.find_library_by_name(&name_str).await?;
+                tracing::info!(
+                    library = %name_str,
+                    server_id = %existing.id,
+                    "Library already exists on the server; adopting the existing library"
+                );
+                return Ok(existing);
+            }
+        };
 
         let response = response.into_inner();
         if response.success {
@@ -1169,6 +1232,26 @@ impl SyncClient {
                 Some(&response.message),
             ))
         }
+    }
+
+    /// Find a server library by its (case-insensitive) name.
+    ///
+    /// Returns `CreateLibraryConflict` when no library carries that name.
+    async fn find_library_by_name(&mut self, name: &str) -> SnipResult<Library> {
+        let wanted = name.trim().to_lowercase();
+        let libraries = self.list_libraries().await?;
+        libraries
+            .into_iter()
+            .find(|lib| lib.name.trim().to_lowercase() == wanted)
+            .ok_or_else(|| {
+                SnipError::sync_failure(
+                    crate::error::SyncFailureKind::CreateLibraryConflict,
+                    Some(&format!(
+                        "server reported that library '{name}' already exists, \
+                         but no such library is visible to this account"
+                    )),
+                )
+            })
     }
 
     /// Lists all premade libraries available on the server.
@@ -2508,6 +2591,48 @@ mod tests {
         let error =
             grpc_error_to_snip_error("sync", &tonic::Status::invalid_argument("bad snippet id"));
         assert!(matches!(error, SnipError::Runtime { .. }));
+    }
+
+    /// A duplicate library name must arrive as a typed conflict, not as an
+    /// untyped `Runtime`: the classification decides whether the auto-sync
+    /// worker retries or waits for the user.
+    #[test]
+    fn test_already_exists_is_a_typed_conflict() {
+        let error = grpc_error_to_snip_error(
+            "Create library",
+            &tonic::Status::already_exists("Library 'x' already exists"),
+        );
+        assert!(matches!(
+            error,
+            SnipError::SyncFailure {
+                kind: SyncFailureKind::CreateLibraryConflict,
+                ..
+            }
+        ));
+        assert_eq!(
+            crate::sync_failure::FailureClass::from_error(&error),
+            crate::sync_failure::FailureClass::Configuration
+        );
+    }
+
+    /// A refused credential is a configuration problem, not a local failure.
+    #[test]
+    fn test_permission_denied_is_typed_as_authentication() {
+        let error = grpc_error_to_snip_error(
+            "Create library",
+            &tonic::Status::permission_denied("permission denied"),
+        );
+        assert!(matches!(
+            error,
+            SnipError::SyncFailure {
+                kind: SyncFailureKind::AuthenticationFailed,
+                ..
+            }
+        ));
+        assert_eq!(
+            crate::sync_failure::FailureClass::from_error(&error),
+            crate::sync_failure::FailureClass::Configuration
+        );
     }
 
     #[test]

@@ -111,6 +111,7 @@ Representative unit tests live at the end of `sync_commands.rs` (merge: newer-ti
 | `AuthenticationFailed` | Configuration | none (unit test only) |
 | `SyncRequestFailed` | Transient | sync.rs |
 | `CreateLibraryFailed` | Configuration | sync.rs |
+| `CreateLibraryConflict` | Configuration | sync.rs |
 | `GetPremadeLibraryFailed` | Transient | sync.rs |
 | `RegistrationFailed` | Configuration | sync.rs |
 | `LibraryManagerInitFailed` | LocalFailure | sync_commands.rs |
@@ -143,6 +144,15 @@ Legacy status codes (`deferred_disabled`, `deferred_not_configured`, `authentica
 ### Classification: Variant-Based (Not String Matching)
 
 Auto-sync delegates error classification to `FailureClass::from_error()` in `policy.rs`. For `SnipError::SyncFailure` variants, classification is direct variant matching — no string analysis. For legacy `SnipError::Runtime` variants, fallback heuristic string matching is used.
+
+The gRPC status codes that carry a classification are mapped to typed
+`SyncFailureKind` variants **before** the error reaches the classifier, so
+the class never depends on substring-matching an English status string:
+`ALREADY_EXISTS` → `CreateLibraryConflict` (the client then adopts the
+existing server library), `PERMISSION_DENIED` → `AuthenticationFailed`,
+`NOT_FOUND` → `LibraryNotFound`, `DEADLINE_EXCEEDED` → `Timeout`, and
+`INVALID_ARGUMENT` → `ClockSkew` when the message starts with
+`CLOCK_SKEW:`.
 
 ### Exponential Backoff
 

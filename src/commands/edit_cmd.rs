@@ -22,13 +22,13 @@ pub struct EditArgs {
     #[arg(short, long)]
     pub filter: Option<String>,
     /// Match by exact snippet UUID (bypasses TUI for output editing)
-    #[arg(long, conflicts_with_all = ["description_exact", "command_exact"])]
+    #[arg(long, conflicts_with_all = ["description_exact", "command_exact", "filter"])]
     pub id: Option<String>,
     /// Match by exact description (bypasses TUI)
-    #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact"])]
+    #[arg(long = "description-exact", conflicts_with_all = ["id", "command_exact", "filter"])]
     pub description_exact: Option<String>,
     /// Match by exact command text (bypasses TUI)
-    #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact"])]
+    #[arg(long = "command-exact", conflicts_with_all = ["id", "description_exact", "filter"])]
     pub command_exact: Option<String>,
 }
 

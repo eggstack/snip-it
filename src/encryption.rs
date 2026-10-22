@@ -358,7 +358,13 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
 
     drop(std::mem::take(&mut key));
 
-    String::from_utf8(plaintext)
+    // The recovered plaintext is zeroized when it goes out of scope, including
+    // on the UTF-8 error path where it would otherwise be dropped without
+    // being wiped. The copy into the returned `String` is only made after the
+    // UTF-8 check succeeds, so the error path leaves no unwiped copy behind.
+    let plaintext = zeroize::Zeroizing::new(plaintext);
+    std::str::from_utf8(plaintext.as_slice())
+        .map(str::to_owned)
         .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {e}")))
 }
 

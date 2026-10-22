@@ -282,10 +282,12 @@ Pipe-delimited, one line per entry (`:428-436`):
 ```
 
 - `timestamp` is Unix **seconds** (not milliseconds).
-- `snippet_id`, `description`, and `device_id` are escaped by `escape_pipe`
-  (`:467-482`): `\` → `\\`, `|` → `\|`, newline → `\n`, CR → `\r`, and any
-  other control character → `\xNN`. `action` and `library_id` are **not**
-  escaped.
+- `snippet_id`, `description`, `library_id`, and `device_id` are escaped by
+  `escape_pipe` (`:467-482`): `\` → `\\`, `|` → `\|`, newline → `\n`, CR →
+  `\r`, and any other control character → `\xNN`. `library_id` is escaped
+  like every other free-text field — it can carry a user-supplied library
+  name, and an unescaped `|` would shift the remaining fields of the record.
+  `action` is a fixed token and is **not** escaped.
 
 ### File handling
 

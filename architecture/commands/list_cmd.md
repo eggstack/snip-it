@@ -45,7 +45,10 @@ single-file checkout.
    - Otherwise → `crate::commands::load_readonly_snippets(library.as_deref())`
      (`list_cmd.rs:71`). If the resolved sources are empty, print
      `No library found. Create one with 'snp library create <name>'` and
-     return `Ok(())` (`list_cmd.rs:72-75`).
+     return `Ok(())` (`list_cmd.rs:72-75`). In the machine-readable formats
+     an empty document is emitted as well (`[]` for JSON, the header row for
+     CSV): an empty stdout is indistinguishable from a truncated stream, so a
+     consumer must always be able to parse what it receives.
 3. **Filter** (`list_cmd.rs:85-115`): deleted tombstones excluded
    (`list_cmd.rs:91`, `list_cmd.rs:113`); with a filter, score
    `searchable_text(s, SearchFields{include_tags:true,

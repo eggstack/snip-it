@@ -87,7 +87,9 @@ ran (`sync_cmd.rs:369-373`, `:501-506`).
    `runtime_error("failed to acquire sync lock")`.
 5. **`--servers`** → create the client, call `list_libraries()`, print
    `Server libraries:` plus `  <name> (<id>)` lines, return `Ok(())`
-   (`:212-232`). A listing failure is printed to stderr but **still exits 0**.
+   (`:212-232`). A listing failure becomes
+   `sync_failure(SyncRequestFailed)` and the command **exits non-zero**: a
+   script polling this command cannot read stderr.
 6. **Create the client** (`:234-241`); a failure becomes
    `sync_failure(ConnectFailed)`.
 7. **`list_libraries()`** (`:243`); a failure becomes
@@ -277,8 +279,10 @@ budget for each retry attempt; the retry macro consults it at
 
 ### `run_config` (`src/commands/sync_cmd.rs:356`)
 
-Loads settings, prints usage **to stderr** and returns `Ok(())` when
-neither `--show` nor a setter was given (`:375-380`). `--show` prints
+Loads settings and raises a **usage error** (exit 2) when neither `--show`
+nor a setter was given (`:375-380`) — the usage line is part of the error
+message, so the exit status tells a script that the invocation was wrong.
+`--show` prints
 `auto_sync`, `auto_sync_debounce_seconds`, `auto_sync_max_delay_seconds`,
 `auto_sync_timeout_seconds` (plus the resolved value),
 `auto_sync_failure`, and `sync_enabled`, and warns when auto-sync is on
@@ -475,8 +479,9 @@ instead of collapsing a corrupt or unreadable marker into `NothingToDo`
   re-created library returns no server rows at all.
 - **Bidirectional is the default direction**, and it is the branch that
   used to report dropped records as a success.
-- **`--servers` swallows its own failure** — a `list_libraries` error is
-  printed and the command still exits 0.
+- **`--servers` reports its own failure** — a `list_libraries` error is
+  surfaced as `sync_failure(SyncRequestFailed)` and the command exits
+  non-zero.
 - **The library list comes from the config index, not the filesystem**
   (`sync_commands.rs:732-738`), so an orphan file left by a crash during
   delete is not resurrected as a sync candidate.

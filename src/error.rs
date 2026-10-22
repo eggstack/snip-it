@@ -40,6 +40,11 @@ pub enum SyncFailureKind {
     SyncRequestFailed,
     /// Failed to create a library on the server.
     CreateLibraryFailed,
+    /// The server already has a library with this name (gRPC `ALREADY_EXISTS`).
+    ///
+    /// The client resolves this by adopting the existing server library
+    /// instead of leaving the local library permanently unlinked.
+    CreateLibraryConflict,
     /// Failed to get a premade library from the server.
     GetPremadeLibraryFailed,
     /// Registration request failed.
@@ -81,6 +86,7 @@ impl fmt::Display for SyncFailureKind {
             Self::AuthenticationFailed => write!(f, "Authentication failed"),
             Self::SyncRequestFailed => write!(f, "Sync request failed"),
             Self::CreateLibraryFailed => write!(f, "Failed to create library"),
+            Self::CreateLibraryConflict => write!(f, "Library already exists on the server"),
             Self::GetPremadeLibraryFailed => write!(f, "Failed to get premade library"),
             Self::RegistrationFailed => write!(f, "Registration failed"),
             Self::LibraryManagerInitFailed => write!(f, "Failed to initialize library manager"),
@@ -156,6 +162,19 @@ pub enum SnipError {
         kind: SyncFailureKind,
         detail: Option<String>,
     },
+
+    /// CLI usage or argument error.
+    ///
+    /// Raised by Rust-side argument validation that the Clap schema cannot
+    /// express (mutually exclusive output modes, missing selectors, …).
+    /// `main.rs` maps this to the documented usage-error exit code, the same
+    /// code Clap's own argument conflicts produce, so the exit status tells
+    /// "bad invocation" apart from "operation failed" regardless of which
+    /// layer rejected the invocation.
+    UsageError {
+        message: String,
+        detail: Option<String>,
+    },
 }
 
 impl fmt::Display for SnipError {
@@ -219,6 +238,13 @@ impl fmt::Display for SnipError {
                     .map(|d| format!(": {d}"))
                     .unwrap_or_default();
                 write!(f, "{kind}{detail_str}")
+            }
+            SnipError::UsageError { message, detail } => {
+                let detail_str = detail
+                    .as_ref()
+                    .map(|d| format!(": {d}"))
+                    .unwrap_or_default();
+                write!(f, "Usage error: {message}{detail_str}")
             }
         }
     }
@@ -305,6 +331,16 @@ impl SnipError {
     pub fn sync_failure(kind: SyncFailureKind, detail: Option<&str>) -> Self {
         SnipError::SyncFailure {
             kind,
+            detail: detail.map(ToString::to_string),
+        }
+    }
+
+    /// Create a CLI usage error with a message and optional detail.
+    ///
+    /// Mapped to the documented usage-error exit code (2).
+    pub fn usage_error(message: &str, detail: Option<&str>) -> Self {
+        SnipError::UsageError {
+            message: message.to_string(),
             detail: detail.map(ToString::to_string),
         }
     }

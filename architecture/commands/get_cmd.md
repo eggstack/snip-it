@@ -26,10 +26,10 @@ scripts and CI, where the TUI is unavailable (see the tty guard in
 | `--command-exact` | `Option<String>` | – | Exact command text (case-insensitive) |
 | `-q/--query` | `Option<String>` | – | Fuzzy query |
 | `-l/--library` | `Option<String>` | – | Scope: name or `all` |
-| `--field` | `Option<GetField>` | – | Single-field output (`command`/`description`/`id`/`tags`; conflicts with json/raw/expanded — runtime guard) |
+| `--field` | `Option<GetField>` | – | Single-field output (`command`/`description`/`id`/`tags`; conflicts with json/raw/expanded — runtime guard, exit 2) |
 | `--raw` | bool | `false` | Stored bytes, no expansion, no trailing newline (conflicts with `--expanded`) |
 | `--expanded` | bool | `false` | Non-interactive expansion via defaults/`--var` (conflicts with `--raw`) |
-| `--json` | bool | `false` | Pretty `GetJsonOutput` (conflicts with raw/expanded/field — runtime guard) |
+| `--json` | bool | `false` | Pretty `GetJsonOutput` (conflicts with raw/expanded/field — runtime guard, exit 2) |
 | `--resolution` | `ResolutionPolicy` | `Unique` | Multi-match policy (`unique`/`first`/`all`) |
 | `--var KEY=VALUE` | `Option<Vec<String>>` | – | Repeatable explicit assignments |
 
@@ -63,11 +63,14 @@ with `schema: 1`.
    (`get_cmd.rs:206-230`); field/raw/expanded/default per the mode table
    (`get_cmd.rs:232-252`). `raw` and `field` write bytes with no trailing
    newline (`get_cmd.rs:254-262`); others `println!` (`get_cmd.rs:264`).
-6. `expand_without_prompt` (`get_cmd.rs:279`): explicit assignments win,
+6. `expand_without_prompt` (`get_cmd.rs:427`): explicit assignments win,
    then `<name=default>` defaults and choice fallbacks; unassigned required
-   `<name>` tokens stay verbatim (never a bare-name substitution,
-   `get_cmd.rs:288-295`); choice tokens are located in the *original*
-   command to avoid re-matching substituted text (`get_cmd.rs:317-325`).
+   `<name>` tokens stay verbatim (never a bare-name substitution). The
+   expansion is a **single left-to-right pass over the original command**:
+   every token is resolved against the original text, so text produced by
+   one substitution is never re-scanned for another token and a value that
+   happens to look like `<other>` stays verbatim — the same rule the
+   interactive `expand_command` path follows.
 
 ## Read-only guarantee
 

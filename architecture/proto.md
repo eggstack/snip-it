@@ -296,19 +296,27 @@ Two different fields carry the incremental-sync watermark, and they are
 SQL is:
 
 ```sql
--- snip-sync/src/db.rs:634-635
+-- snip-sync/src/db.rs:fetch_snippets
 WHERE user_id = ?
   AND library_id = ?
-  AND updated_at >= ?
+  AND visible_at >= ?
   AND (? OR deleted = 0)
 ```
 
-and the reason is stated in the source (`snip-sync/src/db.rs:626-631`):
-timestamps have **second granularity** and the watermark returned to the
-client is `MAX(updated_at)`. With `>`, a row written in the same second as
-the previous sync's watermark would be skipped by every future incremental
-sync. Re-delivering boundary rows is safe because merges are idempotent by
-snippet identity.
+The filter is on `visible_at`, the **server-assigned** cursor position of a
+row, not on the client-chosen `updated_at`: a row pushed with an
+`updated_at` below the library maximum (clock skew on one device) would
+otherwise be stored below the watermark and never delivered again.
+`visible_at` is clamped to the library watermark on every write, so it is
+monotone by construction; `updated_at` keeps the client's logical
+modification time and is what the server's last-write-wins rule and the
+client's merge order compare.
+
+The filter is inclusive (`>=`), not exclusive (`>`): timestamps have **second
+granularity** and the watermark returned to the client is `MAX(visible_at)`.
+With `>`, a row written in the same second as the previous sync's watermark
+would be skipped by every future incremental sync. Re-delivering boundary
+rows is safe because merges are idempotent by snippet identity.
 
 > **Partially resolved.** The schema comment at `snip-proto/proto/sync.proto`
 > said *"Results are filtered to records with updated_at strictly greater than
@@ -352,8 +360,8 @@ let timestamp = if has_more {
 };
 ```
 
-`get_latest_timestamp` is `MAX(updated_at)` over the library
-(`snip-sync/src/db.rs:773-783`). Advancing the watermark while records
+`get_latest_timestamp` is `MAX(visible_at)` over the library
+(`snip-sync/src/db.rs:804-819`). Advancing the watermark while records
 remain would silently skip them on the next incremental sync.
 
 ## Authentication
@@ -437,7 +445,7 @@ stub retains the old wording until the next explicit regen.
 
 | Topic | `snip-proto/proto/sync.proto` | `snip-proto/src/snip_proto.rs` | Reality |
 |-------|--------------------|---------------------|---------|
-| `since` filter | *"…updated_at greater than or equal to since (>=)"* (corrected) | *"strictly greater than since"* (`:357-358`, `:642`) | **`>=`** — `snip-sync/src/db.rs:634-635` |
+| `since` filter | *"…the records the server delivers at or after the cursor `since` (>=)"* (corrected again — the cursor is server-assigned, not `updated_at`) | *"strictly greater than since"* (`:357-358`, `:642`) | **`>=` on the server-assigned cursor** — `snip-sync/src/db.rs:fetch_snippets` |
 | `last_sync_timestamp` | *"Every local record is considered for insertion or conflict resolution; `last_sync_timestamp` only selects the page of server rows returned."* (corrected) | *"The server uses each record's own timestamp for conflict resolution; `last_sync_timestamp` only selects returned data."* (`:48-49`) | Both correct — the stub was right first |
 
 Doc comments do not affect the wire format, so the drift is harmless to
@@ -493,8 +501,10 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 - **`output` is not on the wire.** It is local-only, and `folders` and
   `favorite` are too.
 - **`deleted` tombstones are returned by `Sync`, never by `GetSnippets`.**
-- **The download filter is `updated_at >= since`.** The watermark is
-  inclusive by design (second-granularity timestamps).
+- **The download filter is `visible_at >= since`.** The watermark is
+  inclusive by design (second-granularity timestamps). `visible_at` is the
+  server-assigned cursor position; `updated_at` stays the client's logical
+  modification time.
 - **`last_sync_timestamp` does not gate uploads.** It selects the returned
   page; merges use each record's own `updated_at`.
 - **The watermark does not advance while `has_more` is true.**
@@ -511,7 +521,7 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
 - **`GetSnippetsRequest.since` and `SyncRequest.last_sync_timestamp` are
   different fields** with different meanings. Do not substitute one for the
   other.
-- **The `since` filter is `>=`.** A client that assumes `>` will
+- **The `since` filter is `>=` and runs on `visible_at`.** A client that assumes `>` will
   double-deliver boundary rows (harmless — merges are idempotent) and one
   that assumes `>=` on a `>` server would skip rows.
 - **The schema's comments are not authoritative** for the two items listed

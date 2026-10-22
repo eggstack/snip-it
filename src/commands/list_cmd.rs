@@ -74,6 +74,14 @@ pub fn run(
         let (sources, merged) = crate::commands::load_readonly_snippets(library.as_deref())?;
         if sources.is_empty() {
             eprintln!("No library found. Create one with 'snp library create <name>'");
+            // A machine-readable consumer must always receive a parseable
+            // document, even when there is no library to list: an empty
+            // stdout is indistinguishable from a truncated stream.
+            match format {
+                ListFormat::Json => println!("[]"),
+                ListFormat::Csv => println!("description,command,output,tags,folders,favorite"),
+                ListFormat::Default => {}
+            }
             return Ok(());
         }
         merged

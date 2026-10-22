@@ -39,8 +39,12 @@ module.
 pre-existing and frozen; 2–10 are additive and documented in
 `docs/EXIT_CODES.md`. Three rules that are easy to get wrong:
 
-1. **Validation findings are exit 6, not 2.** Exit 2 is Clap's usage error. A
-   command that parsed fine but found bad data exits 6.
+1. **Validation findings are exit 6, not 2.** Exit 2 is the usage error —
+   Clap's own argument conflicts *and* the Rust-side
+   `SnipError::UsageError` variant (`src/error.rs`). A command that parsed
+   fine but found bad data exits 6. Rust-side usage checks must raise
+   `SnipError::usage_error`, never `runtime_error`, so the exit status tells
+   "bad invocation" apart from "operation failed".
 2. **`PersistenceFailed` maps to 1**, not to a dedicated code — deliberately, so
    pre-existing scripts checking `exit 1` keep working.
 3. **`ExecutionFailed` propagates the child's exit code** when one exists, and
@@ -167,6 +171,7 @@ functions in `main.rs`; the other ~20 commands dispatch inline inside
 | Target | Protects |
 |--------|----------|
 | `tests/cli_surface_compat.rs` | `snp data` mirror equivalence, same exit codes |
+| `tests/cli_usage_errors.rs` | usage faults exit 2 on both layers; machine output is never empty; a failed sync is non-zero |
 | `tests/execution_outcomes.rs` | child exit-code propagation, usage recording |
 | `tests/schema.rs` | JSON envelope shape |
 | `tests/tui_requires_terminal.rs` | TUI commands fail cleanly without a terminal |
@@ -185,6 +190,8 @@ cargo test --test schema
 - Calling `std::process::exit()` from a command module instead of returning a
   `CliOutcome`.
 - Using exit 2 for a validation finding (that is exit 6).
+- Raising a usage fault as `SnipError::runtime_error` — it exits 1 instead of
+  the documented usage code 2.
 - Letting an output-file execution branch return `SnipError` through `?`, so a
   child failure exits 1 instead of 8.
 - Adding a command and forgetting `command_behavior()` — it silently gets the

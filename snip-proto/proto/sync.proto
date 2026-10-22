@@ -6,10 +6,12 @@ option go_package = "github.com/eggstack/snip-it/snip-proto;snip_proto";
 
 service SnippetSync {
     // Get non-deleted snippets from the selected library. Results are filtered
-    // to records with updated_at greater than or equal to since (>=). The
-    // server uses >= deliberately: timestamps have second granularity and the
-    // watermark returned to the client is MAX(updated_at), so a strict >
-    // would skip rows written in the same second as the previous watermark.
+    // to the records the server delivers at or after the cursor `since`
+    // (>=). The cursor is server-assigned and monotone: the server tracks it
+    // per row, so a record pushed with an older updated_at (a device whose
+    // clock is behind) is still delivered. The server uses >= deliberately:
+    // the cursor has second granularity, so a strict > would skip rows
+    // written in the same second as the previous cursor.
     // Re-delivering boundary rows is safe — merges are idempotent by snippet
     // identity.
     rpc GetSnippets (GetSnippetsRequest) returns (SnippetList);

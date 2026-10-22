@@ -351,7 +351,7 @@ impl SnippetSelector {
             && self.command_exact.is_none()
             && self.query.is_none()
         {
-            return Err(SnipError::runtime_error(
+            return Err(SnipError::usage_error(
                 "No selector specified",
                 Some("Provide --id, --description-exact, --command-exact, or --query"),
             ));

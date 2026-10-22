@@ -47,7 +47,7 @@ Each variant maps to a stable exit code via `CliOutcome::exit_code()`
 |----------|------|---------|---------|
 | `SUCCESS` | 0 | `Success` | Command completed successfully |
 | `GENERAL_ERROR` | 1 | `PersistenceFailed` | General operational failure |
-| `USAGE_ERROR` | 2 | — | CLI usage/argument error (Clap-controlled) |
+| `USAGE_ERROR` | 2 | — | CLI usage/argument error (Clap-enforced or `SnipError::UsageError`) |
 | `NOT_FOUND` | 3 | `NotFound` | Snippet or resource not found |
 | `CANCELLED` | 4 | `Cancelled` | User cancelled an interactive action |
 | `AMBIGUOUS` | 5 | `Ambiguous` | Multiple matches found, unique policy requested |
@@ -125,7 +125,8 @@ impl CliOutcome {
 |----------------|----------|--------|
 | `Ok(CliOutcome::Success)` | fall through, exit 0 | `src/main.rs:1056` |
 | `Ok(other)` | `std::process::exit(other.exit_code())` | `src/main.rs:1061` |
-| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1063-1069` |
+| `Err(SnipError::UsageError)` | `eprintln!("error: {e}")` then exit 2 | `src/main.rs:1063-1074` |
+| `Err(SnipError)` | `eprintln!("error: {e}")` then exit 1 | `src/main.rs:1063-1074` |
 
 There is no `From<SnipError> for CliOutcome`. A handler that wants code 3, 4,
 5, 6, 7, or 9 returns the matching `CliOutcome` variant instead of
@@ -165,7 +166,7 @@ CliOutcome (public exit code layer)
 Commands convert their internal outcomes to `CliOutcome` directly before
 returning. There is no intermediate command-outcome layer. `main.rs`
 maps `Ok(CliOutcome)` to `outcome.exit_code()` (with `Success` → no exit)
-and `Err(SnipError)` to exit 1.
+and `Err(SnipError)` to exit 1 (`SnipError::UsageError` to exit 2).
 
 ## Non-Exhaustive
 
@@ -296,7 +297,8 @@ Authoritative refs: `docs/EXIT_CODES.md`, `docs/CLI_EXITCODE_STREAM_POLICY.md`.
   prompts / spinners in machine mode, tracing subscriber on stderr,
   broken pipe swallowed.
 - `main.rs` maps `Ok(outcome)` → `outcome.exit_code()` (`Success` → no
-  exit) and `Err(SnipError)` → exit 1; `repair` bypasses `CliOutcome`
+  exit) and `Err(SnipError)` → exit 1 (`SnipError::UsageError` → exit 2);
+  `repair` bypasses `CliOutcome`
   via `exit_on_repair_status` for `UnsafeOnly` (10) / `PartialFailure` (1).
 - Detached auto-sync worker codes are internal, not part of the public
   contract. With `auto_sync_failure = "error"`, a post-commit spawn

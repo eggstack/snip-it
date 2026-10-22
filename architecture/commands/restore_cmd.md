@@ -56,7 +56,7 @@ Reads and validates the backup, then prints the planned actions and **returns be
 
 - **Libraries:** the backup file replaces the destination wholesale; a `replaced` conflict is recorded when the destination existed (`restore_cmd.rs:861-877`).
 - **Index / usage / sync config:** replaced unconditionally (the `merge`-mode skip does not apply).
-- **Pre-restore backup:** a copy of the current `<config>/libraries/*.toml` and `libraries.toml` is taken to `<config>/backups/pre-restore-<YYYYMMDD_HHMMSS>/` before any live write (`restore_cmd.rs:728-774`, called at `:1308-1313`).
+- **Pre-restore backup:** a copy of the current `<config>/libraries/*.toml`, `libraries.toml`, `usage.toml`, and `sync.toml` is taken to `<config>/backups/pre-restore-<YYYYMMDD_HHMMSS>/` before any live write (`restore_cmd.rs:761-860`, called at `:1358-1363`). Symlinks and non-regular files are **skipped**, not followed: `fs::copy` resolves symlinks, so a library file that points outside the config directory would otherwise leak that target's content into the snapshot.
 - **Strict index coverage:** in replace mode every library artifact in the manifest must be referenced by the index, otherwise restore fails before any lock is taken (`restore_cmd.rs:481-494`).
 
 ### Merge vs replace at a glance
@@ -264,6 +264,7 @@ Each of these is a distinct recovery state that `snp repair` must classify and r
 ## Invariants
 
 - **Nothing is written until every validation passes.** Manifest contract, path safety, artifact type/size, checksum, and index semantics are all checked before the first lock is taken (`restore_cmd.rs:964-1080`).
+- **The checksum is verified against the bytes that are staged.** The manifest gate hashes every artifact, and the staging step re-hashes the bytes it reads (`read_verified_backup_bytes`, `restore_cmd.rs:1104-1133`), so an artifact substituted between the two reads can never reach the live library.
 - The lock order is always `LocalDataLock → TransactionLock → destination writes` (`restore_cmd.rs:1142-1147`).
 - The gate runs before the locks, so an interrupted foreign transaction refuses the restore rather than racing it.
 - Every staged artifact is written, synced, and verified **before** the journal is persisted at `BackupsDurable`; commit progress is persisted **after** each verified write.
@@ -278,6 +279,6 @@ Each of these is a distinct recovery state that `snp repair` must classify and r
 - Merge resolution compares **`updated_at` only**, and strictly — equal timestamps keep the existing snippet (`restore_cmd.rs:823-846`). It is not the sync-side conflict tuple `(updated_at, device_id, SHA-256)`.
 - A restored `sync.toml` contains the **redacted** API key. The command says so in a `redacted_key` conflict, but the file is still written. Re-run `snp register` afterwards.
 - The 10 MiB per-file ceiling applies to both the manifest-declared size and the real artifact size. A large library cannot be restored even if the manifest lies about it.
-- The **pre-restore backup** is only taken in `replace` mode, and it copies only `libraries/*.toml` and `libraries.toml` — not `usage.toml` or `sync.toml` (`restore_cmd.rs:728-774`).
+- The **pre-restore backup** is only taken in `replace` mode. It covers every file the restore can overwrite — `libraries/*.toml`, `libraries.toml`, `usage.toml`, and `sync.toml` — because it is the recovery point the user is told about (`restore_cmd.rs:761-860`). Symlinked and non-regular entries are skipped rather than copied.
 - `dry-run` reads and hashes every artifact (steps 1–7 run before the dry-run branch), so it is not free on a large backup.
 - The transaction lock's stale-lock quarantine is **not ownership-verified** (`src/transaction.rs:1268`), unlike the local-data lock's, which re-reads the lock record and refuses to quarantine when it has changed or become unparseable (`src/local_data.rs:326-354`, rename at `:356-370`). A stale transaction lock can therefore in principle be renamed out from under a live owner.

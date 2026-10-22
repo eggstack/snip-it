@@ -117,7 +117,7 @@ pub fn run(
     };
     // Validate that at least one targeting selector is provided
     if id.is_none() && description_exact.is_none() && command_exact.is_none() && query.is_none() {
-        return Err(SnipError::runtime_error(
+        return Err(SnipError::usage_error(
             "No selector specified",
             Some("Provide --id, --description-exact, --command-exact, or --query"),
         ));
@@ -125,19 +125,19 @@ pub fn run(
 
     // Validate conflicting output modes
     if raw && expanded {
-        return Err(SnipError::runtime_error(
+        return Err(SnipError::usage_error(
             "Conflicting output modes",
             Some("--raw and --expanded cannot be used together"),
         ));
     }
     if json && (raw || expanded) {
-        return Err(SnipError::runtime_error(
+        return Err(SnipError::usage_error(
             "Conflicting output modes",
             Some("--json cannot be used with --raw or --expanded"),
         ));
     }
     if field.is_some() && (json || raw || expanded) {
-        return Err(SnipError::runtime_error(
+        return Err(SnipError::usage_error(
             "Conflicting output modes",
             Some("--field cannot be used with --json, --raw, or --expanded"),
         ));
@@ -296,60 +296,202 @@ fn has_variables(command: &str) -> bool {
     !parse_variables(command).is_empty()
 }
 
+/// Return the byte offset of the `>` that closes the variable token starting
+/// at `start`, or `None` when the token is unterminated.
+///
+/// The escape and nesting rules mirror the token extractor in
+/// `crate::utils::variables`: an escaped character never changes the nesting
+/// depth, and a `<` inside the body increases it.
+fn find_variable_token_end(command: &str, start: usize) -> Option<usize> {
+    let bytes = command.as_bytes();
+    let mut index = start + 1;
+    let mut depth = 1usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => {
+                // The escaped character belongs to the body and can never
+                // close or open a token.
+                index += 1;
+                if index < bytes.len() {
+                    let escaped = command[index..].chars().next().unwrap();
+                    index += escaped.len_utf8();
+                }
+            }
+            b'<' => {
+                depth += 1;
+                index += 1;
+            }
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+                index += 1;
+            }
+            _ => {
+                let c = command[index..].chars().next().unwrap();
+                index += c.len_utf8();
+            }
+        }
+    }
+    None
+}
+
+/// Undo the escape sequences inside a variable token body.
+///
+/// Mirrors the token extractor: `\\`, `\<` and `\>` collapse to a single
+/// character, any other escaped character keeps its backslash.
+fn unescape_variable_body(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('\\') => {
+                    out.push('\\');
+                    chars.next();
+                }
+                Some('<') => {
+                    out.push('<');
+                    chars.next();
+                }
+                Some('>') => {
+                    out.push('>');
+                    chars.next();
+                }
+                _ => out.push('\\'),
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Resolve the replacement text for one variable token.
+///
+/// `vars` holds one entry per token *occurrence*, in command order. The
+/// occurrence is matched positionally, with a resynchronization on the name so
+/// that a single disagreement between the scanner and the parser stays local
+/// instead of misaligning every later variable.
+fn resolve_token_replacement(
+    vars: &[crate::utils::variables::Variable],
+    var_index: &mut usize,
+    name: &str,
+    assignments: &Option<VariableAssignments>,
+) -> Option<String> {
+    let matched = vars
+        .get(*var_index)
+        .filter(|var| var.name == name)
+        .map(|_| *var_index)
+        .or_else(|| {
+            vars.iter()
+                .skip(*var_index + 1)
+                .position(|var| var.name == name)
+                .map(|offset| *var_index + 1 + offset)
+        })?;
+    let var = &vars[matched];
+    *var_index = matched + 1;
+
+    match &var.kind {
+        crate::utils::variables::VariableKind::Required => {
+            // An unassigned required variable stays verbatim: the output must
+            // never silently substitute a semantically broken bare name.
+            assignments
+                .as_ref()
+                .and_then(|a| a.get(name))
+                .map(|value| value.to_string())
+        }
+        crate::utils::variables::VariableKind::DefaultValue(default) => Some(
+            assignments
+                .as_ref()
+                .and_then(|a| a.get(name))
+                .unwrap_or(default)
+                .to_string(),
+        ),
+        crate::utils::variables::VariableKind::Choices {
+            values,
+            default_index,
+        } => {
+            let fallback = default_index
+                .and_then(|i| values.get(i))
+                .or_else(|| values.first())
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            Some(
+                assignments
+                    .as_ref()
+                    .and_then(|a| a.get(name))
+                    .unwrap_or(fallback)
+                    .to_string(),
+            )
+        }
+    }
+}
+
 /// Expand a command without prompting (noninteractive).
 /// Uses explicit assignments first, then defaults for variables that have them.
 /// Required variables without an assignment are left verbatim so the output
 /// never silently substitutes a semantically broken bare name.
+///
+/// The expansion is a single left-to-right pass over the *original* command.
+/// Every token is resolved against the original text, so text produced by one
+/// substitution is never re-scanned for another token: a value that happens to
+/// look like `<other>` stays verbatim. This matches the interactive expansion
+/// path in `crate::utils::variables::expand_command`.
 fn expand_without_prompt(command: &str, assignments: &Option<VariableAssignments>) -> String {
     let vars = parse_variables(command);
     if vars.is_empty() {
         return strip_escape_sequences(command);
     }
 
-    let mut result = command.to_string();
-    for var in &vars {
-        match &var.kind {
-            crate::utils::variables::VariableKind::Required => {
-                let Some(replacement) = assignments.as_ref().and_then(|a| a.get(&var.name)) else {
-                    // Unassigned required var: leave the <name> token untouched.
-                    continue;
-                };
-                let token = format!("<{}>", var.name);
-                result = result.replace(&token, replacement);
+    let mut result = String::with_capacity(command.len());
+    let mut var_index = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < command.len() {
+        let c = command[cursor..].chars().next().unwrap();
+        if c == '\\' {
+            // Copy the escape sequence verbatim: an escaped character can
+            // never start a variable token.
+            result.push('\\');
+            cursor += 1;
+            if cursor < command.len() {
+                let escaped = command[cursor..].chars().next().unwrap();
+                result.push(escaped);
+                cursor += escaped.len_utf8();
             }
-            crate::utils::variables::VariableKind::DefaultValue(default) => {
-                let token = format!("<{}={}>", var.name, default);
-                let replacement = assignments
-                    .as_ref()
-                    .and_then(|a| a.get(&var.name))
-                    .unwrap_or(default);
-                result = result.replace(&token, replacement);
-            }
-            crate::utils::variables::VariableKind::Choices {
-                values,
-                default_index,
-            } => {
-                let fallback = default_index
-                    .and_then(|i| values.get(i))
-                    .or_else(|| values.first())
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                let replacement = assignments
-                    .as_ref()
-                    .and_then(|a| a.get(&var.name))
-                    .unwrap_or(fallback);
-                // Search the original `command` for the token boundary, not
-                // `result` (which may already contain substituted text that
-                // could spuriously look like another `<name=` token).
-                if let Some(start) = command.find(&format!("<{}=", var.name))
-                    && let Some(end) = command[start..].find('>')
-                {
-                    let full_token = &command[start..=start + end];
-                    result = result.replacen(full_token, replacement, 1);
-                }
+            continue;
+        }
+        if c != '<' {
+            result.push(c);
+            cursor += c.len_utf8();
+            continue;
+        }
+
+        let Some(end) = find_variable_token_end(command, cursor) else {
+            // An unterminated `<` is not a token.
+            result.push('<');
+            cursor += 1;
+            continue;
+        };
+
+        let body = unescape_variable_body(&command[cursor + 1..end]);
+        let name = body
+            .split_once('=')
+            .map(|(name, _)| name.trim().to_string())
+            .unwrap_or_else(|| body.trim().to_string());
+
+        match resolve_token_replacement(&vars, &mut var_index, &name, assignments) {
+            Some(replacement) => result.push_str(&replacement),
+            None => {
+                // Not a known variable: keep the original token text.
+                result.push_str(&command[cursor..=end]);
             }
         }
+        cursor = end + 1;
     }
+
     strip_escape_sequences(&result)
 }
 
@@ -452,6 +594,34 @@ mod tests {
         assert_eq!(
             expand_without_prompt("ssh <host> -p <port=22>", &assignments),
             "ssh <host> -p 8080"
+        );
+    }
+
+    /// A substituted value must never be re-scanned for another token: the
+    /// expansion is a single pass over the original command.
+    #[test]
+    fn test_expand_without_prompt_does_not_expand_substituted_text() {
+        let assignments = Some(
+            VariableAssignments::from_pairs(
+                vec![("a".into(), "<b>".into()), ("b".into(), "X".into())].into_iter(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            expand_without_prompt("echo <a> <b>", &assignments),
+            "echo <b> X"
+        );
+    }
+
+    /// The same rule applies to a default value that looks like a token.
+    #[test]
+    fn test_expand_without_prompt_does_not_expand_a_default_that_looks_like_a_token() {
+        let assignments = Some(
+            VariableAssignments::from_pairs(vec![("b".into(), "X".into())].into_iter()).unwrap(),
+        );
+        assert_eq!(
+            expand_without_prompt("echo <a=<b>> <b>", &assignments),
+            "echo <b> X"
         );
     }
 }

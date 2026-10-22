@@ -145,7 +145,7 @@ Release 2B adds `snp new --from-file` and `snp new --editor`.
 | Output | N/A | Prints selected command to stdout (or `--output-file`). | New | — | Machine-readable output for piping and shell integration. |
 | Cancellation | N/A | Exit code 4 on `q`/`Esc`/Ctrl-C. Empty stdout. | New | — | Shell adapters check exit code 4 and restore buffer. |
 | Raw vs expanded | N/A | `--raw` (default) prints command unchanged. `--expanded` prompts for variables. Mutually exclusive. | New | — | `--raw` is for placeholder insertion; `--expanded` is for evaluated commands. |
-| Initial query | N/A | `--query` is an alternative to `--filter` (the `--filter` value wins when both are given) and pre-fills the TUI search. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
+| Initial query | N/A | `--query` is an alternative to `--filter` and pre-fills the TUI search. Passing both is a usage error (exit 2), not a silent drop. | New | — | Shell adapters pass `$BUFFER` when non-empty. |
 | Output file | N/A | `--output-file` writes selection to file. Rejects symlinks and directories. | New | — | Used by shell adapters for lossless multiline transport. |
 
 ### 3.5 edit

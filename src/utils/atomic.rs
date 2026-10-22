@@ -281,6 +281,32 @@ fn sync_parent_dir(
     Ok(supported)
 }
 
+/// Sync a directory so its entries are durable.
+///
+/// Unix only; other platforms cannot dir-fsync through std, so the call is a
+/// no-op there (the same limitation `sync_parent_dir` reports).
+pub fn sync_directory(path: &Path) -> SnipResult<()> {
+    match parent_dir_sync_durable(path) {
+        Ok(()) => Ok(()),
+        // The platform has no directory fsync (Windows). The data itself is
+        // already fsynced, so this is a durability limitation, not a failed
+        // write.
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+            tracing::warn!(
+                path = %path.display(),
+                "directory fsync unsupported on this platform; \
+                 directory entries may not survive power loss"
+            );
+            Ok(())
+        }
+        Err(e) => Err(SnipError::io_error(
+            "fsync directory",
+            path.to_path_buf(),
+            e,
+        )),
+    }
+}
+
 /// Write a file via a same-directory temp file and atomic rename.
 ///
 /// On Unix the temp file is created with `0o600` so newly written config and

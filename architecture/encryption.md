@@ -246,12 +246,18 @@ different keys → different hashes).
 - **Argon2 parameter changes break all existing encrypted payloads** — version
   the format first; never silently retune memory/time/parallelism.
 - **The API key does leave the client.** It travels as a `Bearer <api_key>`
-  gRPC metadata header on every request (`src/sync.rs:306-314`), so the server
+  gRPC metadata header on every request (`src/sync.rs:319-345`), so the server
   can re-derive the payload key; the confidentiality this module provides is
   transport + at-rest, not server-blindness (see the trust-boundary note in the
   Overview). Errors and logs must never contain key material.
   `SyncSettings::drop` zeroizes the key and `Debug` prints `[REDACTED]`
-  (`src/config/sync_settings.rs:134-169`).
+  (`src/config/sync_settings.rs:134-169`). The header value is built in a
+  `Zeroizing` buffer, and a header that cannot be encoded is **logged**, never
+  dropped silently.
+- **The cipher and the recovered plaintext are wiped.** `aes-gcm` is built with
+  its `zeroize` feature, so the cipher's key schedule is wiped when it goes
+  out of scope, and the decrypted plaintext buffer is wrapped in `Zeroizing` —
+  including on the UTF-8 error path, where it used to be dropped unwiped.
 - **No AAD binds the ciphertext to context** (accepted for current use);
   integrity comes from the GCM tag over ciphertext+nonce.
 - **Nonce birthday bound** ~2⁴⁸ encryptions with random 12-byte nonces —

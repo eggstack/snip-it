@@ -73,6 +73,13 @@ name = "local_data_lock_barriers"
 path = "tests/local_data_lock_barriers.rs"
 required-features = ["test-support"]
 
+# The restore manifest-gate test uses the mutation-barrier seam, which is
+# only compiled in under the `test-support` feature.
+[[test]]
+name = "restore_manifest_gate"
+path = "tests/restore_manifest_gate.rs"
+required-features = ["test-support"]
+
 # The identity-contract test calls `save_library` in-process. `save_library`
 # derives the mutation gate and the local-data-lock path from the *config
 # directory*, so the test needs the `ScopedConfigDir` override to avoid
@@ -131,7 +138,7 @@ uuid = { version = "1", features = ["v4"] }
 tonic = { version = "0.14", default-features = false, features = ["codegen", "channel", "tls-ring"] }
 prost = "0.14"
 snip-proto = { version = "0.1.3", path = "snip-proto" }
-aes-gcm = "0.11"
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = "0.6"
 base64 = "0.23"
 

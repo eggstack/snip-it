@@ -67,7 +67,7 @@ The `data` spelling is an alias, not a separate command: `DataCommands::Backup(B
    - `<config>/sync.toml` only when `--include-sync-state` (`:120-133`).
 8. **Validate every collected file**: canonical containment under the config root (`:101`, `:108`, `:115`, `:123` — `backup_archive.rs:257-280`), symlink/non-regular-file rejection (`backup_archive.rs:200-223`), and TOML well-formedness for library files (`:144-150`) and for the index (`:151-155`) (`backup_archive.rs:283-291`).
 9. **Build the manifest entries** (`:156-222`) and sort the file list by path (`:223`) so the manifest is deterministic.
-10. **Write atomically** (`:228`): `atomic_write_backup` writes every file plus `manifest.toml` into the staging directory and then renames staging → final (`backup_archive.rs:295-333`). On any error the staging directory is removed (`:329-331`), so a failed backup never leaves a half-written final directory.
+10. **Write atomically and durably** (`:228`): `atomic_write_backup` writes every file plus `manifest.toml` into the staging directory and then renames staging → final (`backup_archive.rs:295-350`). Every body goes through the sanctioned atomic/durable path (`atomic_replace` with `DurableUserData`: file fsync + parent-dir fsync), the staging directory is fsynced before the publish, and the final parent directory is fsynced after the rename — so a power loss cannot leave a backup whose bodies are truncated or whose directory entry never landed. On any error the staging directory is removed (`:344-346`), so a failed backup never leaves a half-written final directory.
 11. **Emit the report** (`:229-258`).
 
 ### What is included and excluded by default
@@ -174,7 +174,8 @@ The destination is always a **directory**. `--output` names the final directory;
 
 ## Invariants
 
-- The final backup directory appears only via an atomic rename of a fully-written staging directory; a failed backup leaves no partial final directory (`backup_archive.rs:295-333`).
+- The final backup directory appears only via an atomic rename of a fully-written staging directory; a failed backup leaves no partial final directory (`backup_archive.rs:295-350`).
+- **The backup is durable, not just atomic.** Bodies are fsynced through `atomic_replace` (`DurableUserData`), the staging directory is fsynced before the publish, and the final parent directory is fsynced after the rename. A plain `fs::write` body would leave a truncated file after a crash while the manifest still looked correct.
 - The manifest always lists every file present in the backup, with the exact size and SHA-256 of the stored bytes.
 - The snapshot is consistent: the local-data lock is held across capture, and the library generation is compared before and after (`:79`, `:134-143`).
 - Symlinks and non-regular files are never backed up (`backup_archive.rs:200-223`).

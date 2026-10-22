@@ -229,7 +229,14 @@ pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResul
                     println!("  {} ({})", lib.name, lib.id);
                 }
             }
-            Err(e) => eprintln!("Failed to list server libraries: {e}"),
+            Err(e) => {
+                // The failure must be visible in the exit status: a script
+                // polling this command cannot read stderr.
+                return Err(SnipError::sync_failure(
+                    crate::error::SyncFailureKind::SyncRequestFailed,
+                    Some(&format!("Failed to list server libraries: {e}")),
+                ));
+            }
         }
         return Ok(());
     }
@@ -376,10 +383,13 @@ pub fn run_config(
         || timeout.is_some();
 
     if !show && !has_changes {
-        eprintln!(
-            "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --max-delay <secs> | --timeout <secs> | --failure ignore|warn|error"
-        );
-        return Ok(());
+        // A usage error must be visible in the exit status.
+        return Err(SnipError::usage_error(
+            "Missing arguments",
+            Some(
+                "Usage: snp sync config --show | --auto-sync on|off | --debounce <secs> | --max-delay <secs> | --timeout <secs> | --failure ignore|warn|error",
+            ),
+        ));
     }
 
     if show {

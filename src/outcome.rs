@@ -50,7 +50,7 @@ pub mod exit_code {
     pub const SUCCESS: i32 = 0;
     /// General operational failure.
     pub const GENERAL_ERROR: i32 = 1;
-    /// CLI usage or argument error (typically Clap-controlled).
+    /// CLI usage or argument error (Clap-enforced or `SnipError::UsageError`).
     pub const USAGE_ERROR: i32 = 2;
     /// Snippet or resource not found.
     pub const NOT_FOUND: i32 = 3;

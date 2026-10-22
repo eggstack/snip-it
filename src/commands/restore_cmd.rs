@@ -366,6 +366,34 @@ fn verify_checksum(file_path: &Path, expected_sha: &str) -> SnipResult<bool> {
     Ok(actual == expected_sha)
 }
 
+/// Read a backup artifact and verify the manifest hash against **the bytes
+/// that are about to be staged**.
+///
+/// The manifest gate (`verify_checksum`) reads every artifact once, but the
+/// staged bytes used to come from a later, independent read, so a file that
+/// changed in between was installed while the manifest still "verified".
+/// Verifying the hash on the bytes that are actually used closes that
+/// window: a substituted artifact can no longer reach the live library.
+fn read_verified_backup_bytes(
+    src: &Path,
+    entry: &crate::commands::backup_archive::BackupManifestEntry,
+) -> SnipResult<Vec<u8>> {
+    let bytes = fs::read(src)
+        .map_err(|e| SnipError::io_error("read backup source for staging", src.to_path_buf(), e))?;
+    let actual = crate::commands::backup_archive::sha256_hex(&bytes);
+    if actual != entry.sha256 {
+        return Err(SnipError::runtime_error(
+            "Checksum mismatch",
+            Some(&format!(
+                "{}: expected sha256:{}",
+                entry.path,
+                &entry.sha256[..16]
+            )),
+        ));
+    }
+    Ok(bytes)
+}
+
 /// Semantic manifest validation: parse index content and enforce
 /// index/library consistency.
 ///
@@ -740,6 +768,44 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
         SnipError::io_error("create pre-restore backup dir", backup_base.clone(), e)
     })?;
 
+    /// Copy one file into the snapshot, refusing symlinks and non-regular
+    /// files.
+    ///
+    /// `fs::copy` follows symlinks, so a library file that is a symlink to a
+    /// file outside the config directory would silently copy that target's
+    /// content into the snapshot. The snapshot must only ever contain the
+    /// config's own regular files.
+    fn copy_regular_file(src: &Path, dst: &Path, label: &str) -> SnipResult<bool> {
+        let meta = match fs::symlink_metadata(src) {
+            Ok(meta) => meta,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %src.display(), "skipping unreadable entry during pre-restore backup");
+                return Ok(false);
+            }
+        };
+        if meta.file_type().is_symlink() {
+            tracing::warn!(
+                path = %src.display(),
+                "skipping symlinked entry during pre-restore backup"
+            );
+            return Ok(false);
+        }
+        if !meta.is_file() {
+            tracing::warn!(
+                path = %src.display(),
+                "skipping non-regular entry during pre-restore backup"
+            );
+            return Ok(false);
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| SnipError::io_error("create backup subdir", parent, e))?;
+        }
+        fs::copy(src, dst)
+            .map_err(|e| SnipError::io_error(&format!("copy {label} to backup"), dst, e))?;
+        Ok(true)
+    }
+
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
         for entry in fs::read_dir(&libraries_dir)
@@ -756,21 +822,25 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
             let src = entry.path();
             if src.extension().is_some_and(|ext| ext == "toml") {
                 let dst = backup_base.join("libraries").join(&file_name);
-                if let Some(parent) = dst.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| SnipError::io_error("create backup subdir", parent, e))?;
-                }
-                fs::copy(&src, &dst)
-                    .map_err(|e| SnipError::io_error("copy library to backup", dst, e))?;
+                copy_regular_file(&src, &dst, "library")?;
             }
         }
     }
 
-    let libraries_toml = config_dir.join("libraries.toml");
-    if libraries_toml.exists() {
-        let dst = backup_base.join("libraries.toml");
-        fs::copy(&libraries_toml, &dst)
-            .map_err(|e| SnipError::io_error("copy index to backup", dst, e))?;
+    // The snapshot is the recovery point the user is told about, so it must
+    // cover every file the restore can overwrite: the library index plus the
+    // usage index and the sync configuration (both installed in replace
+    // mode).
+    for (file_name, label) in [
+        ("libraries.toml", "index"),
+        ("usage.toml", "usage"),
+        ("sync.toml", "sync config"),
+    ] {
+        let src = config_dir.join(file_name);
+        if src.exists() {
+            let dst = backup_base.join(file_name);
+            copy_regular_file(&src, &dst, label)?;
+        }
     }
 
     Ok(Some(backup_base))
@@ -787,6 +857,7 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
 /// This must be called during preparation (before Committing), not
 /// inside the live commit loop.
 fn compute_library_intended_bytes(
+    backup_bytes: &[u8],
     backup_file: &Path,
     config_libraries_dir: &Path,
     library_name: &str,
@@ -799,8 +870,12 @@ fn compute_library_intended_bytes(
         // For merge, check if content differs
         let existing = fs::read_to_string(&dst)
             .map_err(|e| SnipError::io_error("read existing library", dst.clone(), e))?;
-        let incoming = fs::read_to_string(backup_file).map_err(|e| {
-            SnipError::io_error("read backup library", backup_file.to_path_buf(), e)
+        let incoming = String::from_utf8(backup_bytes.to_vec()).map_err(|e| {
+            SnipError::io_error(
+                "read backup library",
+                backup_file.to_path_buf(),
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            )
         })?;
 
         if existing.trim() == incoming.trim() {
@@ -870,13 +945,7 @@ fn compute_library_intended_bytes(
                 detail: format!("Replaced existing {}.toml", library_name),
             });
         }
-        let bytes = fs::read(backup_file).map_err(|e| {
-            SnipError::io_error(
-                "read backup library for restore",
-                backup_file.to_path_buf(),
-                e,
-            )
-        })?;
+        let bytes = backup_bytes.to_vec();
         Ok(Some(bytes))
     }
 }
@@ -1076,6 +1145,11 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
         }
     }
 
+    // Test-only barrier: lets a test substitute a backup artifact after the
+    // manifest gate but before the artifact is staged, proving that the
+    // staged bytes are the bytes the manifest describes.
+    crate::test_failpoints::mutation_barrier("restore-after-manifest-gate");
+
     // 5b. Semantic validation: parse index content and enforce
     // index/library consistency. This happens after safe source-file
     // checks (existence, type, size, symlink rejection, checksum) but
@@ -1234,8 +1308,14 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             .unwrap_or_default()
                             .to_string_lossy();
                         let libraries_dir = config_dir.join("libraries");
+                        let src = resolve_backup_path(&backup, entry);
+                        // Read the artifact once and verify the manifest hash
+                        // against exactly these bytes, so a file that changed
+                        // after the manifest gate cannot be staged.
+                        let backup_bytes = read_verified_backup_bytes(&src, entry)?;
                         match compute_library_intended_bytes(
-                            &resolve_backup_path(&backup, entry),
+                            &backup_bytes,
+                            &src,
                             &libraries_dir,
                             &library_name,
                             mode,
@@ -1262,9 +1342,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             continue;
                         }
                         let src = resolve_backup_path(&backup, entry);
-                        fs::read(&src).map_err(|e| {
-                            SnipError::io_error("read backup source for staging", src.clone(), e)
-                        })?
+                        read_verified_backup_bytes(&src, entry)?
                     }
                     BackupEntryKind::SyncConfig => {
                         // In merge mode, skip existing sync.toml (preserve local config).
@@ -1277,9 +1355,7 @@ pub fn run(backup: PathBuf, mode: RestoreMode, json: bool) -> SnipResult<()> {
                             continue;
                         }
                         let src = resolve_backup_path(&backup, entry);
-                        fs::read(&src).map_err(|e| {
-                            SnipError::io_error("read backup source for staging", src.clone(), e)
-                        })?
+                        read_verified_backup_bytes(&src, entry)?
                     }
                 }
             }

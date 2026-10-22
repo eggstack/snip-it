@@ -12,7 +12,7 @@ use clap_complete::Shell;
 
 use snip_it::auto_sync::StartupRecoveryPolicy;
 use snip_it::commands;
-use snip_it::error::SnipResult;
+use snip_it::error::{SnipError, SnipResult};
 use snip_it::logging::{
     init_default_file_logging, log_shutdown_info, log_startup_info, setup_panic_handler,
 };
@@ -653,7 +653,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     None
                 } else {
                     Some(args.filter.clone().ok_or_else(|| {
-                        snip_it::error::SnipError::runtime_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
+                        snip_it::error::SnipError::usage_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
                     })?)
                 };
                 let output_value = if args.clear_output {
@@ -700,7 +700,7 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                     // `filter_str` is `Some` here: the requirement above
                     // already rejected the missing-`--filter` case.
                     let filter_str = filter_str.ok_or_else(|| {
-                        snip_it::error::SnipError::runtime_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
+                        snip_it::error::SnipError::usage_error(EDIT_OUTPUT_FILTER_REQUIRED, None)
                     })?;
                     commands::edit_cmd::run_edit_output(args.library, filter_str, output_value)?;
                 }
@@ -1065,7 +1065,13 @@ fn main() {
             if behavior.services != StartupServices::Minimal {
                 log_shutdown_info();
             }
-            std::process::exit(1);
+            // A usage/argument error must report the documented usage exit
+            // code, the same one Clap's own argument conflicts produce.
+            let exit_code = match e {
+                SnipError::UsageError { .. } => snip_it::outcome::exit_code::USAGE_ERROR,
+                _ => snip_it::outcome::exit_code::GENERAL_ERROR,
+            };
+            std::process::exit(exit_code);
         }
     }
 

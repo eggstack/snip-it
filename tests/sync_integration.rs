@@ -273,3 +273,66 @@ async fn build_sync_client(server_url: &str, api_key: &str) -> SyncClient {
         .await
         .expect("SyncClient::create should succeed against a plaintext loopback server")
 }
+
+/// `Register` is not idempotent: the server mints a fresh account and a
+/// fresh API key on every call and discards the request body, so a retry
+/// after a lost response leaves a second, live, untracked credential on the
+/// server. The client must therefore attempt the RPC exactly once.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_register_is_attempted_exactly_once() {
+    // A zero per-minute budget makes every registration answer
+    // `RESOURCE_EXHAUSTED`, which the retry classifier treats as retryable.
+    let mut service = build_test_service().await;
+    service.config.rate_limit_per_minute = 0;
+    let observer = snip_sync::test_observer::InMemoryObserver::shared();
+    let mut service = service;
+    service.test_observer = Some(observer.clone());
+    let (addr, server_task, _captured) = start_test_server(service).await;
+    let server_url = format!("http://{addr}");
+
+    let result = SyncClient::register(server_url).await;
+    assert!(
+        result.is_err(),
+        "a rate-limited registration must fail instead of succeeding"
+    );
+
+    let register_requests = observer
+        .starts()
+        .iter()
+        .filter(|event| event.operation == "register")
+        .count();
+    assert_eq!(
+        register_requests, 1,
+        "register must be attempted exactly once — a retry would mint another account"
+    );
+
+    server_task.abort();
+}
+
+/// A duplicate library name must not wedge the local↔server link. The
+/// server enforces `UNIQUE(user_id, name)`, so the second create comes back
+/// as `ALREADY_EXISTS`; the client adopts the existing server library
+/// instead of failing and leaving the local library unlinked forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_create_library_adopts_the_existing_server_library() {
+    let (api_key, _device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let first = client
+        .create_library("adopt-me")
+        .await
+        .expect("the first create must succeed");
+    assert!(!first.id.is_empty(), "the created library must have an id");
+
+    let second = client
+        .create_library("adopt-me")
+        .await
+        .expect("a duplicate create must adopt the existing server library");
+    assert_eq!(
+        second.id, first.id,
+        "the duplicate create must resolve to the existing server library"
+    );
+
+    captured.2.abort();
+}

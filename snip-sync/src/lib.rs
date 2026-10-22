@@ -48,7 +48,6 @@ use snip_proto::{
     SearchPremadeLibrariesResponse, Snippet as ProtoSnippet, SnippetList, SyncRequest,
     SyncResponse, snippet_sync_server::SnippetSync,
 };
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,9 +75,21 @@ pub fn extract_api_key<T>(request: &Request<T>, body_api_key: &str) -> String {
         .unwrap_or_else(|| body_api_key.to_string())
 }
 
+/// Strip a trailing `:port` suffix from a peer address.
+///
+/// The value can be attacker-influenced (it comes from the `x-forwarded-for`
+/// header behind a trusted proxy), so malformed input is returned unchanged
+/// rather than panicking — the result is only ever used as a rate-limit
+/// bucket key.
 fn strip_port(addr: &str) -> String {
     if let Some(close_bracket) = addr.find("]:") {
-        return addr[1..close_bracket].to_string();
+        // Only a bracketed IPv6 literal (`[::1]:443`) has a `]:` separator.
+        // Anything else is malformed: slicing it would produce a bogus
+        // address, and slicing at offset 0 would panic outright.
+        if close_bracket > 0 && addr.starts_with('[') {
+            return addr[1..close_bracket].to_string();
+        }
+        return addr.to_string();
     }
     // Bare IPv6 addresses contain multiple colons but no brackets.
     // They have no port to strip, so return as-is.
@@ -110,6 +121,12 @@ pub const DEFAULT_MAX_API_KEY_LENGTH: usize = 512;
 pub const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
+/// Multiplier applied to the per-peer budget for requests that have **not**
+/// yet authenticated. The pre-authentication budget only has to bound the cost
+/// of an API-key lookup, so it is generous by design: an unauthenticated
+/// caller must not be able to exhaust the budget that legitimate callers
+/// spend on the authenticated surface.
+pub const PRE_AUTH_RATE_LIMIT_MULTIPLIER: u32 = 10;
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
 pub const DEFAULT_GRPC_MAX_MESSAGE_SIZE: u32 = 4 * 1024 * 1024; // 4 MiB
 /// Hard upper bound for any single request's page size. Endpoints choose
@@ -776,10 +793,17 @@ impl SnipSyncService {
     /// ceiling on the authenticated gRPC surface. The peer address is bounded
     /// by the number of real callers, and `x-forwarded-for` is honoured only
     /// from a configured trusted proxy.
+    ///
+    /// Tonic inserts a [`tonic::transport::server::TcpConnectInfo`] into the
+    /// request extensions for every TCP connection; the peer address is read
+    /// from there. A bare [`std::net::SocketAddr`] is never inserted, so
+    /// looking for one yields `None` for every request and collapses every
+    /// caller onto a single global bucket.
     fn peer_rate_limit_key<T>(&self, request: &Request<T>) -> String {
         let peer_ip = request
             .extensions()
-            .get::<SocketAddr>()
+            .get::<tonic::transport::server::TcpConnectInfo>()
+            .and_then(|info| info.remote_addr())
             .map(|addr| addr.ip().to_string());
 
         match peer_ip {
@@ -789,6 +813,7 @@ impl SnipSyncService {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|header| header.split(',').next())
                 .map(|s| strip_port(s.trim()))
+                .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| ip.clone()),
             Some(ip) => ip,
             None => "unknown".to_string(),
@@ -830,13 +855,18 @@ impl SnipSyncService {
             )));
         }
 
+        // Pre-authentication budget. Its only job is to bound the cost of the
+        // API-key lookup below, so it is deliberately far larger than the
+        // per-caller budget: an unauthenticated caller must never be able to
+        // exhaust the budget that legitimate callers spend.
+        let pre_auth_key = format!("pre-auth:{rate_limit_key}");
+        let pre_auth_limit = self
+            .config
+            .rate_limit_per_minute
+            .saturating_mul(PRE_AUTH_RATE_LIMIT_MULTIPLIER) as usize;
         if !self
             .rate_limiter
-            .allow(
-                rate_limit_key,
-                self.config.rate_limit_per_minute as usize,
-                Duration::from_secs(60),
-            )
+            .allow(&pre_auth_key, pre_auth_limit, Duration::from_secs(60))
             .await
         {
             self.record_rate_limit();
@@ -863,6 +893,25 @@ impl SnipSyncService {
                 }
                 Status::unauthenticated("Invalid API key")
             })?;
+
+        // Authenticated budget. Only a request that presented a valid API key
+        // can spend it, so an invalid key cannot lock out a legitimate caller
+        // that shares the same peer address.
+        if !self
+            .rate_limiter
+            .allow(
+                rate_limit_key,
+                self.config.rate_limit_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            if let Some(s) = start {
+                self.record_request_duration("auth", s);
+            }
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
 
         Ok(user_id)
     }
@@ -961,8 +1010,9 @@ impl SnipSyncService {
         }
         // Lower clock-skew bound: a zero timestamp means the client clock was
         // unset (epoch). Such rows would be invisible to every delta query
-        // (`updated_at >= since` with positive watermarks), so reject them
-        // instead of storing them.
+        // (the cursor filter is inclusive, so a zero timestamp never reaches
+        // a client whose cursor is positive), so reject them instead of
+        // storing them.
         if snippet.created_at == 0 || snippet.updated_at == 0 {
             return Err(Status::invalid_argument(
                 "Timestamps must be positive; zero indicates an unset client clock",
@@ -1007,13 +1057,17 @@ impl SnippetSync for SnipSyncService {
         tracing::info!(request_id = %request_id, "Register request");
 
         // Use peer IP address for rate limiting (device_id is client-controlled).
-        // tonic populates request.extensions() with the peer SocketAddr.
+        // Tonic populates request.extensions() with a `TcpConnectInfo` holding
+        // the peer socket address.
         let rate_limit_key = self.peer_rate_limit_key(&request);
 
+        // Registration is unauthenticated, so it gets its own bucket: it must
+        // not be able to spend the budget that authenticated callers use.
+        let register_limit_key = format!("register:{rate_limit_key}");
         if !self
             .rate_limiter
             .allow(
-                &rate_limit_key,
+                &register_limit_key,
                 self.config.rate_limit_per_minute as usize,
                 Duration::from_secs(60),
             )
@@ -2103,6 +2157,51 @@ mod tests {
         let resp = service.register(req).await;
         assert!(resp.is_err());
         assert_eq!(resp.unwrap_err().code(), tonic::Code::ResourceExhausted);
+    }
+
+    #[tokio::test]
+    async fn peer_rate_limit_key_uses_the_peer_socket_address() {
+        let service = setup_test_service().await;
+        let mut req = Request::new(RegisterRequest {
+            device_id: "test-device".to_string(),
+        });
+        assert_eq!(service.peer_rate_limit_key(&req), "unknown");
+        req.extensions_mut()
+            .insert(tonic::transport::server::TcpConnectInfo {
+                local_addr: None,
+                remote_addr: Some("203.0.113.7:44321".parse().unwrap()),
+            });
+        assert_eq!(service.peer_rate_limit_key(&req), "203.0.113.7");
+    }
+
+    #[tokio::test]
+    async fn peer_rate_limit_key_honours_x_forwarded_for_from_a_trusted_proxy() {
+        let mut service = setup_test_service().await;
+        service.config.trusted_proxies = vec!["198.51.100.1".to_string()];
+
+        let mut req = Request::new(RegisterRequest {
+            device_id: "test-device".to_string(),
+        });
+        req.extensions_mut()
+            .insert(tonic::transport::server::TcpConnectInfo {
+                local_addr: None,
+                remote_addr: Some("198.51.100.1:44321".parse().unwrap()),
+            });
+        req.metadata_mut()
+            .insert("x-forwarded-for", "203.0.113.9:5555".parse().unwrap());
+        assert_eq!(service.peer_rate_limit_key(&req), "203.0.113.9");
+    }
+
+    #[test]
+    fn strip_port_handles_malformed_input_without_panicking() {
+        // A `]:` at offset 0 used to slice `addr[1..0]` and panic.
+        assert_eq!(strip_port("]:"), "]:");
+        assert_eq!(strip_port("1.2.3.4]:80"), "1.2.3.4]:80");
+        assert_eq!(strip_port("[::1]:443"), "::1");
+        assert_eq!(strip_port("[::1]"), "[::1]");
+        assert_eq!(strip_port("1.2.3.4:80"), "1.2.3.4");
+        assert_eq!(strip_port("::1"), "::1");
+        assert_eq!(strip_port(""), "");
     }
 
     #[tokio::test]

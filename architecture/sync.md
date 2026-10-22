@@ -393,8 +393,9 @@ never observed carries no local deletion to preserve, so it is discarded
 that were never synced to this device.
 
 **Local tombstones absent from the server response are retained.** The server
-response is a *delta* (`updated_at >= since`), so a tombstone is missing
-whenever the server row sits below the `last_sync` watermark — guaranteed in
+response is a *delta* (the server's cursor filter is inclusive), so a
+tombstone is missing whenever the server row sits below the `last_sync`
+watermark — guaranteed in
 pull-only mode, where nothing is uploaded at all. Dropping it erased the
 record of the intent: the deletion could never be propagated, and the server's
 live copy would resurrect on the next sync that did cross the watermark. The

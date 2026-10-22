@@ -12,7 +12,7 @@ pub struct SelectArgs {
     #[arg(short, long)]
     pub filter: Option<String>,
     /// Initial query to pre-fill the search (alias for --filter)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "filter")]
     pub query: Option<String>,
     #[arg(short, long)]
     pub library: Option<String>,

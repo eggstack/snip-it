@@ -25,9 +25,9 @@ only touch `output`.
 | `--output-stdin` | bool | `false` | Read the output field from stdin (same conflicts) |
 | `--clear-output` | bool | `false` | Clear the output field (sets `""`) (same conflicts) |
 | `-f/--filter` | `Option<String>` | – | Substring match on description/command for output editing |
-| `--id` | `Option<String>` | – | Exact snippet ID bypass → `run_edit_output_by_id` |
-| `--description-exact` | `Option<String>` | – | Exact bypass → `run_edit_output_by_id` |
-| `--command-exact` | `Option<String>` | – | Exact bypass → `run_edit_output_by_id` |
+| `--id` | `Option<String>` | – | Exact snippet ID bypass → `run_edit_output_by_id`; conflicts with `--filter` |
+| `--description-exact` | `Option<String>` | – | Exact bypass → `run_edit_output_by_id`; conflicts with `--filter` |
+| `--command-exact` | `Option<String>` | – | Exact bypass → `run_edit_output_by_id`; conflicts with `--filter` |
 
 Without output flags, `run(library)` opens the editor regardless of
 filter/exact flags (`src/main.rs:707-709`).
@@ -41,7 +41,10 @@ filter/exact flags (`src/main.rs:707-709`).
   - Otherwise `--filter` is **required**: `src/main.rs:700-704` returns
     `--filter is required when using --output, --output-stdin, or --clear-output`
     when it is absent. The exact selectors are the alternative to
-    `--filter`, not an addition to it.
+    `--filter`, not an addition to it: `--filter` **conflicts** with
+    `--id` / `--description-exact` / `--command-exact` at the clap level
+    (exactly like `snp run` / `snp clip`), so the combination is a usage
+    error (exit 2) instead of a silent drop.
 - No output flags → the **whole-file** mode.
 
 ## Flow / steps
@@ -137,7 +140,8 @@ filter (exit 1 family with remediation text). Output-value intake
 - Notify on byte change even when the editor reports failure — the
   bytes on disk are the source of truth, not the exit status.
 - `output` edits require `--filter` **or** an exact selector; the
-  CLI contract in `src/main.rs:700-704` enforces it.
+  CLI contract in `src/main.rs:700-704` enforces it, and the two are
+  mutually exclusive at the clap level.
 - Whole-file edit never parses or normalizes TOML itself — the editor
   writes the bytes and snip-it only compares them.
 - `output` is local-only: it is excluded from the sync fingerprint, so

@@ -140,6 +140,20 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         }
     }
 
+    match db.migrate_snippet_visible_at().await {
+        Ok(true) => {
+            tracing::info!("Migrated snippets table: added the visible_at delta-cursor column")
+        }
+        Ok(false) => tracing::debug!("snippets table already has the visible_at column"),
+        Err(e) => {
+            tracing::error!(
+                "visible_at migration failed: {}. Halting startup to keep the delta cursor consistent.",
+                e
+            );
+            return Err(e.into());
+        }
+    }
+
     let grpc_addr = resolve_socket_addr(&config.grpc_host, config.grpc_port)?;
     let http_addr = resolve_socket_addr(&config.http_host, config.http_port)?;
 

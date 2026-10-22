@@ -327,11 +327,12 @@ pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // 
 1. A missing file yields `SyncSettings::default()` (`:501-503`).
 2. The content is read through `cached_read_toml` (`:505`).
 3. The integrity check runs **first**: on failure the file is copied to
-   `sync.toml.corrupt.bak`, a warning is printed on stderr, and the defaults
-   are returned (`:507-533`).
+   `sync.toml.corrupt.bak`, a warning is printed on stderr, and the load
+   **fails closed** with an error (`:519-534`). The file itself is never
+   modified.
 4. The header is stripped and invalid TOML escapes are repaired
-   (`:535-536`, `src/utils/toml_helpers.rs:348-352`).
-5. The TOML is parsed and the `settings.sync` table is extracted (`:538-541`).
+   (`:536-537`, `src/utils/toml_helpers.rs:348-352`).
+5. The TOML is parsed and the `settings.sync` table is extracted (`:539-542`).
    A **parse** failure is backed up to `sync.toml.corrupt.bak` and reported on
    stderr, exactly like an integrity failure — otherwise a schema change
    silently downgraded every caller to the defaults.
@@ -511,6 +512,14 @@ Test-only vars are inert in production builds (proven by `scripts/ci/test-produc
   with write access to the config dir can recompute it.
 - **A missing integrity header means "legacy", not "corrupt."** Resetting to
   defaults there would lose the user's configuration.
+- **A corrupt `sync.toml` fails closed.** Both the integrity failure and the
+  parse failure return an error; neither synthesizes a writable default.
+  Returning the defaults would let the next writer (`snp sync config
+  --auto-sync on`) persist them over the user's configuration — destroying
+  the very settings the `.corrupt.bak` copy was taken to preserve. The
+  corruption warning is printed **once per process**: the settings are
+  loaded more than once per command (the plaintext→keychain migration loads
+  them before the command does).
 - **Plaintext API keys are refused in production.** Both plaintext seams are
   behind the `test-support` Cargo feature, so they do not exist in a release
   build.

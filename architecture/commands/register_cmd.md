@@ -6,8 +6,8 @@
 
 `src/commands/register_cmd.rs` (79 lines) registers this device with a
 snip-sync server over gRPC, persists the resulting `SyncSettings`
-(enabled, server URL, device ID, API key, `credential_revision = 1`), and
-prints a masked key.
+(enabled, server URL, device ID, API key, a bumped `credential_revision`),
+and prints a masked key.
 
 It does **not** create snippets, libraries, or sync traffic. It does not
 call `notify_mutation` — registration creates no snippet content, so there
@@ -60,15 +60,20 @@ group).
    A saved custom URL therefore survives a bare `snp register --force`.
 3. **Register** — `runtime.block_on(SyncClient::register(server_url))`
    (`:40`). The client opens a TLS channel (a transport failure becomes
-   `sync_failure(ConnectFailed)`) and issues the `Register` RPC through
-   `retry_grpc_unified!` with `None::<SyncRunLimits>` (unbounded) and
-   `RetryBackoff::Standard` (`src/sync.rs:1047-1076`). A response with
+   `sync_failure(ConnectFailed)`) and issues the `Register` RPC **once**
+   (`src/sync.rs:1070-1080`). The RPC is deliberately **not** retried: the
+   server mints a fresh account and a fresh API key on every call and
+   discards the request body, so there is no idempotency key to
+   deduplicate on — a retry after a lost response would leave a second,
+   live, untracked credential on the server. A response with
    `success == false` becomes `sync_failure(RegistrationFailed)` carrying
    the server message.
 4. **Persist.** On success the handler builds a **fresh** `SyncSettings`
    from `Default::default()` plus `enabled = true`, `server_url`,
-   `api_key`, `device_id`, and `credential_revision = 1`
-   (`:42-47`), then `save_sync_settings` (`:49-52`). A save failure is
+   `api_key`, `device_id`, and
+   `credential_revision = previous + 1` (the previous value is carried
+   over from the loaded settings, so the counter advances on every
+   registration), then `save_sync_settings` (`:49-52`). A save failure is
    printed to stderr and propagated. Because the struct is rebuilt from
    `default()`, **no prior field survives** — a re-registration resets
    `sync_direction`, `auto_sync`, the debounce/max-delay/timeout values,
@@ -215,8 +220,12 @@ in tests requires `unsafe` (edition 2024).
 
 - **Never print or log the full API key.** The masked form is the only
   user-visible rendering; `SnipError` carries no credentials.
-- **`credential_revision = 1`** on a fresh registration (rotation bumps
-  it).
+- **`credential_revision` advances on every registration** — the previous
+  value plus one, carried over from the loaded settings. A fresh
+  registration writes 1. The API key value is deliberately excluded from
+  the auto-sync config fingerprint, so this counter is the *only* signal
+  that can detect a credential replacement; a constant value would make a
+  deferred auto-sync failure wait forever.
 - **Re-registration resets unrelated settings** — the struct is rebuilt
   from `default()`, so customizations must be re-applied.
 - **A saved custom server URL survives a bare `snp register --force`.**

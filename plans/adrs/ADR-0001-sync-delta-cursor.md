@@ -1,8 +1,9 @@
 # ADR-0001: Monotonic per-library sequence as the sync delta cursor
 
-Status: proposed
+Status: amended — the defect is closed by the implemented cursor column;
+Option A remains the proposed protocol-level follow-up
 
-Date: 2026-10-21
+Date: 2026-10-21 (amended 2026-10-22)
 
 Decision owners: project maintainers
 
@@ -141,6 +142,45 @@ The decision is **not yet implemented**. It is recorded here so the trade-off
 is not re-derived, and so the implementation lands as its own change with its
 own version bump rather than being folded into an unrelated batch.
 
+## Amendment — the cursor column (implemented)
+
+The defect described above was closed **without** the protocol change, by
+splitting the two roles the single `updated_at` column was serving:
+
+- `snippets.updated_at` keeps the **client's logical modification time**,
+  stored verbatim. The server's last-write-wins rule and the client's merge
+  order both compare it, and neither is affected.
+- `snippets.visible_at` carries the **delta cursor position** of the row. It
+  is clamped to the library's current watermark (`max(pushed, watermark)`) on
+  every write and never moves backwards, so it is monotone by construction.
+  The delta filter (`visible_at >= since`) and the cursor handed to the
+  client (`MAX(visible_at)`) use it.
+
+This is Option B *with* the pushed value kept in its own column — the shape
+the "Considered options" section describes as needing a second column. It
+satisfies every decision driver above:
+
+- A row is never unreachable because of a value the client chose: the cursor
+  is server-assigned.
+- The client's merge order is untouched, and `updated_at` keeps its meaning
+  as the logical modification time.
+- The server's upsert rule is untouched: the conflict comparison still reads
+  the raw `updated_at` on both sides.
+- No protocol change: the request and response carry the same fields, so an
+  old client talks to a new server and a new client talks to an old server
+  exactly as before. A migrated database is backfilled with
+  `visible_at = updated_at`, so it selects the same rows as before and every
+  client's stored cursor stays valid.
+
+What it does **not** remove: the cursor is still a timestamp, so the `>=`
+filter re-delivers boundary rows and second granularity still matters. That
+is exactly what Option A adds, and Option A stays the proposed follow-up —
+it now has to add a sequence *next to* `visible_at` rather than replace it.
+
+The trade-off recorded here is deliberate: a second timestamp semantics on
+the server, in exchange for closing the data-loss defect without a protocol
+change, a version bump, and a client cursor change.
+
 ## Consequences
 
 ### Positive
@@ -200,14 +240,18 @@ across a version skew:
 
 - A test that pushes a row with an `updated_at` below the library max and
   proves a third client, syncing with the current cursor, receives it.
+  (`db::tests::test_insert_below_watermark_is_still_delivered`.)
 - A test that a second push of the same row with a *newer* `updated_at`
-  still wins the LWW comparison (the sequence change must not have altered
+  still wins the LWW comparison (the cursor change must not have altered
   conflict resolution).
+  (`db::tests::test_update_below_the_watermark_still_uses_the_raw_timestamp`.)
 - A test that an old client (no sequence cursor) still receives the rows the
   timestamp filter would have selected.
 - A migration test that an existing database is upgraded and the backfilled
   ordering matches the pre-migration `updated_at` ordering.
+  (`db::tests::test_migrate_snippet_visible_at_backfills_the_cursor`.)
 
 ## Supersession
 
-None.
+None. The amendment above closes the *defect*; Option A is not superseded, it
+is narrowed to the second-granularity wart that remains.

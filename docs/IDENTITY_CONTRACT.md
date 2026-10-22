@@ -112,15 +112,22 @@ Note: `Snippet::new()` creates a snippet with an empty `id` field. The determini
 - `output` is local-only — not synced, and absent from the protobuf `Snippet` message (`snip-proto/src/snip_proto.rs:85-113`); the merge keeps the local copy (`src/sync_commands.rs:1294-1305`)
 - `device_id` and `deleted` fields are sanitized on import (`src/commands/import_cmd.rs:157-158`)
 
-## Known limitations
+## The server's delta cursor
 
-- **The server's delta cursor is `updated_at`, which the client controls.**
-  The server filters rows with `updated_at >= since` and hands the client
-  `MAX(updated_at)` as the next cursor, so a row pushed with an `updated_at`
-  below the library maximum is never delivered to a client whose cursor is
-  already above it. The trigger is clock skew on one device (or a restore
-  from an old backup); the consequence is that the snippet lives only on the
-  server and on the pushing device. A fresh device, whose cursor is 0, still
-  receives it. The fix — a monotonic per-library write sequence as the
-  cursor — needs a protocol and schema change and is recorded, not yet
-  implemented, in `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+- **The delta cursor is server-assigned, not client-chosen.** The server
+  stores the cursor position of a row in `snippets.visible_at` and filters
+  rows with `visible_at >= since`; it hands the client `MAX(visible_at)` as
+  the next cursor (`snip-sync/src/db.rs`). `visible_at` is clamped to the
+  library's current watermark on every write, so it is monotone by
+  construction.
+- **`updated_at` stays the client's logical modification time.** It is stored
+  verbatim and is what the server's last-write-wins rule and the client's
+  merge order compare. The cursor bookkeeping never rewrites it.
+- The consequence: a row pushed with an `updated_at` below the library
+  maximum (clock skew on one device, or a restore from an old backup) is
+  still delivered to every client, because it is delivered at its
+  `visible_at` position.
+- The remaining wart — the cursor is a timestamp, so the `>=` filter
+  re-delivers boundary rows and second granularity still matters — is
+  tracked as the proposed protocol-level follow-up in
+  `plans/adrs/ADR-0001-sync-delta-cursor.md`.

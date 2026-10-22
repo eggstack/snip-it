@@ -509,6 +509,27 @@ guarantee no resurrection. The no-resurrection guarantee lives in the client's
 `choose_version` (`src/sync_commands.rs:1199`), so it only holds if the client
 re-merges locally. See [server.md](server.md) and [sync.md](sync.md).
 
+### The delta cursor is server-assigned, not client-chosen
+
+The server's delta filter and the watermark it hands back run on
+`snippets.visible_at`, a **server-assigned** cursor position, never on the
+client-chosen `updated_at`. `visible_at` is clamped to the library's current
+watermark on every write (`max(pushed, watermark)`) and never moves
+backwards, so it is monotone by construction.
+
+`updated_at` keeps the client's logical modification time verbatim: it is
+what the server's last-write-wins upsert compares and what the client's
+merge order uses. The two roles are deliberately separate — deriving the
+cursor from `updated_at` let a device with a clock behind (or restored from
+an old backup) push a row that no other device ever received, because the
+row landed below the watermark that every delta pull filters on.
+
+Existing databases are migrated in place (`migrate_snippet_visible_at`), and
+the protocol is unchanged, so old and new clients interoperate in both
+directions. See
+[ADR-0001](../plans/adrs/ADR-0001-sync-delta-cursor.md) for the remaining
+second-granularity wart.
+
 ### Server `snippets.id` is global, and a cross-library push is dropped
 
 `snippets.id` is a global `TEXT PRIMARY KEY`, not per user/library. The upsert
