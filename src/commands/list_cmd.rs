@@ -1,4 +1,3 @@
-use crate::commands::load_snippets;
 use crate::error::SnipResult;
 use crossterm::style::{Color, Stylize, style};
 use fuzzy_matcher::FuzzyMatcher;
@@ -59,8 +58,12 @@ pub fn run(
     if config.is_some() && library.is_some() {
         eprintln!("warning: --library is ignored when --config is set");
     }
-    let snippets = if config.is_some() {
-        load_snippets(&config)?
+    let snippets = if let Some(ref config_path) = config {
+        // Read-only: `--config` must not create the file (or its parent
+        // directories), and must not leave a `.bak` sibling behind. This
+        // command is declared read-only, so it must not mutate the store it
+        // reads.
+        crate::commands::load_snippets_readonly_at(config_path)?
     } else {
         // Read-only resolution: this command must never migrate a legacy
         // single-file checkout or otherwise mutate library state. Routing

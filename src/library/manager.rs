@@ -189,19 +189,44 @@ impl LibraryManager {
             return Ok(());
         }
 
-        self.init_libraries_dir()?;
-
+        // Read the legacy content *before* creating the libraries directory.
+        // The existence of that directory is what flips the install into
+        // library mode, and in library mode the legacy file is invisible to
+        // every read path. An empty legacy file carries no snippets to
+        // migrate, so the install stays in single-file mode and the legacy
+        // file remains the source of truth.
         let content = cached_read_toml(&legacy_path)?;
         if content.trim().is_empty() {
             return Ok(());
         }
 
+        // The library file can only be written once the directory exists.
+        // Creating it flips the mode, so a failure below has to flip it back:
+        // otherwise the legacy file is orphaned — present on disk, but
+        // unreachable from every read path.
+        let created_libraries_dir = !self.libraries_dir.exists();
+        self.init_libraries_dir()?;
+
+        let migrated = self.register_migrated_library(&content);
+        if migrated.is_err() && created_libraries_dir {
+            tracing::warn!(
+                "migration failed; removing the libraries directory so the legacy \
+                 snippets file stays reachable"
+            );
+            let _ = fs::remove_dir_all(&self.libraries_dir);
+        }
+        migrated
+    }
+
+    /// Writes the migrated content into the library directory and registers
+    /// the library in `libraries.toml`.
+    fn register_migrated_library(&mut self, content: &str) -> SnipResult<()> {
         let new_path = self.libraries_dir.join("snippets.toml");
         // Write through the atomic layer: an interrupted in-place copy would
         // leave a truncated `libraries/snippets.toml`, and because the
         // libraries directory now exists the legacy file is orphaned and
         // never read again.
-        crate::utils::atomic::write_private_atomic(&new_path, &content, "snippets").map_err(
+        crate::utils::atomic::write_private_atomic(&new_path, content, "snippets").map_err(
             |e| {
                 SnipError::io_error(
                     "migrate snippets file",
@@ -211,9 +236,18 @@ impl LibraryManager {
             },
         )?;
 
-        let mut meta = LibraryMeta::new("snippets");
-        meta.is_primary = true;
-        self.config.libraries.push(meta);
+        // Register the library only once. A second "snippets" entry would
+        // make `libraries.toml` ambiguous and the two entries could point at
+        // different ids.
+        if self.get_library_by_filename("snippets").is_some() {
+            if let Some(existing) = self.get_library_by_filename_mut("snippets") {
+                existing.is_primary = true;
+            }
+        } else {
+            let mut meta = LibraryMeta::new("snippets");
+            meta.is_primary = true;
+            self.config.libraries.push(meta);
+        }
 
         self.bump_generation();
         self.save_config()?;

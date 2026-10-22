@@ -298,131 +298,138 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
             report.imported = converted.len();
         }
         ImportMode::Merge => {
-            let existing = if dest_path.exists() {
-                crate::library::load_library(&dest_path)?
-            } else {
-                Snippets::default()
+            // Duplicate detection and the merged result depend on the
+            // destination content, so they run against the library exactly as
+            // it is read under the local-data lock. A concurrent writer's
+            // snippets therefore survive the import.
+            let compute_merge = |existing: &Snippets,
+                                 report: &mut PetImportReport|
+             -> Vec<Snippet> {
+                // Track which source entries to skip (exact duplicates)
+                let mut skip_indices: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+
+                // O(n+m) duplicate detection: build lookup tables over existing
+                // entries once instead of rescanning them per source candidate.
+                // Vec values preserve ascending destination order, matching the
+                // previous brute-force scan order exactly.
+                let mut first_exact: std::collections::HashMap<(&str, &str), usize> =
+                    std::collections::HashMap::new();
+                let mut by_command: std::collections::HashMap<&str, Vec<usize>> =
+                    std::collections::HashMap::new();
+                let mut by_description: std::collections::HashMap<&str, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for (j, existing_snippet) in existing.snippets.iter().enumerate() {
+                    first_exact
+                        .entry((
+                            existing_snippet.command.as_str(),
+                            existing_snippet.description.as_str(),
+                        ))
+                        .or_insert(j);
+                    by_command
+                        .entry(existing_snippet.command.as_str())
+                        .or_default()
+                        .push(j);
+                    by_description
+                        .entry(existing_snippet.description.as_str())
+                        .or_default()
+                        .push(j);
+                }
+
+                // Detect duplicates against existing library
+                for (i, candidate) in converted.iter().enumerate() {
+                    if let Some(&j) = first_exact
+                        .get(&(candidate.command.as_str(), candidate.description.as_str()))
+                    {
+                        report.duplicates.push(ImportDuplicate {
+                            source_index: i,
+                            destination_index: j,
+                            description: candidate.description.clone(),
+                            reason: "Exact duplicate (same command and description)".to_string(),
+                        });
+                        skip_indices.insert(i);
+                    } else {
+                        // Union of entries sharing command or description, in
+                        // ascending destination order (same as the old scan).
+                        let mut matched: Vec<usize> = Vec::new();
+                        if let Some(js) = by_command.get(candidate.command.as_str()) {
+                            matched.extend_from_slice(js);
+                        }
+                        if let Some(js) = by_description.get(candidate.description.as_str()) {
+                            matched.extend_from_slice(js);
+                        }
+                        matched.sort_unstable();
+                        matched.dedup();
+
+                        for j in matched {
+                            let existing_snippet = &existing.snippets[j];
+                            if same_command_different_description(candidate, existing_snippet) {
+                                report.diagnostics.push(CompatibilityDiagnostic {
+                                    entry_index: Some(i),
+                                    field: Some("command".to_string()),
+                                    severity: DiagnosticSeverity::Warning,
+                                    message: format!(
+                                        "Same command as existing '{}' but different description",
+                                        existing_snippet.description
+                                    ),
+                                    code: "W-DUP-CMD".to_string(),
+                                    suggestion: None,
+                                    span: None,
+                                });
+                            }
+                            if same_description_different_command(candidate, existing_snippet) {
+                                report.diagnostics.push(CompatibilityDiagnostic {
+                                    entry_index: Some(i),
+                                    field: Some("description".to_string()),
+                                    severity: DiagnosticSeverity::Warning,
+                                    message:
+                                        "Same description as existing entry but different command"
+                                            .to_string(),
+                                    code: "W-DUP-DESC".to_string(),
+                                    suggestion: None,
+                                    span: None,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Filter out exact duplicates
+                let mut merged: Vec<Snippet> = existing.snippets.clone();
+                let mut imported_count = 0;
+                for (i, candidate) in converted.iter().enumerate() {
+                    if skip_indices.contains(&i) {
+                        report.skipped += 1;
+                    } else {
+                        merged.push(candidate.clone());
+                        imported_count += 1;
+                    }
+                }
+
+                report.imported = imported_count;
+
+                merged
             };
 
-            // Track which source entries to skip (exact duplicates)
-            let mut skip_indices: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
-
-            // O(n+m) duplicate detection: build lookup tables over existing
-            // entries once instead of rescanning them per source candidate.
-            // Vec values preserve ascending destination order, matching the
-            // previous brute-force scan order exactly.
-            let mut first_exact: std::collections::HashMap<(&str, &str), usize> =
-                std::collections::HashMap::new();
-            let mut by_command: std::collections::HashMap<&str, Vec<usize>> =
-                std::collections::HashMap::new();
-            let mut by_description: std::collections::HashMap<&str, Vec<usize>> =
-                std::collections::HashMap::new();
-            for (j, existing_snippet) in existing.snippets.iter().enumerate() {
-                first_exact
-                    .entry((
-                        existing_snippet.command.as_str(),
-                        existing_snippet.description.as_str(),
-                    ))
-                    .or_insert(j);
-                by_command
-                    .entry(existing_snippet.command.as_str())
-                    .or_default()
-                    .push(j);
-                by_description
-                    .entry(existing_snippet.description.as_str())
-                    .or_default()
-                    .push(j);
-            }
-
-            // Detect duplicates against existing library
-            for (i, candidate) in converted.iter().enumerate() {
-                if let Some(&j) =
-                    first_exact.get(&(candidate.command.as_str(), candidate.description.as_str()))
-                {
-                    report.duplicates.push(ImportDuplicate {
-                        source_index: i,
-                        destination_index: j,
-                        description: candidate.description.clone(),
-                        reason: "Exact duplicate (same command and description)".to_string(),
-                    });
-                    skip_indices.insert(i);
+            if options.dry_run {
+                let existing = if dest_path.exists() {
+                    crate::library::load_library(&dest_path)?
                 } else {
-                    // Union of entries sharing command or description, in
-                    // ascending destination order (same as the old scan).
-                    let mut matched: Vec<usize> = Vec::new();
-                    if let Some(js) = by_command.get(candidate.command.as_str()) {
-                        matched.extend_from_slice(js);
-                    }
-                    if let Some(js) = by_description.get(candidate.description.as_str()) {
-                        matched.extend_from_slice(js);
-                    }
-                    matched.sort_unstable();
-                    matched.dedup();
-
-                    for j in matched {
-                        let existing_snippet = &existing.snippets[j];
-                        if same_command_different_description(candidate, existing_snippet) {
-                            report.diagnostics.push(CompatibilityDiagnostic {
-                                entry_index: Some(i),
-                                field: Some("command".to_string()),
-                                severity: DiagnosticSeverity::Warning,
-                                message: format!(
-                                    "Same command as existing '{}' but different description",
-                                    existing_snippet.description
-                                ),
-                                code: "W-DUP-CMD".to_string(),
-                                suggestion: None,
-                                span: None,
-                            });
-                        }
-                        if same_description_different_command(candidate, existing_snippet) {
-                            report.diagnostics.push(CompatibilityDiagnostic {
-                                entry_index: Some(i),
-                                field: Some("description".to_string()),
-                                severity: DiagnosticSeverity::Warning,
-                                message: "Same description as existing entry but different command"
-                                    .to_string(),
-                                code: "W-DUP-DESC".to_string(),
-                                suggestion: None,
-                                span: None,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Filter out exact duplicates
-            let mut merged: Vec<Snippet> = existing.snippets.clone();
-            let mut imported_count = 0;
-            for (i, candidate) in converted.iter().enumerate() {
-                if skip_indices.contains(&i) {
-                    report.skipped += 1;
-                } else {
-                    merged.push(candidate.clone());
-                    imported_count += 1;
-                }
-            }
-
-            report.imported = imported_count;
-
-            if !options.dry_run {
-                if !dest_path.exists() {
-                    // New library
-                    let snippets = Snippets {
+                    Snippets::default()
+                };
+                let _merged = compute_merge(&existing, &mut report);
+            } else {
+                // Load-modify-save under the local-data lock: the destination is
+                // re-read inside the critical section, so a concurrent writer
+                // cannot have its snippets dropped by this import.
+                crate::library::update_library(&dest_path, |existing| {
+                    let merged = compute_merge(existing, &mut report);
+                    *existing = Snippets {
                         snippets: merged,
                         folders: Vec::new(),
                     };
-                    crate::library::save_library(&dest_path, &snippets)?;
-                } else {
-                    // Existing library — backup then save
-                    crate::library::backup_library(&dest_path)?;
-                    let snippets = Snippets {
-                        snippets: merged,
-                        folders: Vec::new(),
-                    };
-                    crate::library::save_library(&dest_path, &snippets)?;
-                }
+                    Ok(())
+                })?;
             }
         }
         ImportMode::Replace => {

@@ -147,10 +147,22 @@ fn handle_library_not_found(
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_suffix(".sync_recovery"));
+    // The marker is bound to this local library either by the identity
+    // captured when it was written, or — after a relink — by the server
+    // linkage that relink established. `relink_server_library` rewrites the
+    // local `library_id` to the server id, so a marker persisted before the
+    // relink still carries the pre-recovery identity; refusing it would
+    // strand the recovery forever.
+    let marker_identity_ok = marker.local_library_id.is_empty()
+        || marker.local_library_id == local_meta.library_id
+        || marker
+            .server_library_id
+            .as_deref()
+            .is_some_and(|server_id| local_meta.server_id.as_deref() == Some(server_id));
     let identity_ok = marker.schema == 1
         && normalized_library_name(&marker.local_library_name) == normalized_name
         && marker_stem == Some(lib_name)
-        && (marker.local_library_id.is_empty() || marker.local_library_id == local_meta.library_id)
+        && marker_identity_ok
         && lib_path.exists();
     if !identity_ok {
         let e = SnipError::runtime_error(
@@ -162,6 +174,10 @@ fn handle_library_not_found(
         results.push((lib_name.to_string(), false, e.to_string()));
         return;
     }
+
+    // Keep the marker bound to the library's current identity. The write
+    // below persists it.
+    marker.local_library_id = local_meta.library_id.clone();
 
     let already_linked = marker.phase == RecoveryPhase::Linked;
     if already_linked {
@@ -277,6 +293,12 @@ fn handle_library_not_found(
             results.push((lib_name.to_string(), false, e.to_string()));
             return;
         }
+        // The relink rewrote the local library identity. Refresh the marker so
+        // the identity check on the next run still matches the library.
+        marker.local_library_id = mgr
+            .get_library_by_filename(lib_name)
+            .map(|lib| lib.library_id.clone())
+            .unwrap_or_default();
         marker.phase = RecoveryPhase::Linked;
         if let Err(e) = write_recovery_marker(&recovery_marker, &marker) {
             tracing::error!(library = %lib_name, error = %e, "Failed to persist linked recovery state");
@@ -294,7 +316,7 @@ fn handle_library_not_found(
     match retry_result {
         Ok(retry_response) if retry_response.success => {
             let server_snippets = retry_response.snippets;
-            match merge_and_save(lib_path, lib_name, snippets, &server_snippets) {
+            match merge_and_save(lib_path, lib_name, &server_snippets) {
                 Ok((_merged, _backup, _conflicts)) => {
                     // `success` does not imply a clean upload: the server
                     // reports refused rows in `skipped_ids` without flipping
@@ -610,7 +632,6 @@ impl SyncStatus {
 fn merge_and_save(
     lib_path: &std::path::Path,
     lib_name: &str,
-    snippets: &Snippets,
     server_snippets: &[ProtoSnippet],
 ) -> SnipResult<(Snippets, Option<String>, Vec<String>)> {
     // Derive the conflict list from the merge, not from the presence of a
@@ -619,25 +640,30 @@ fn merge_and_save(
     // an older remote timestamp), and a remote tombstone is a deletion, not an
     // overwrite. Reporting those as "N snippets overwritten by another device"
     // made a read-only device report phantom overwrites on every sync.
-    let conflicting_ids = overwritten_by_remote(snippets, server_snippets);
-    if !conflicting_ids.is_empty() {
-        tracing::warn!(
-            library = %lib_name,
-            count = conflicting_ids.len(),
-            "Device conflicts detected during merge"
-        );
-    }
+    //
+    // The merge is applied to the library as it is read under the local-data
+    // lock, so a snippet created locally while the sync was in flight is not
+    // dropped by the merge.
+    let mut conflicting_ids: Vec<String> = Vec::new();
+    let merged = library::update_library(lib_path, |snippets| {
+        conflicting_ids = overwritten_by_remote(snippets, server_snippets);
+        if !conflicting_ids.is_empty() {
+            tracing::warn!(
+                library = %lib_name,
+                count = conflicting_ids.len(),
+                "Device conflicts detected during merge"
+            );
+        }
 
-    let merged = merge_snippets(snippets, server_snippets);
-
-    // save_library uses atomic rename, so the original file is always safe
-    // on failure. No explicit backup/restore is needed here.
-    if let Err(e) = library::save_library(lib_path, &merged) {
-        return Err(SnipError::sync_failure(
+        *snippets = merge_snippets(snippets, server_snippets);
+        Ok(())
+    })
+    .map_err(|e| {
+        SnipError::sync_failure(
             crate::error::SyncFailureKind::SaveMergedLibraryFailed,
             Some(&e.to_string()),
-        ));
-    }
+        )
+    })?;
 
     Ok((merged, None, conflicting_ids))
 }
@@ -934,7 +960,7 @@ pub(crate) fn run_sync_with_limits(
 
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets) {
+                        match merge_and_save(&lib_path, lib_name, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
                                 if !has_failures
                                     && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
@@ -1019,7 +1045,7 @@ pub(crate) fn run_sync_with_limits(
                         let new_timestamp = response.server_timestamp;
                         let server_snippets = response.snippets;
 
-                        match merge_and_save(&lib_path, lib_name, &snippets, &server_snippets) {
+                        match merge_and_save(&lib_path, lib_name, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
                                 let has_failures = response.skipped_count > 0;
                                 if !has_failures

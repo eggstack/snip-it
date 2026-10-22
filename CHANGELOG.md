@@ -107,6 +107,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_new` under an unguessable name.
 - **The self-update did not fsync the install directory** after the rename,
   so the replacement could be lost on a crash.
+- **Concurrent snippet writes silently lost snippets.** The local-data lock
+  was taken around the *write* only, so two `snp new` processes could read the
+  same library, each append its own snippet, and each write the result — one
+  snippet was gone, with no error anywhere. Every load-modify-save cycle now
+  runs inside the lock (`library::update_library`, `commands::update_snippets`):
+  `snp new`, `snp import --merge`, `snp edit --output`, the sync merge, and
+  the TUI delete path.
+- **`snp-sync` corrupted premade libraries that used the legacy `\<` escape
+  convention.** The server shipped a stale escape repair that froze `\n` and
+  `\t` into literal characters and mangled non-ASCII text. It now uses the
+  same value-preserving repair as the client.
+- **A sync recovery could get permanently stuck.** The recovery marker kept
+  the library identity from *before* the relink, so the next run refused it as
+  a mismatch and the library never recovered. The marker is now refreshed
+  after the relink and accepts the server linkage as proof of identity.
+- **Every durable write failed on Windows even though it had succeeded.** The
+  rename had already committed when the directory fsync reported "unsupported";
+  the error was fatal in production builds, so a successful write was
+  reported as a failure. An unsupported directory fsync is now reported as
+  reduced durability instead.
+- **A crashed transaction's lock could be quarantined out from under a live
+  owner.** The reclaim renamed the lock file by path without re-checking that
+  the record still described the owner that was observed. The transaction
+  lock now re-reads and compares the record before renaming, like the
+  local-data lock.
+- **Encrypting a batch of snippets ran one Argon2id derivation per snippet**
+  (~1 s each with the shipped parameters), because every snippet had its own
+  salt and the derived-key cache was keyed on the salt. A batch now shares one
+  salt: one derivation per batch, and every payload still gets its own random
+  nonce.
+- **`snp status` reported a failed sync as "Succeeded".** A foreground sync
+  that failed after an earlier success left the status file with a failure
+  result but an old success timestamp, and the attempt state fell through to
+  the success branch. A failed attempt is now never reported as a success.
+- **`snp repair` discarded backup-copy errors** and reported a backup that
+  was missing `libraries.toml` / `usage.toml`. The copy errors are propagated.
+- **The local-data lock refused healthy writers after 30 seconds.** The
+  deadline was flat and the poll interval was quantised to whole seconds, so
+  the tail of a long but healthy queue timed out. The deadline now measures
+  time *without progress* — it is extended whenever the lock changes hands —
+  and the poll interval ceiling is 250 ms.
+- **Two restores in the same second overwrote each other's pre-restore
+  backup.** The backup directory name now carries a UUID, like the repair
+  backup.
+- **A legacy checkout with an empty `snippets.toml` was left unusable.** The
+  migration created `libraries/` (which hides the legacy file from every read
+  path) and then returned without registering a library, so the first `snp new`
+  wrote into a file nothing read. The migration now reads the content before
+  the mode flip, keeps an empty legacy file in single-file mode, and rolls the
+  mode flip back if the migration fails.
+- **`snp restore` stalled for 30 seconds** when `sync.toml` still held a
+  plaintext API key: the settings *load* path performed a mutating save,
+  which re-acquired the non-reentrant local-data lock the restore was
+  holding. The credential migration is now an explicit step run by the
+  credential-consuming paths.
+- **A transient pending-clear failure stopped auto-sync permanently.** It was
+  classified as a local failure, which raises `attention_required` and is
+  never released. It is now classified like any other pending-marker error,
+  so a lock timeout backs off and retries.
+- **A malformed `sync.toml` was silently replaced by the defaults.** The CRC
+  gate only catches bit corruption; a parse failure produced no backup and no
+  stderr warning, so every caller silently ran with sync disabled. A parse
+  failure is now backed up and reported like an integrity failure.
+- **The transaction lock's stale reclaim was not ownership-verified** while
+  the local-data lock's was — see the crash-reclaim entry above.
+- **The pending transaction lock reported "busy after 0ms"** and dropped the
+  owner's identity. The real deadline and the current holder are now included
+  in the diagnostic.
+- **`snp get --resolution all --json` printed concatenated JSON objects**,
+  which no JSON consumer can parse. The multi-match case now emits a single
+  JSON array (documented in `docs/JSON_SCHEMAS.md`).
+- **`snp list --config <path>` created directories and an empty file** for a
+  path that did not exist, and left a `.bak` sibling for a malformed one.
+  `list` is classified read-only; the `--config` branch now loads without
+  mutating anything.
+- **`snp new --config <path>` was silently ignored** once a library existed.
+  The command now says so on stderr.
+- **`snp new --multiline --from-file <path>` accepted two command sources.**
+  Every other source pair is a hard usage error; this one is now too.
+- **`snp edit` created the library file before the mutation gate ran**, so a
+  refused edit still left a new file (and possibly `libraries/`) on disk.
+  The gate now runs first.
 
 ### Changed
 

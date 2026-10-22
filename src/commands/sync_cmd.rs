@@ -171,6 +171,9 @@ pub struct SyncOptions {
 ///
 /// Supports listing servers, push-only, pull-only, bidirectional, and dry-run modes.
 pub fn run(options: SyncOptions, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    // Migrate a legacy plaintext API key before the settings are used. This
+    // rewrites `sync.toml`, so it must run outside any lock-holding path.
+    crate::config::migrate_plaintext_api_key_to_keychain();
     let sync_settings = load_sync_settings().map_err(|e| {
         eprintln!("Failed to load sync settings: {e}");
         e

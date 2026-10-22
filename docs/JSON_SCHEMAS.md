@@ -100,6 +100,17 @@ sync state, local output/notes, and execution are out of scope.
 - `library` is the library filename stem; `library_id` is the **server-side**
   library ID and is an empty string for a library that is not sync-linked (and
   in legacy single-file mode).
+- When more than one snippet matches (for example `--resolution all`), the
+  output is a single JSON **array** of the objects above — not a stream of
+  concatenated objects:
+
+```json
+[
+  { "schema": 1, "id": "string", "description": "string", "command": "string",
+    "expanded": "string | null", "tags": ["string"], "library": "string",
+    "library_id": "string" }
+]
+```
 
 ---
 

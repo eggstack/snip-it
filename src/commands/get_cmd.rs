@@ -187,12 +187,50 @@ pub fn run(
             Ok(CliOutcome::Success)
         }
         SelectionResult::Many(matches) => {
-            for m in &matches {
-                output_match(m, field, raw, expanded, json, &assignments)?;
+            if json {
+                // One JSON document: an array of the per-snippet envelopes.
+                // Emitting the objects back-to-back produced a stream of
+                // concatenated objects that no JSON consumer can parse.
+                let outputs = matches
+                    .iter()
+                    .map(|m| match_json_output(m, &assignments))
+                    .collect::<SnipResult<Vec<_>>>()?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&outputs).map_err(|e| {
+                        SnipError::runtime_error("JSON serialization failed", Some(&e.to_string()))
+                    })?
+                );
+            } else {
+                for m in &matches {
+                    output_match(m, field, raw, expanded, json, &assignments)?;
+                }
             }
             Ok(CliOutcome::Success)
         }
     }
+}
+
+/// Builds the documented JSON envelope for one matched snippet.
+fn match_json_output(
+    m: &crate::selector::SnippetMatch,
+    assignments: &Option<VariableAssignments>,
+) -> SnipResult<GetJsonOutput> {
+    let expanded_cmd = if has_variables(&m.snippet.command) {
+        Some(expand_without_prompt(&m.snippet.command, assignments))
+    } else {
+        None
+    };
+    Ok(GetJsonOutput {
+        schema: 1,
+        id: m.snippet.id.clone(),
+        description: m.snippet.description.clone(),
+        command: m.snippet.command.clone(),
+        expanded: expanded_cmd,
+        tags: m.snippet.tags.clone(),
+        library: m.library_name.clone(),
+        library_id: m.library_id.clone(),
+    })
 }
 
 fn output_match(
@@ -204,21 +242,7 @@ fn output_match(
     assignments: &Option<VariableAssignments>,
 ) -> SnipResult<()> {
     if json {
-        let expanded_cmd = if has_variables(&m.snippet.command) {
-            Some(expand_without_prompt(&m.snippet.command, assignments))
-        } else {
-            None
-        };
-        let output = GetJsonOutput {
-            schema: 1,
-            id: m.snippet.id.clone(),
-            description: m.snippet.description.clone(),
-            command: m.snippet.command.clone(),
-            expanded: expanded_cmd,
-            tags: m.snippet.tags.clone(),
-            library: m.library_name.clone(),
-            library_id: m.library_id.clone(),
-        };
+        let output = match_json_output(m, assignments)?;
         println!(
             "{}",
             serde_json::to_string_pretty(&output).map_err(|e| SnipError::runtime_error(

@@ -426,6 +426,9 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
         Some(generation),
         None,
     );
+    // Migrate a legacy plaintext API key before the settings are used. This
+    // rewrites `sync.toml`, so it must run outside any lock-holding path.
+    crate::config::migrate_plaintext_api_key_to_keychain();
     let settings = get_sync_settings();
     let (push_only, pull_only) = match settings.sync_direction {
         crate::config::SyncDirection::Push => (true, false),
@@ -503,7 +506,12 @@ fn execute_sync(state_dir: &Path, policy: &AutoSyncPolicy, generation: u64) -> W
             Err(error) => record_sync_failure(
                 state_dir,
                 generation,
-                FailureClass::LocalFailure,
+                // Classify the clear failure like any other pending-marker
+                // error: a lock timeout or an I/O hiccup is transient
+                // contention, not local corruption. Classifying it as
+                // `LocalFailure` raised `attention_required`, which stops
+                // auto-sync permanently instead of retrying with backoff.
+                failure_class_for_pending_error(&error),
                 &format!("pending clear failed after successful sync: {error}"),
             ),
         },

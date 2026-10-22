@@ -543,21 +543,73 @@ pub fn load_sync_settings() -> SnipResult<SyncSettings> {
     let content = strip_integrity_line(&content);
     let fixed_content = fix_invalid_toml_escapes(&content);
 
-    let config: SyncConfigFile = toml::from_str(&fixed_content)
-        .map_err(|e| SnipError::toml_error("parse sync config", e))?;
+    let config: SyncConfigFile = match toml::from_str(&fixed_content) {
+        Ok(config) => config,
+        Err(e) => {
+            // A parse failure means the file cannot be understood at all (for
+            // example it was written by a different schema version). The CRC
+            // gate only catches bit corruption, so this path needs the same
+            // treatment: back the file up and say so on stderr. Without it the
+            // caller silently falls back to the defaults and the user sees
+            // "sync disabled" with no explanation and no file to inspect.
+            let backup_path = path.with_extension("toml.corrupt.bak");
+            if let Err(backup_err) = fs::copy(&path, &backup_path) {
+                tracing::error!("Failed to backup unparseable sync config: {backup_err}");
+                eprintln!(
+                    "warning: {} could not be parsed and may be corrupted; \
+                     sync settings were reset to defaults (backup also failed: {backup_err}). \
+                     Run 'snp sync config' to reconfigure.",
+                    path.display()
+                );
+            } else {
+                tracing::info!(
+                    "Backed up unparseable sync config to {}",
+                    backup_path.display()
+                );
+                eprintln!(
+                    "warning: {} could not be parsed and may be corrupted; \
+                     it was backed up to {} and sync settings were reset to defaults. \
+                     Run 'snp sync config' to reconfigure.",
+                    path.display(),
+                    backup_path.display()
+                );
+            }
+            return Err(SnipError::toml_error("parse sync config", e));
+        }
+    };
 
     let settings = config.settings.sync;
 
-    // Migrate existing plaintext API key to keychain on first load. Keep the
-    // plaintext key in this in-memory settings value so the caller can complete
-    // the current sync/register operation with the real credential.
+    // NOTE: loading the settings is a pure read. The plaintext→keychain
+    // migration is an explicit step (see
+    // `migrate_plaintext_api_key_to_keychain`) because it rewrites
+    // `sync.toml`, which takes the local-data lock. Performing it here made
+    // every read path mutate the config, and a caller that already held the
+    // lock (e.g. `snp restore`) deadlocked on the nested acquire.
+
+    Ok(settings)
+}
+
+/// Migrates a plaintext API key in `sync.toml` to the OS keychain.
+///
+/// This is a *mutating* operation: it rewrites `sync.toml`, which acquires the
+/// local-data lock. The lock protocol is not reentrant, so this must not be
+/// called from a read path, nor from a caller that already holds the lock —
+/// the nested acquire would spin until it times out.
+///
+/// Call it from the credential-consuming paths (sync, register, the auto-sync
+/// worker) before the settings are loaded. The plaintext key stays in the
+/// in-memory settings for the current operation, so the caller can still
+/// complete the sync/register with the real credential.
+pub fn migrate_plaintext_api_key_to_keychain() {
+    let Ok(settings) = load_sync_settings() else {
+        return;
+    };
     migrate_plaintext_api_key(
         &settings,
         |api_key| keychain_store(api_key, KEYCHAIN_DEFAULT_USER),
         save_sync_settings,
     );
-
-    Ok(settings)
 }
 
 pub fn get_sync_settings() -> SyncSettings {

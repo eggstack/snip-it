@@ -6,70 +6,7 @@ const MAX_PREMADE_COMMAND_LENGTH: usize = 1024;
 const MAX_PREMADE_DESCRIPTION_LENGTH: usize = 1024;
 use tonic::Status;
 
-/// Fixes invalid TOML escape sequences (`\<` and `\>`) in double-quoted strings.
-/// Converts affected strings to single-quoted (raw literal) form, preserving the
-/// backslash content. Only processes double-quoted strings; single-quoted strings
-/// and non-string content are left unchanged.
-fn fix_invalid_toml_escapes(toml_str: &str) -> String {
-    let mut result = String::with_capacity(toml_str.len());
-    let mut chars = toml_str.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '"' {
-            let mut string_content = String::new();
-            let mut needs_fix = false;
-
-            while let Some(&next) = chars.peek() {
-                chars.next();
-                if next == '"' {
-                    break;
-                }
-                if next == '\\' {
-                    if let Some(&after) = chars.peek() {
-                        chars.next();
-                        string_content.push('\\');
-                        string_content.push(after);
-                        if after == '<' || after == '>' {
-                            needs_fix = true;
-                        }
-                    } else {
-                        string_content.push('\\');
-                    }
-                } else {
-                    string_content.push(next);
-                }
-            }
-
-            if needs_fix && !string_content.contains('\'') {
-                result.push('\'');
-                result.push_str(&string_content);
-                result.push('\'');
-            } else if needs_fix {
-                result.push('"');
-                for ch in string_content.chars() {
-                    if ch == '\\' {
-                        result.push('\\');
-                        result.push('\\');
-                    } else if ch == '"' {
-                        result.push('\\');
-                        result.push('"');
-                    } else {
-                        result.push(ch);
-                    }
-                }
-                result.push('"');
-            } else {
-                result.push('"');
-                result.push_str(&string_content);
-                result.push('"');
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
+use crate::toml_escapes::fix_invalid_toml_escapes;
 
 #[derive(Debug, Clone)]
 pub struct PremadeLibrary {

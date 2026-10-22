@@ -180,7 +180,10 @@ fn parent_dir_sync_durable(
     #[cfg(not(unix))]
     {
         let _ = parent;
-        Err(std::io::Error::other(
+        // `Unsupported` tells the caller that the platform has no directory
+        // fsync — a durability limitation, not a failed write.
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
             "dir fsync unsupported on this platform",
         ))
     }
@@ -236,6 +239,19 @@ fn sync_parent_dir(
     ) {
         match parent_dir_sync_durable(parent) {
             Ok(()) => return Ok(Some(true)),
+            // The platform has no directory fsync (Windows). The file itself
+            // was fsynced and the rename already committed, so this is a
+            // durability limitation — not a failed write. Reporting it as an
+            // error made every durable write on Windows fail *after* the data
+            // was committed.
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+                tracing::warn!(
+                    path = %target.display(),
+                    "parent directory fsync unsupported on this platform; \
+                     atomic rename may not survive power loss"
+                );
+                return Ok(Some(false));
+            }
             Err(e) if allow_dir_fsync_failure() => {
                 tracing::warn!(
                     path = %target.display(),

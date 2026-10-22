@@ -278,6 +278,43 @@ pub fn save_library(path: &Path, snippets: &Snippets) -> SnipResult<()> {
     Ok(())
 }
 
+/// Atomically applies a mutation to a library file.
+///
+/// The library is loaded, mutated, and saved while the local-data lock is held
+/// for the **whole** cycle. A concurrent writer therefore cannot interleave
+/// its own read-modify-write cycle: whichever writer acquires the lock second
+/// re-reads the file after the first one committed, so neither side loses a
+/// snippet.
+///
+/// [`save_library`] only serialises the *write*; a load performed before it
+/// observes a stale base and the next writer silently discards the other
+/// writer's snippets. Use this function for every load-modify-save cycle.
+///
+/// Returns the saved collection.
+pub fn update_library<F>(path: &Path, mutate: F) -> SnipResult<Snippets>
+where
+    F: FnOnce(&mut Snippets) -> SnipResult<()>,
+{
+    // Check for interrupted transactions before any mutation (same gate as
+    // `save_library`).
+    let sync_state_dir = crate::config::derive_sync_state_dir();
+    let transaction_dir = crate::local_data::transaction_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+
+    // The local-data lock is not reentrant, so the save below must use the
+    // internal variant that expects the guard instead of `save_library`.
+    let local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
+
+    let mut snippets = load_library(path)?;
+    mutate(&mut snippets)?;
+    save_library_internal(path, &snippets, &local_lock)?;
+
+    Ok(snippets)
+}
+
 /// Borrowed, recency-sorted serialization view of [`Snippets`].
 ///
 /// Lets saves sort by `updated_at` without cloning snippet payloads.

@@ -51,6 +51,18 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
         get_library_path(None)?
             .unwrap_or_else(crate::library::LibraryManager::get_default_snippets_path)
     };
+    // The editor rewrites snippets.toml in place, so this is a local
+    // mutating operation: refuse when interrupted transactions await
+    // recovery (same invariant as every other writer). The gate runs before
+    // the file (and its parent directories) are created — creating them is
+    // itself a local mutation.
+    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let transaction_dir = crate::local_data::transaction_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+
     if !path.exists() {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -64,16 +76,6 @@ pub fn run(library: Option<String>, _config: Option<PathBuf>) -> SnipResult<()> 
     // editor exits. Mutation notification must reflect whether bytes
     // actually changed, independent of the editor's exit status.
     let before = fs::read(&path)?;
-
-    // The editor rewrites snippets.toml in place, so this is a local
-    // mutating operation: refuse when interrupted transactions await
-    // recovery (same invariant as every other writer).
-    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
-    let transaction_dir = crate::local_data::transaction_dir();
-    crate::transaction::gate_mutation_on_interrupted_transactions(
-        &sync_state_dir,
-        &transaction_dir,
-    )?;
 
     let status = Command::new(&editor.program)
         .args(&editor.args)
@@ -146,7 +148,6 @@ pub fn run_edit_output(
     new_output: Option<String>,
 ) -> SnipResult<()> {
     use crate::commands::get_library_path;
-    use crate::library::{load_library, save_library};
 
     let lib_path = match get_library_path(library.clone())? {
         Some(p) => p,
@@ -159,60 +160,66 @@ pub fn run_edit_output(
         }
     };
 
-    let mut snippets = load_library(&lib_path)?;
+    let mut desc = String::new();
+    let mut is_empty = false;
 
-    // Find the snippets matching the filter. Substring matching can easily
-    // hit several snippets, and this path mutates a local-only field —
-    // guessing would silently edit the wrong snippet's output.
-    let matching: Vec<usize> = snippets
-        .snippets
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| !s.deleted)
-        .filter(|(_, s)| {
-            crate::selector::contains_ignore_ascii_case(&s.description, &filter)
-                || crate::selector::contains_ignore_ascii_case(&s.command, &filter)
-        })
-        .map(|(i, _)| i)
-        .collect();
+    // The filter match and the mutation run inside the locked
+    // load-modify-save cycle, so the matched index always refers to the
+    // library content that is written back.
+    crate::library::update_library(&lib_path, |snippets| {
+        // Find the snippets matching the filter. Substring matching can easily
+        // hit several snippets, and this path mutates a local-only field —
+        // guessing would silently edit the wrong snippet's output.
+        let matching: Vec<usize> = snippets
+            .snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.deleted)
+            .filter(|(_, s)| {
+                crate::selector::contains_ignore_ascii_case(&s.description, &filter)
+                    || crate::selector::contains_ignore_ascii_case(&s.command, &filter)
+            })
+            .map(|(i, _)| i)
+            .collect();
 
-    let idx = match matching.as_slice() {
-        [only] => *only,
-        [] => {
-            return Err(crate::error::SnipError::runtime_error(
-                "No matching snippet",
-                Some(&format!("No snippet matching '{filter}' found in library")),
-            ));
-        }
-        many => {
-            let candidates = many
-                .iter()
-                .map(|&i| {
-                    let s = &snippets.snippets[i];
-                    format!("  - {} (id: {})", s.description, s.id)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(crate::error::SnipError::runtime_error(
-                "Ambiguous filter match",
-                Some(&format!(
-                    "Filter '{filter}' matches {} snippets:\n{candidates}\n\
-                     Refine the filter or use an exact selector \
-                     (--id / --description-exact / --command-exact).",
-                    many.len()
-                )),
-            ));
-        }
-    };
+        let idx = match matching.as_slice() {
+            [only] => *only,
+            [] => {
+                return Err(crate::error::SnipError::runtime_error(
+                    "No matching snippet",
+                    Some(&format!("No snippet matching '{filter}' found in library")),
+                ));
+            }
+            many => {
+                let candidates = many
+                    .iter()
+                    .map(|&i| {
+                        let s = &snippets.snippets[i];
+                        format!("  - {} (id: {})", s.description, s.id)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Err(crate::error::SnipError::runtime_error(
+                    "Ambiguous filter match",
+                    Some(&format!(
+                        "Filter '{filter}' matches {} snippets:\n{candidates}\n\
+                         Refine the filter or use an exact selector \
+                         (--id / --description-exact / --command-exact).",
+                        many.len()
+                    )),
+                ));
+            }
+        };
 
-    let snippet = &mut snippets.snippets[idx];
-    snippet.output = new_output.unwrap_or_default();
-    let now = chrono::Utc::now().timestamp();
-    snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
-    let desc = snippet.description.clone();
-    let is_empty = snippet.output.is_empty();
+        let snippet = &mut snippets.snippets[idx];
+        snippet.output = new_output.clone().unwrap_or_default();
+        let now = chrono::Utc::now().timestamp();
+        snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
+        desc = snippet.description.clone();
+        is_empty = snippet.output.is_empty();
 
-    save_library(&lib_path, &snippets)?;
+        Ok(())
+    })?;
 
     if is_empty {
         eprintln!("Cleared output for snippet: {desc}");
@@ -236,7 +243,6 @@ pub fn run_edit_output_by_id(
     new_output: Option<String>,
 ) -> SnipResult<()> {
     use crate::commands::get_library_path;
-    use crate::library::{load_library, save_library};
 
     let lib_path = match get_library_path(library.clone())? {
         Some(p) => p,
@@ -249,36 +255,41 @@ pub fn run_edit_output_by_id(
         }
     };
 
-    let mut snippets = load_library(&lib_path)?;
+    let mut desc = String::new();
+    let mut is_empty = false;
 
-    let matching_idx = snippets
-        .snippets
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| !s.deleted)
-        .find(|(_, s)| s.id == snippet_id)
-        .map(|(i, _)| i);
+    // The lookup and the mutation run inside the locked load-modify-save
+    // cycle, so the resolved snippet is the one that is written back.
+    crate::library::update_library(&lib_path, |snippets| {
+        let matching_idx = snippets
+            .snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.deleted)
+            .find(|(_, s)| s.id == snippet_id)
+            .map(|(i, _)| i);
 
-    let idx = match matching_idx {
-        Some(i) => i,
-        None => {
-            return Err(crate::error::SnipError::runtime_error(
-                "Snippet not found",
-                Some(&format!(
-                    "No snippet with ID '{snippet_id}' found in library"
-                )),
-            ));
-        }
-    };
+        let idx = match matching_idx {
+            Some(i) => i,
+            None => {
+                return Err(crate::error::SnipError::runtime_error(
+                    "Snippet not found",
+                    Some(&format!(
+                        "No snippet with ID '{snippet_id}' found in library"
+                    )),
+                ));
+            }
+        };
 
-    let snippet = &mut snippets.snippets[idx];
-    snippet.output = new_output.unwrap_or_default();
-    let now = chrono::Utc::now().timestamp();
-    snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
-    let desc = snippet.description.clone();
-    let is_empty = snippet.output.is_empty();
+        let snippet = &mut snippets.snippets[idx];
+        snippet.output = new_output.clone().unwrap_or_default();
+        let now = chrono::Utc::now().timestamp();
+        snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
+        desc = snippet.description.clone();
+        is_empty = snippet.output.is_empty();
 
-    save_library(&lib_path, &snippets)?;
+        Ok(())
+    })?;
 
     if is_empty {
         eprintln!("Cleared output for snippet: {desc}");

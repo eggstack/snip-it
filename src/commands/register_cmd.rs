@@ -12,6 +12,9 @@ pub struct RegisterArgs {
 
 /// Registers this device with a sync server and saves the API key to the OS keychain.
 pub fn run(server: String, force: bool, runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
+    // Migrate a legacy plaintext API key before the settings are used. This
+    // rewrites `sync.toml`, so it must run outside any lock-holding path.
+    crate::config::migrate_plaintext_api_key_to_keychain();
     if !force
         && let Ok(settings) = load_sync_settings()
         && !settings.device_id.is_empty()

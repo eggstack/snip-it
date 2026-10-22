@@ -892,13 +892,17 @@ fn create_repair_backup() -> SnipResult<PathBuf> {
     // Copy libraries.toml
     let config_file = config_dir.join("libraries.toml");
     if config_file.exists() {
-        let _ = fs::copy(&config_file, backup_dir.join("libraries.toml"));
+        let dest = backup_dir.join("libraries.toml");
+        fs::copy(&config_file, &dest)
+            .map_err(|e| SnipError::io_error("copy libraries.toml into repair backup", dest, e))?;
     }
 
     // Copy usage.toml
     let usage_file = config_dir.join("usage.toml");
     if usage_file.exists() {
-        let _ = fs::copy(&usage_file, backup_dir.join("usage.toml"));
+        let dest = backup_dir.join("usage.toml");
+        fs::copy(&usage_file, &dest)
+            .map_err(|e| SnipError::io_error("copy usage.toml into repair backup", dest, e))?;
     }
 
     Ok(backup_dir)

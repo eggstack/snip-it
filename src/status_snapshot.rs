@@ -255,7 +255,13 @@ pub fn attempt_state_view(status: &AutoSyncStatus) -> AttemptStateView {
     if status.attention_required {
         return AttemptStateView::AttentionRequired;
     }
-    if status.last_success_at_unix_ms >= status.last_attempt_at_unix_ms
+    // `last_result` is either `success` or `<class>_failure`, and it describes
+    // the *last* attempt. An earlier success must never be reported as the
+    // outcome of an attempt that failed: `last_success_at_unix_ms` only says
+    // that some attempt succeeded at some point.
+    let last_attempt_failed = status.last_result.ends_with("_failure");
+    if !last_attempt_failed
+        && status.last_success_at_unix_ms >= status.last_attempt_at_unix_ms
         && status.last_success_at_unix_ms > 0
     {
         return AttemptStateView::Succeeded;
@@ -267,11 +273,16 @@ pub fn attempt_state_view(status: &AutoSyncStatus) -> AttemptStateView {
         }
         return AttemptStateView::Deferred;
     }
-    if status.last_success_at_unix_ms > 0 {
-        return AttemptStateView::Succeeded;
-    }
     if status.consecutive_failures > 0 {
         return AttemptStateView::RetryScheduled;
+    }
+    if !last_attempt_failed && status.last_success_at_unix_ms > 0 {
+        return AttemptStateView::Succeeded;
+    }
+    if last_attempt_failed {
+        // The last attempt failed and nothing is scheduled to retry it, so
+        // the operator has to act. Never claim success for a failed attempt.
+        return AttemptStateView::AttentionRequired;
     }
     // Reached only by an inconsistent/partially written status file (an
     // attempt is recorded but neither success, failure count, nor retry
@@ -1102,6 +1113,23 @@ mod tests {
             ..AutoSyncStatus::default()
         };
         assert_eq!(attempt_state_view(&status), AttemptStateView::Deferred);
+    }
+
+    /// A failed attempt after an earlier success must not be reported as
+    /// `Succeeded`: the recorded success belongs to the earlier attempt.
+    #[test]
+    fn test_attempt_state_failed_after_success_is_not_succeeded() {
+        let status = AutoSyncStatus {
+            last_attempt_at_unix_ms: 2000,
+            last_success_at_unix_ms: 1000,
+            last_result: "remote_failure".to_string(),
+            last_failure_class: "remote".to_string(),
+            ..AutoSyncStatus::default()
+        };
+        assert_eq!(
+            attempt_state_view(&status),
+            AttemptStateView::AttentionRequired
+        );
     }
 
     /// A partially written status file (attempt recorded, but no success

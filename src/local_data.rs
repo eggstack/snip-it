@@ -125,10 +125,28 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
         start_token: identity.start_token.clone(),
     };
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // The lock is handed off serially, one writer at a time. A flat deadline
+    // fails the tail of a long but healthy queue: the tail waiter sleeps
+    // through one poll interval per hand-off and is then told the lock is
+    // "held". The deadline below therefore measures time *without progress* —
+    // it is extended every time the lock changes hands — and is capped so a
+    // genuinely stuck owner still fails.
+    const BASE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+    const MAX_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+    // Poll interval ceiling. One second quantises every hand-off to whole
+    // seconds, so a queue of N writers costs the tail waiter up to N
+    // seconds of pure sleeping.
+    const MAX_POLL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+
+    let wait_started = std::time::Instant::now();
+    let hard_deadline = wait_started + MAX_LOCK_WAIT;
+    let mut deadline = wait_started + BASE_LOCK_WAIT;
     let mut backoff = std::time::Duration::from_millis(10);
     let mut empty_retries = 0u32;
     let mut malformed_retries = 0u32;
+    // Identity of the owner observed on the previous poll. A change means the
+    // lock was handed off, i.e. the queue is making progress.
+    let mut last_seen_owner: Option<String> = None;
 
     // Pre-serialize the lock record so we can write it to the file
     // handle immediately, minimizing the empty-file window between
@@ -230,9 +248,9 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                             return Err(SnipError::runtime_error(
                                 "Local data lock held",
                                 Some(
-                                    "Timed out waiting for local data lock after 30 seconds; the \
-                                     lock record stayed empty, which usually means a writer was \
-                                     interrupted between creating and writing the lock file.",
+                                    "Timed out waiting for the local data lock; the lock record \
+                                     stayed empty for 30 seconds, which usually means a writer \
+                                     was interrupted between creating and writing the lock file.",
                                 ),
                             ));
                         }
@@ -279,14 +297,29 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
                             || observed.start_token.is_none()
                             || observed.start_token == existing.start_token
                         {
+                            // The owner is alive (or cannot be verified). Wait
+                            // for it to release the lock.
+                            let owner_key = format!("{}:{}", existing.pid, existing.nonce);
+                            if last_seen_owner.as_deref() != Some(owner_key.as_str()) {
+                                // The lock changed hands since the previous
+                                // poll: the queue is making progress, so the
+                                // tail waiter gets a fresh window instead of
+                                // timing out on a healthy lock.
+                                last_seen_owner = Some(owner_key);
+                                let extended = std::time::Instant::now() + BASE_LOCK_WAIT;
+                                deadline = extended.min(hard_deadline);
+                            }
                             if std::time::Instant::now() >= deadline {
                                 return Err(SnipError::runtime_error(
                                     "Local data lock held",
-                                    Some("Timed out waiting for local data lock after 30 seconds."),
+                                    Some(
+                                        "Timed out waiting for the local data lock; the lock did \
+                                         not change hands for 30 seconds.",
+                                    ),
                                 ));
                             }
                             std::thread::sleep(backoff);
-                            backoff = (backoff * 2).min(std::time::Duration::from_secs(1));
+                            backoff = (backoff * 2).min(MAX_POLL_BACKOFF);
                             continue;
                         }
                         // PID reuse detected — reclaim.

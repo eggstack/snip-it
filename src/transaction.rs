@@ -974,7 +974,7 @@ fn finalize_committed_local_transaction_locked(
 }
 
 /// Transaction lock record persisted inside the lock file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransactionLockInfo {
     /// Schema version for forward compatibility.
     pub schema_version: u32,
@@ -1172,7 +1172,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                             tracing::warn!(
                                 "Empty transaction lock record did not become valid; quarantining"
                             );
-                            quarantine_stale_lock(&lock_path)?;
+                            quarantine_stale_lock(&lock_path, None)?;
                             empty_retries = 0;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1192,7 +1192,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                             tracing::warn!(
                                 "Malformed transaction lock record did not become valid; quarantining"
                             );
-                            quarantine_stale_lock(&lock_path)?;
+                            quarantine_stale_lock(&lock_path, None)?;
                             malformed_retries = 0;
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1210,7 +1210,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                             operation = %existing.operation,
                             "Reclaiming stale transaction lock (owner process is dead)"
                         );
-                        quarantine_stale_lock(&lock_path)?;
+                        quarantine_stale_lock(&lock_path, Some(&existing))?;
                         continue;
                     }
                     Some(observed) => {
@@ -1242,7 +1242,7 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
                             recorded_token = ?existing.start_token,
                             "Transaction lock owner PID reused (start token mismatch), reclaiming"
                         );
-                        quarantine_stale_lock(&lock_path)?;
+                        quarantine_stale_lock(&lock_path, Some(&existing))?;
                         continue;
                     }
                 }
@@ -1260,12 +1260,53 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
 
 /// Quarantine a stale or malformed lock by renaming it.
 ///
+/// When `observed` is supplied, the record currently at `lock_path` must still
+/// match it before the rename happens. Reading the record and checking the
+/// owner's liveness are non-atomic, so without this check a writer that
+/// decided to reclaim could rename away a *live* lock that another writer had
+/// already reclaimed and re-acquired in the meantime — silently putting two
+/// processes inside the critical section. Passing `None` (malformed or empty
+/// record) skips verification because there is no owner identity to compare.
+///
 /// The quarantined file preserves the original content for debugging
 /// and repair inspection. Returns the quarantine path on success.
 ///
 /// If the lock file has already been quarantined by a concurrent writer
 /// (race on stale-lock reclaim), the `NotFound` error is treated as success.
-fn quarantine_stale_lock(lock_path: &Path) -> SnipResult<PathBuf> {
+fn quarantine_stale_lock(
+    lock_path: &Path,
+    observed: Option<&TransactionLockInfo>,
+) -> SnipResult<PathBuf> {
+    if let Some(expected) = observed {
+        match fs::read_to_string(lock_path) {
+            Ok(content) => match toml::from_str::<TransactionLockInfo>(&content) {
+                Ok(current) if &current == expected => {}
+                Ok(_) => {
+                    // A different record is in place: the stale observation is
+                    // obsolete and the current owner must not be disturbed.
+                    tracing::debug!(
+                        "transaction lock record changed since it was observed; not quarantining"
+                    );
+                    return Ok(lock_path.to_path_buf());
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "transaction lock record is no longer parseable; not quarantining"
+                    );
+                    return Ok(lock_path.to_path_buf());
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SnipError::io_error(
+                    "read transaction lock before quarantine",
+                    lock_path.to_path_buf(),
+                    e,
+                ));
+            }
+        }
+    }
+
     let quarantine_name = format!("transaction.lock.quarantine.{}", uuid::Uuid::new_v4());
     let quarantine_path = lock_path
         .parent()

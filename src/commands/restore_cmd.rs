@@ -731,7 +731,10 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
     }
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-    let backup_name = format!("pre-restore-{}", timestamp);
+    // The UUID suffix keeps two restores in the same second from resolving to
+    // the same directory: the second restore's snapshot would otherwise
+    // overwrite the first restore's pre-restore state.
+    let backup_name = format!("pre-restore-{}-{}", timestamp, uuid::Uuid::new_v4());
     let backup_base = config_dir.join("backups").join(&backup_name);
     fs::create_dir_all(&backup_base).map_err(|e| {
         SnipError::io_error("create pre-restore backup dir", backup_base.clone(), e)

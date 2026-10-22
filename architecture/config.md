@@ -332,9 +332,16 @@ pub fn get_sync_settings() -> SyncSettings // never fails; defaults on error // 
 4. The header is stripped and invalid TOML escapes are repaired
    (`:535-536`, `src/utils/toml_helpers.rs:348-352`).
 5. The TOML is parsed and the `settings.sync` table is extracted (`:538-541`).
-6. An existing plaintext API key is migrated into the keychain, keeping the
-   plaintext value in memory so the current operation still authenticates
-   (`:543-550`).
+   A **parse** failure is backed up to `sync.toml.corrupt.bak` and reported on
+   stderr, exactly like an integrity failure — otherwise a schema change
+   silently downgraded every caller to the defaults.
+6. Loading is a **pure read**: it does not migrate a plaintext API key. The
+   migration is an explicit step
+   (`migrate_plaintext_api_key_to_keychain`, `:563-580`) that the
+   credential-consuming paths call — sync, register, and the auto-sync
+   worker. It rewrites `sync.toml`, which takes the local-data lock; doing
+   it from the load path made every read path mutate the config and
+   deadlocked a caller that already held the lock (`snp restore`).
 
 Legacy files without an integrity header are accepted (`verify_integrity`
 returns `true` when no header is present, `src/config/toml_cache.rs:236-241`)
@@ -352,9 +359,12 @@ and gain one on the next save.
   serde error rather than substituting a bogus credential
   (`:263-268`, `:320-329`). `Debug` prints `[REDACTED]`; `Drop` zeroizes
   `api_key` (`:134-169`).
-- First load migrates an existing plaintext key into the keychain
-  (`migrate_plaintext_api_key`, `:353-391`), keeping the in-memory value so
-  the current operation still authenticates. Keep `keyring = "4"` default
+- The plaintext→keychain migration runs from the credential-consuming paths
+  (`migrate_plaintext_api_key_to_keychain`, `:563-580`, wrapping
+  `migrate_plaintext_api_key`, `:353-391`), keeping the in-memory value so
+  the current operation still authenticates. It is **not** part of
+  `load_sync_settings`: that would make a read path write the config file.
+  Keep `keyring = "4"` default
   features. keyring 4's `default` is `v1`, which hard-enables the three
   platform stores; `keyring::Entry` is gated on `v1`, so `default-features =
   false` is a compile error, not a silent downgrade. There is no mock store.

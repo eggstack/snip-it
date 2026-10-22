@@ -245,6 +245,16 @@ Two commands acquire no lock of their own and inherit the table's rows **transit
 
 `LocalDataLock` is the *snapshot-consistency* lock, not the *mutation* lock. Backup captures a set of files while they may be being rewritten; holding the local-data lock for the duration of the snapshot guarantees backup sees either the complete before-state or the complete after-state, never a mixed one (`backup_cmd.rs:74-78`, `persistence.rs:271-274`).
 
+Because it is the snapshot lock, taking it around the *write* alone does not
+serialise a read-modify-write cycle: two writers that read the same base and
+then write will still lose one side's changes. Every load-modify-save cycle
+must therefore hold the lock across all three steps. Use
+`library::update_library(path, |snippets| { … })` (and
+`commands::update_snippets` for the legacy single-file store): they run the
+gate, take the lock, load, apply the mutation, and save — all inside one
+critical section. `snp new`, `snp import --merge`, `snp edit --output`, the
+sync merge, and the TUI delete path all go through them.
+
 ---
 
 ## Transaction Boundary
@@ -946,7 +956,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 9. **Commit progress is persisted only after each verified atomic write**, never before.
 10. **Rollback restores files in reverse order** with hash verification after each action.
 11. **A malformed library or `libraries.toml` fails closed** (best-effort backup + error). A missing or empty file yields defaults. These are different cases and must stay different.
-12. **Backup captures a coherent snapshot** — it holds the local-data lock, and every mutation path takes the same lock.
+12. **Backup captures a coherent snapshot** — it holds the local-data lock, and every mutation path takes the same lock. The lock serializes the *write*; it does **not** serialize a whole read-modify-write cycle. A mutation that reads a library, changes it, and writes it back must hold the lock across all three steps (`library::update_library` does exactly that); taking the lock only for the write lets a concurrent writer's changes be overwritten.
 13. **Pre-repair and pre-restore backups are created automatically.** Do not remove them.
 14. **Quarantined lock files are retained for 7 days** and pruned opportunistically.
 
@@ -957,7 +967,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 - **A lock that cannot be parsed is not automatically stale.** An empty or partially written record may belong to a live owner. Both locks use a bounded retry ladder before quarantining; quarantining on the first malformed read renames away a live lock and admits a second writer.
 - **`PermissionDenied` is transient only on Windows.** On Unix it is stable, so the transaction lock's `is_transient_lock_contention` returns `false` there. Applying the Windows workaround unconditionally caused the CLI to hang with no error and no timeout — including `snp repair`, `snp restore`, and the mutation gate.
 - **A failed `write_all` must delete the 0-byte lock file it created.** Otherwise every later acquirer spins on a record that can never become valid.
-- **The local-data lock's reclaim is ownership-verified; the transaction lock's is not.** `quarantine_local_data_lock` re-reads and compares the record before renaming (`local_data.rs:322-354`); `quarantine_stale_lock` (`transaction.rs:1268`) renames without re-checking. Do not assume the two are symmetric.
+- **Both locks' reclaims are ownership-verified.** `quarantine_local_data_lock` (`local_data.rs`) and `quarantine_stale_lock` (`transaction.rs`) re-read the record and compare it with the observed one before renaming. Without that check, a writer that decided to reclaim can rename away a *live* lock that another writer already re-acquired, putting two processes inside the critical section. The two are symmetric here — keep them that way.
 - **`check_interrupted_transactions` is a scan helper, not the gate.** Calling the scan and proceeding anyway reproduces the corruption it exists to prevent.
 - **`save_library_internal` skips the gate and the lock.** It is valid only for callers that already hold both (restore). Do not call it from a new external path without that guarantee.
 - **Adding a cleanup/normalization pass after `toml::to_string_pretty` silently corrupts user data.** The serializer already picks correct quoting and escaping for tabs, trailing whitespace, and CRLF.

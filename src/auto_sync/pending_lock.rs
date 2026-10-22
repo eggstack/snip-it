@@ -20,27 +20,46 @@ pub const PENDING_TXN_LOCK_PURPOSE: &str = "auto-sync-pending";
 #[derive(Debug)]
 pub enum PendingTxnLockError {
     Io(std::io::Error),
-    Busy { timeout_ms: u64 },
+    /// The kernel lock was held by another process.
+    ///
+    /// `timeout_ms` is the deadline that was waited for — the upstream
+    /// `Busy`/`Timeout` variants do not carry it, so it has to be supplied by
+    /// the caller that asked for it. `owner` is the best-effort identity of
+    /// the current holder, when it could be read.
+    Busy {
+        timeout_ms: u64,
+        owner: Option<crate::process_file_lock::LockIdentity>,
+    },
 }
 
 impl std::fmt::Display for PendingTxnLockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "io error: {e}"),
-            Self::Busy { timeout_ms } => {
-                write!(f, "pending transaction lock busy after {timeout_ms}ms")
-            }
+            Self::Busy { timeout_ms, owner } => match owner {
+                Some(id) => write!(
+                    f,
+                    "pending transaction lock busy after {timeout_ms}ms \
+                     (pid={}, purpose={}, nonce={})",
+                    id.pid, id.purpose, id.nonce
+                ),
+                None => write!(f, "pending transaction lock busy after {timeout_ms}ms"),
+            },
         }
     }
 }
 
 impl std::error::Error for PendingTxnLockError {}
 
-impl From<ProcessFileLockError> for PendingTxnLockError {
-    fn from(err: ProcessFileLockError) -> Self {
+impl PendingTxnLockError {
+    /// Converts an upstream lock error, preserving the deadline that was
+    /// waited for and the current owner's identity.
+    fn from_lock_error(err: ProcessFileLockError, timeout: Duration) -> Self {
+        let timeout_ms = timeout.as_millis() as u64;
         match err {
-            ProcessFileLockError::Busy { .. } => Self::Busy { timeout_ms: 0 },
-            ProcessFileLockError::Timeout { .. } => Self::Busy { timeout_ms: 0 },
+            ProcessFileLockError::Busy { owner } | ProcessFileLockError::Timeout { owner } => {
+                Self::Busy { timeout_ms, owner }
+            }
             ProcessFileLockError::Io(e) => Self::Io(e),
             ProcessFileLockError::UnsupportedPlatform => Self::Io(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -93,7 +112,8 @@ pub fn acquire_pending_txn(
     timeout: Duration,
 ) -> Result<PendingTxnGuard, PendingTxnLockError> {
     let path = pending_txn_lock_path(state_dir);
-    let inner = process_file_lock::wait_acquire(&path, PENDING_TXN_LOCK_PURPOSE, timeout)?;
+    let inner = process_file_lock::wait_acquire(&path, PENDING_TXN_LOCK_PURPOSE, timeout)
+        .map_err(|e| PendingTxnLockError::from_lock_error(e, timeout))?;
     Ok(PendingTxnGuard { inner })
 }
 
@@ -182,14 +202,19 @@ mod tests {
 
     #[test]
     fn test_pending_txn_lock_error_display() {
-        let err = PendingTxnLockError::Busy { timeout_ms: 500 };
+        let err = PendingTxnLockError::Busy {
+            timeout_ms: 500,
+            owner: None,
+        };
         assert!(err.to_string().contains("500"));
     }
 
     #[test]
     fn test_pending_txn_lock_error_is_error() {
-        let err: Box<dyn std::error::Error> =
-            Box::new(PendingTxnLockError::Busy { timeout_ms: 100 });
+        let err: Box<dyn std::error::Error> = Box::new(PendingTxnLockError::Busy {
+            timeout_ms: 100,
+            owner: None,
+        });
         assert!(!err.to_string().is_empty());
     }
 

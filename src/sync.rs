@@ -1390,6 +1390,30 @@ pub fn encrypt_snippet(
     api_key: &str,
     snippet: &crate::proto::Snippet,
 ) -> SnipResult<crate::proto::Snippet> {
+    encrypt_snippet_impl(snippet, |json| {
+        encryption::encrypt(api_key, json).map_err(SnipError::from)
+    })
+}
+
+/// Encrypts a snippet with a caller-provided salt.
+///
+/// Sharing one salt across a batch means the Argon2id derivation is done once
+/// per batch instead of once per snippet; every payload still carries its own
+/// random nonce.
+fn encrypt_snippet_with_salt(
+    api_key: &str,
+    snippet: &crate::proto::Snippet,
+    salt: &[u8; encryption::SALT_SIZE],
+) -> SnipResult<crate::proto::Snippet> {
+    encrypt_snippet_impl(snippet, |json| {
+        encryption::encrypt_with_salt(api_key, json, salt).map_err(SnipError::from)
+    })
+}
+
+fn encrypt_snippet_impl(
+    snippet: &crate::proto::Snippet,
+    encrypt: impl Fn(&str) -> SnipResult<String>,
+) -> SnipResult<crate::proto::Snippet> {
     let data = EncryptedSnippetData {
         description: snippet.description.clone(),
         command: snippet.command.clone(),
@@ -1403,7 +1427,7 @@ pub fn encrypt_snippet(
         )
     })?;
 
-    let encrypted = encryption::encrypt(api_key, &json)?;
+    let encrypted = encrypt(&json)?;
 
     Ok(crate::proto::Snippet {
         id: snippet.id.clone(),
@@ -1430,7 +1454,15 @@ fn encrypt_snippets(
     snippets: &[crate::proto::Snippet],
     limits: Option<SyncRunLimits>,
 ) -> SnipResult<(Vec<crate::proto::Snippet>, Vec<String>)> {
-    encrypt_snippets_with(snippets, limits, |s| encrypt_snippet(api_key, s))
+    // One salt for the whole batch: the Argon2id derivation — the dominant
+    // cost of the encryption phase — is then performed once for the batch
+    // instead of once per snippet, because the derived-key cache is keyed on
+    // (api key, salt). Each payload still gets its own random nonce, so the
+    // ciphertexts stay independent under the shared key.
+    let salt = encryption::generate_salt();
+    encrypt_snippets_with(snippets, limits, |s| {
+        encrypt_snippet_with_salt(api_key, s, &salt)
+    })
 }
 
 /// Encrypt a batch of snippets using the provided encrypt function,

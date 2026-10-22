@@ -60,7 +60,7 @@ fn hash_api_key(api_key: &str) -> String {
 /// Session-local cache for derived keys to avoid re-running Argon2id
 /// for the same (api_key, salt) pair during a sync operation.
 /// Key: (hashed_api_key, base64(salt)), Value: derived key bytes
-static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
+static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String, u8), DerivedKey>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Lock the session key cache, recovering entries after a poison.
@@ -69,7 +69,7 @@ static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> =
 /// surviving entries are still valid derived keys, so recover them instead
 /// of silently disabling the cache (which would re-run Argon2id on every
 /// subsequent call).
-fn lock_key_cache() -> std::sync::MutexGuard<'static, HashMap<(String, String), DerivedKey>> {
+fn lock_key_cache() -> std::sync::MutexGuard<'static, HashMap<(String, String, u8), DerivedKey>> {
     match KEY_CACHE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -128,18 +128,39 @@ pub enum CryptoError {
 pub type CryptoResult<T> = Result<T, CryptoError>;
 
 const NONCE_SIZE: usize = 12;
-const SALT_SIZE: usize = 16;
+/// Size of the KDF salt, in bytes.
+pub const SALT_SIZE: usize = 16;
 
 #[cfg(test)]
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Encrypted data container with salt, nonce, and ciphertext.
+/// Magic prefix that identifies the versioned payload layout.
+///
+/// The prefix is 8 bytes long so that a legacy payload — whose first bytes
+/// are random salt — cannot be mistaken for a versioned one.
+const PAYLOAD_MAGIC: [u8; 8] = *b"SNIP-PAY";
+
+/// Version of the payload layout written by this build.
+const PAYLOAD_VERSION: u8 = 1;
+
+/// Version of the pre-magic (unversioned) payload layout.
+const PAYLOAD_VERSION_LEGACY: u8 = 0;
+
+/// Encrypted data container with version, salt, nonce, and ciphertext.
 ///
 /// The salt and nonce are stored alongside the ciphertext to enable
 /// decryption without separate key exchange.
+///
+/// The layout version identifies the key-derivation parameters the payload
+/// was produced with. Changing the Argon2id parameters in place would make
+/// every previously stored payload undecryptable, and the failure would be
+/// indistinguishable from "wrong API key" — so a parameter change has to
+/// introduce a new version instead.
 pub struct EncryptedPayload {
+    /// Payload layout version. `0` for the legacy unversioned layout.
+    pub version: u8,
     pub salt: Vec<u8>,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
@@ -147,7 +168,11 @@ pub struct EncryptedPayload {
 
 impl EncryptedPayload {
     pub fn to_base64(&self) -> String {
-        let mut combined = Vec::with_capacity(SALT_SIZE + NONCE_SIZE + self.ciphertext.len());
+        let mut combined = Vec::with_capacity(
+            PAYLOAD_MAGIC.len() + 1 + SALT_SIZE + NONCE_SIZE + self.ciphertext.len(),
+        );
+        combined.extend_from_slice(&PAYLOAD_MAGIC);
+        combined.push(self.version);
         combined.extend_from_slice(&self.salt);
         combined.extend_from_slice(&self.nonce);
         combined.extend_from_slice(&self.ciphertext);
@@ -159,6 +184,32 @@ impl EncryptedPayload {
             .decode(data)
             .map_err(|e| CryptoError::InvalidData(format!("Failed to decode base64: {e}")))?;
 
+        let header = PAYLOAD_MAGIC.len() + 1;
+        if combined.len() >= header && combined[..PAYLOAD_MAGIC.len()] == PAYLOAD_MAGIC {
+            let version = combined[PAYLOAD_MAGIC.len()];
+            if version != PAYLOAD_VERSION {
+                return Err(CryptoError::InvalidData(format!(
+                    "Unsupported payload version {version}"
+                )));
+            }
+            if combined.len() < header + SALT_SIZE + NONCE_SIZE {
+                return Err(CryptoError::InvalidData("Data too short".to_string()));
+            }
+
+            let salt = combined[header..header + SALT_SIZE].to_vec();
+            let nonce = combined[header + SALT_SIZE..header + SALT_SIZE + NONCE_SIZE].to_vec();
+            let ciphertext = combined[header + SALT_SIZE + NONCE_SIZE..].to_vec();
+
+            return Ok(Self {
+                version,
+                salt,
+                nonce,
+                ciphertext,
+            });
+        }
+
+        // Legacy layout: no magic, no version byte. The parameters are the
+        // ones this build still uses, so these payloads stay readable.
         if combined.len() < SALT_SIZE + NONCE_SIZE {
             return Err(CryptoError::InvalidData("Data too short".to_string()));
         }
@@ -168,6 +219,7 @@ impl EncryptedPayload {
         let ciphertext = combined[SALT_SIZE + NONCE_SIZE..].to_vec();
 
         Ok(Self {
+            version: PAYLOAD_VERSION_LEGACY,
             salt,
             nonce,
             ciphertext,
@@ -175,9 +227,29 @@ impl EncryptedPayload {
     }
 }
 
-fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
+/// Argon2id parameters for a payload version.
+///
+/// Version 0 (the legacy unversioned layout) and version 1 use the same
+/// parameters. A parameter change must introduce a new version: changing
+/// these in place would make every stored payload undecryptable.
+fn argon2_params_for_version(version: u8) -> Option<(u32, u32, u32)> {
+    match version {
+        PAYLOAD_VERSION_LEGACY | PAYLOAD_VERSION => {
+            Some((ARGON2_MEMORY_COST_KIB, ARGON2_TIME_COST, ARGON2_PARALLELISM))
+        }
+        _ => None,
+    }
+}
+
+fn derive_key(api_key: &str, salt: &[u8], version: u8) -> CryptoResult<DerivedKey> {
+    let (memory_cost, time_cost, parallelism) =
+        argon2_params_for_version(version).ok_or_else(|| {
+            CryptoError::KeyDerivationFailed(format!("Unsupported payload version {version}"))
+        })?;
     let salt_b64 = BASE64.encode(salt);
-    let cache_key = (hash_api_key(api_key), salt_b64);
+    // The version is part of the cache key: two versions can use the same
+    // salt with different KDF parameters.
+    let cache_key = (hash_api_key(api_key), salt_b64, version);
 
     // Check cache first
     {
@@ -190,13 +262,8 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
-        argon2::Params::new(
-            ARGON2_MEMORY_COST_KIB,
-            ARGON2_TIME_COST,
-            ARGON2_PARALLELISM,
-            Some(32),
-        )
-        .map_err(|e| CryptoError::KeyDerivationFailed(format!("Invalid Argon2 params: {e}")))?,
+        argon2::Params::new(memory_cost, time_cost, parallelism, Some(32))
+            .map_err(|e| CryptoError::KeyDerivationFailed(format!("Invalid Argon2 params: {e}")))?,
     );
 
     let mut key_bytes = [0u8; 32];
@@ -226,10 +293,32 @@ fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey> {
     Ok(derived)
 }
 
-pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
-    let salt = <[u8; SALT_SIZE]>::generate();
+/// Generates a fresh random salt for a batch of payloads.
+pub fn generate_salt() -> [u8; SALT_SIZE] {
+    <[u8; SALT_SIZE]>::generate()
+}
 
-    let mut key = derive_key(api_key, &salt)?;
+/// Encrypts a plaintext with a fresh random salt.
+pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
+    encrypt_with_salt(api_key, plaintext, &generate_salt())
+}
+
+/// Encrypts a plaintext with a caller-provided salt.
+///
+/// Callers that encrypt a batch share one salt so the derived-key cache hits
+/// for every payload after the first — the Argon2id derivation is the
+/// expensive part, and deriving it per snippet made a batch cost one full
+/// derivation per snippet. Every payload still carries its own random nonce,
+/// so the ciphertexts remain independent under the shared key.
+///
+/// The payload layout is unchanged, so payloads written by other versions (or
+/// by a single-snippet call) still decrypt.
+pub fn encrypt_with_salt(
+    api_key: &str,
+    plaintext: &str,
+    salt: &[u8; SALT_SIZE],
+) -> CryptoResult<String> {
+    let mut key = derive_key(api_key, salt, PAYLOAD_VERSION)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {e}")))?;
@@ -243,6 +332,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
     key.zeroize();
 
     let payload = EncryptedPayload {
+        version: PAYLOAD_VERSION,
         salt: salt.to_vec(),
         nonce: nonce.to_vec(),
         ciphertext,
@@ -254,7 +344,7 @@ pub fn encrypt(api_key: &str, plaintext: &str) -> CryptoResult<String> {
 pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let payload = EncryptedPayload::from_base64(encrypted_data)?;
 
-    let mut key = derive_key(api_key, &payload.salt)?;
+    let mut key = derive_key(api_key, &payload.salt, payload.version)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::DecryptionFailed(format!("Key init failed: {e}")))?;
@@ -395,6 +485,52 @@ mod tests {
         let tampered = payload.to_base64();
         let result = decrypt(api_key, &tampered);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_payload_carries_a_version_marker() {
+        let api_key = "test-key";
+        let encrypted = encrypt(api_key, "sensitive data").unwrap();
+        let payload = EncryptedPayload::from_base64(&encrypted).unwrap();
+        assert_eq!(payload.version, PAYLOAD_VERSION);
+        // The marker is part of the serialized payload, so a reader can tell
+        // which KDF parameters produced it.
+        let raw = BASE64.decode(&encrypted).unwrap();
+        assert_eq!(&raw[..PAYLOAD_MAGIC.len()], &PAYLOAD_MAGIC);
+        assert_eq!(raw[PAYLOAD_MAGIC.len()], PAYLOAD_VERSION);
+    }
+
+    #[test]
+    fn test_legacy_payload_without_marker_still_decrypts() {
+        let api_key = "test-key";
+        let plaintext = "sensitive data";
+        let encrypted = encrypt(api_key, plaintext).unwrap();
+        let payload = EncryptedPayload::from_base64(&encrypted).unwrap();
+
+        // Rebuild the legacy layout: salt | nonce | ciphertext, no marker.
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&payload.salt);
+        legacy.extend_from_slice(&payload.nonce);
+        legacy.extend_from_slice(&payload.ciphertext);
+        let legacy_b64 = BASE64.encode(&legacy);
+
+        let parsed = EncryptedPayload::from_base64(&legacy_b64).unwrap();
+        assert_eq!(parsed.version, PAYLOAD_VERSION_LEGACY);
+        assert_eq!(decrypt(api_key, &legacy_b64).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn test_unknown_payload_version_is_rejected() {
+        let api_key = "test-key";
+        let encrypted = encrypt(api_key, "sensitive data").unwrap();
+        let mut payload = EncryptedPayload::from_base64(&encrypted).unwrap();
+        payload.version = PAYLOAD_VERSION + 1;
+        let future = payload.to_base64();
+        let err = decrypt(api_key, &future).unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported payload version"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -197,31 +197,80 @@ pub fn init_library_manager() -> SnipResult<crate::library::LibraryManager> {
 
 /// Loads snippets from a TOML file, returning an empty collection if the file doesn't exist.
 pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Snippets> {
+    let path = get_config_path(config)?;
+    load_snippets_at(&path)
+}
+
+/// Loads snippets from an explicitly given TOML path without mutating
+/// anything.
+///
+/// The read-only counterpart of [`load_snippets`]: a missing file yields an
+/// empty collection instead of being created together with its parent
+/// directories, and a malformed file is reported without writing a `.bak`
+/// sibling next to it. Read-only commands must use this variant.
+pub fn load_snippets_readonly_at(path: &std::path::Path) -> SnipResult<crate::library::Snippets> {
     use std::fs;
 
-    let path = get_config_path(config)?;
+    match fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => {
+            return Err(SnipError::runtime_error(
+                "Config path is not a file",
+                Some(&format!(
+                    "'{}' exists but is not a regular file",
+                    path.display()
+                )),
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // A missing file is an empty collection — never create it.
+            return Ok(crate::library::Snippets::default());
+        }
+        Err(e) => {
+            return Err(SnipError::io_error(
+                "stat config path",
+                path.to_path_buf(),
+                e,
+            ));
+        }
+    }
 
-    if !path.exists() {
-        crate::logging::log_config_operation("load", &path, &Err("file not found"));
+    let content = fs::read_to_string(path)
+        .map_err(|e| SnipError::io_error("read snippets file", path.to_path_buf(), e))?;
+
+    if content.trim().is_empty() {
         return Ok(crate::library::Snippets::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| {
-        crate::logging::log_config_operation("load", &path, &Err(&e.to_string()));
-        SnipError::io_error("read snippets file", path.clone(), e)
+    let fixed_content = fix_invalid_toml_escapes(&content);
+    toml::from_str(&fixed_content).map_err(|e| SnipError::toml_error("parse snippets file", e))
+}
+
+/// Loads snippets from an already-resolved TOML path.
+fn load_snippets_at(path: &std::path::Path) -> SnipResult<crate::library::Snippets> {
+    use std::fs;
+
+    if !path.exists() {
+        crate::logging::log_config_operation("load", path, &Err("file not found"));
+        return Ok(crate::library::Snippets::default());
+    }
+
+    let content = fs::read_to_string(path).map_err(|e| {
+        crate::logging::log_config_operation("load", path, &Err(&e.to_string()));
+        SnipError::io_error("read snippets file", path.to_path_buf(), e)
     })?;
 
     if content.is_empty() || content.trim().is_empty() {
-        crate::logging::log_config_operation("load", &path, &Ok(()));
+        crate::logging::log_config_operation("load", path, &Ok(()));
         return Ok(crate::library::Snippets::default());
     }
 
     let fixed_content = fix_invalid_toml_escapes(&content);
 
     let snippets: crate::library::Snippets = toml::from_str(&fixed_content).map_err(|e| {
-        crate::logging::log_config_operation("parse", &path, &Err(&e.to_string()));
+        crate::logging::log_config_operation("parse", path, &Err(&e.to_string()));
         let backup_path = path.with_extension("toml.bak");
-        if let Err(backup_err) = std::fs::copy(&path, &backup_path) {
+        if let Err(backup_err) = std::fs::copy(path, &backup_path) {
             tracing::warn!(
                 error = %e,
                 backup_error = %backup_err,
@@ -236,7 +285,7 @@ pub fn load_snippets(config: &Option<PathBuf>) -> SnipResult<crate::library::Sni
         SnipError::toml_error("parse snippets file", e)
     })?;
 
-    crate::logging::log_config_operation("load", &path, &Ok(()));
+    crate::logging::log_config_operation("load", path, &Ok(()));
 
     Ok(snippets)
 }
@@ -259,7 +308,14 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
     // Acquire the local-data lock to serialize against backup snapshot capture.
     let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 
-    if let Err(e) = crate::library::backup_library(&path) {
+    save_snippets_at(&path, s)
+}
+
+/// Writes the already-resolved snippet file.
+///
+/// The caller must hold the local-data lock.
+fn save_snippets_at(path: &std::path::Path, s: &crate::library::Snippets) -> SnipResult<()> {
+    if let Err(e) = crate::library::backup_library(path) {
         tracing::warn!(error = %e, "Failed to create backup before save");
     }
 
@@ -270,12 +326,41 @@ pub fn save_snippets(s: &crate::library::Snippets, config: &Option<PathBuf>) -> 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("config");
-    crate::utils::atomic::write_private_atomic(&path, &toml_str, temp_prefix)?;
+    crate::utils::atomic::write_private_atomic(path, &toml_str, temp_prefix)?;
 
-    invalidate_toml_cache(&path);
+    invalidate_toml_cache(path);
 
-    crate::logging::log_config_operation("save", &path, &Ok(()));
+    crate::logging::log_config_operation("save", path, &Ok(()));
     Ok(())
+}
+
+/// Atomically applies a mutation to the legacy single-file snippet store.
+///
+/// The file is loaded, mutated, and saved while the local-data lock is held
+/// for the whole cycle, so a concurrent writer cannot lose either side's
+/// changes. This is the legacy-mode counterpart of
+/// [`crate::library::update_library`].
+pub fn update_snippets<F>(config: &Option<PathBuf>, mutate: F) -> SnipResult<()>
+where
+    F: FnOnce(&mut crate::library::Snippets) -> SnipResult<()>,
+{
+    let path = get_config_path(config)?;
+
+    // Check for interrupted transactions before any mutation.
+    let sync_state_dir = crate::auto_sync::notification::derive_state_dir();
+    let transaction_dir = crate::local_data::transaction_dir();
+    crate::transaction::gate_mutation_on_interrupted_transactions(
+        &sync_state_dir,
+        &transaction_dir,
+    )?;
+
+    // The local-data lock is not reentrant, so the save below must use the
+    // internal variant instead of `save_snippets`.
+    let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
+
+    let mut snippets = load_snippets_at(&path)?;
+    mutate(&mut snippets)?;
+    save_snippets_at(&path, &snippets)
 }
 
 /// Extracts snippet data arrays for TUI display.
@@ -530,8 +615,47 @@ where
                             Some("The selected snippet is no longer available"),
                         )
                     })?;
-                    let deleted_snippet = mark_snippet_deleted(&mut snippets, original_idx)?;
-                    crate::library::save_library(&lib_path, &snippets)?;
+                    let target_id = snippets
+                        .snippets
+                        .get(original_idx)
+                        .map(|s| s.id.clone())
+                        .ok_or_else(|| {
+                            SnipError::runtime_error(
+                                "Snippet not found",
+                                Some("The selected snippet is no longer available"),
+                            )
+                        })?;
+                    // Delete under the local-data lock: the library is re-read
+                    // inside the critical section, so a snippet created
+                    // elsewhere while the picker was open is not overwritten by
+                    // the in-memory copy of the library.
+                    let mut deleted_snippet: Option<crate::library::Snippet> = None;
+                    crate::library::update_library(&lib_path, |current| {
+                        let target = current
+                            .snippets
+                            .iter_mut()
+                            .find(|s| s.id == target_id && !s.deleted)
+                            .ok_or_else(|| {
+                                SnipError::runtime_error(
+                                    "Snippet not found",
+                                    Some("The selected snippet is no longer available"),
+                                )
+                            })?;
+                        target.deleted = true;
+                        let now = chrono::Utc::now().timestamp();
+                        target.updated_at = target.updated_at.max(now).saturating_add(1);
+                        deleted_snippet = Some(target.clone());
+                        Ok(())
+                    })?;
+                    let deleted_snippet = deleted_snippet.ok_or_else(|| {
+                        SnipError::runtime_error(
+                            "Snippet not found",
+                            Some("The selected snippet is no longer available"),
+                        )
+                    })?;
+                    // Mirror the tombstone into the in-memory copy the picker
+                    // renders from.
+                    mark_snippet_deleted(&mut snippets, original_idx)?;
                     if let Err(e) = crate::logging::audit_log("delete", &deleted_snippet, None) {
                         tracing::debug!("Audit log write failed: {}", e);
                     }

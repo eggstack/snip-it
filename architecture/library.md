@@ -334,7 +334,19 @@ pub fn ensure_library_mode(&mut self) -> SnipResult<()> {
 copies the legacy `~/.config/snp/snippets.toml` to
 `libraries/snippets.toml`, registers it as primary, bumps `generation`, and
 saves `libraries.toml`. The original legacy file is left behind as a second,
-now-inert copy. An empty or missing legacy file is a no-op.
+now-inert copy.
+
+**Ordering matters.** The existence of `libraries/` is what flips the install
+into library mode, and in library mode the legacy file is invisible to every
+read path. So the migration reads the legacy content **first** and returns
+without creating the directory when the file is empty (an empty legacy file
+carries no snippets — the install stays in single-file mode and the file
+remains the source of truth). When the content is non-empty, the directory is
+created, the library file is written, the library is registered, and the
+config is saved; if any of that fails, the directory is removed again so the
+legacy file is not orphaned. The registration is skipped when a `snippets`
+entry already exists — a second entry would make `libraries.toml` ambiguous
+and duplicate every snippet in `--library all`.
 
 Any command that resolves a library path through `ensure_library_mode` —
 directly or transitively — can therefore migrate a checkout as a side

@@ -153,7 +153,10 @@ pub fn schedule_existing_pending(
     caller: Caller,
 ) -> Result<ScheduleDecision, ScheduleError> {
     let decision = schedule_sync(state_dir, policy, caller)?;
-    spawn_worker_if_needed(state_dir, &decision, false, "schedule_existing_pending")?;
+    // The test-only spawn suppression applies here too: this path is
+    // reachable from `snp restore`, and an unsuppressed spawn forks a real
+    // detached worker even in a `test-support` build.
+    spawn_worker_if_needed(state_dir, &decision, true, "schedule_existing_pending")?;
     Ok(decision)
 }
 

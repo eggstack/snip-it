@@ -29,6 +29,7 @@ pub mod startup;
 pub mod test_helpers;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_observer;
+pub mod toml_escapes;
 
 pub use db::Database;
 pub use metrics::Metrics;

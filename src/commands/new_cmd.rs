@@ -1,4 +1,4 @@
-use crate::commands::{get_library_path, init_library_manager, load_snippets, save_snippets};
+use crate::commands::{get_library_path, init_library_manager};
 use crate::error::{SnipError, SnipResult};
 use crate::library::Snippet;
 use crossterm::style::{Color, Stylize, style};
@@ -36,7 +36,7 @@ pub struct NewArgs {
         short,
         long,
         action = clap::ArgAction::SetTrue,
-        conflicts_with_all = ["command_stdin", "editor"]
+        conflicts_with_all = ["command_stdin", "from_file", "editor"]
     )]
     pub multiline: bool,
     /// Read the command body byte-for-byte from stdin.
@@ -50,7 +50,7 @@ pub struct NewArgs {
     #[arg(
         long = "from-file",
         value_name = "PATH",
-        conflicts_with_all = ["command", "command_stdin", "editor"]
+        conflicts_with_all = ["command", "command_stdin", "multiline", "editor"]
     )]
     pub from_file: Option<PathBuf>,
     /// Open $VISUAL (or $EDITOR) to write the command body.
@@ -617,6 +617,7 @@ pub fn run(
         Some(value) => parse_tags(value),
     };
 
+    let config_supplied = config.is_some();
     let fallback_path = config.or_else(|| {
         let mgr = init_library_manager().ok()?;
         mgr.get_primary_library()
@@ -624,11 +625,12 @@ pub fn run(
     });
 
     let lib_path = get_library_path(library)?;
-    let mut snippets = if let Some(ref p) = lib_path {
-        crate::library::load_library(p)?
-    } else {
-        load_snippets(&fallback_path)?
-    };
+
+    if config_supplied && lib_path.is_some() {
+        // The snippet is written to the library, not to the file named by
+        // `--config`. Say so instead of silently storing it somewhere else.
+        eprintln!("warning: --config is ignored when a library is available");
+    }
 
     let mut new_snippet = Snippet::new(description, command, tags)?;
     // Stamp the device_id from sync settings so the server can identify the
@@ -638,12 +640,19 @@ pub fn run(
     if !sync_settings.device_id.is_empty() {
         new_snippet.device_id = sync_settings.device_id.clone();
     }
-    snippets.snippets.push(new_snippet);
 
+    // The load-modify-save cycle runs under the local-data lock so a
+    // concurrent writer cannot lose this snippet (or its own).
     if let Some(ref p) = lib_path {
-        crate::library::save_library(p, &snippets)?;
+        crate::library::update_library(p, |snippets| {
+            snippets.snippets.push(new_snippet);
+            Ok(())
+        })?;
     } else {
-        save_snippets(&snippets, &fallback_path)?;
+        crate::commands::update_snippets(&fallback_path, |snippets| {
+            snippets.snippets.push(new_snippet);
+            Ok(())
+        })?;
     }
 
     // Auto-sync trigger: notify after successful local commit (Workstream B1).

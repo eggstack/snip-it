@@ -43,7 +43,7 @@ The merge, conflict resolution, and library-orchestration logic live in
 | Key Derivation | Argon2id v0x13 | From API key + random 16-byte salt |
 | Nonce | Random 12 bytes | Per-encryption via `Nonce::generate()` (OsRng) |
 | Salt | Random 16 bytes | Per-encryption via `OsRng` |
-| Payload encoding | Base64 (STANDARD) | `salt‖nonce‖ciphertext` concatenated |
+| Payload encoding | Base64 (STANDARD) | `magic‖version‖salt‖nonce‖ciphertext` concatenated |
 
 ### Argon2id Parameters — `src/encryption.rs:37-39`
 
@@ -68,31 +68,42 @@ ARGON2_TIME_COST, ARGON2_PARALLELISM, Some(32))` with
 ```
 
 ```rust
-// src/encryption.rs:142-146
+// src/encryption.rs:142-150
 pub struct EncryptedPayload {
+    pub version: u8,         // payload layout version (0 = legacy, unversioned)
     pub salt: Vec<u8>,       // 16 bytes
     pub nonce: Vec<u8>,      // 12 bytes
     pub ciphertext: Vec<u8>, // AES-GCM output + auth tag
 }
 impl EncryptedPayload {
-    pub fn to_base64(&self) -> String;                        // src/encryption.rs:149
-    pub fn from_base64(data: &str) -> CryptoResult<Self>;     // src/encryption.rs:157
+    pub fn to_base64(&self) -> String;                        // src/encryption.rs:155
+    pub fn from_base64(data: &str) -> CryptoResult<Self>;     // src/encryption.rs:165
 }
 ```
 
-`from_base64` rejects payloads shorter than 28 bytes
-(`SALT_SIZE + NONCE_SIZE`, `src/encryption.rs:162-164`) with
-`InvalidData("Data too short")`, and non-base64 input with
-`InvalidData("Failed to decode base64: …")`.
+`to_base64` writes `magic(8) ‖ version(1) ‖ salt ‖ nonce ‖ ciphertext`. The
+8-byte magic (`SNIP-PAY`) is long enough that a legacy payload — whose first
+bytes are random salt — cannot be mistaken for a versioned one.
+
+`from_base64` accepts **both** layouts: a payload that starts with the magic
+is parsed as versioned (and an unknown version is rejected with
+`InvalidData("Unsupported payload version …")`), anything else is parsed as
+the legacy unversioned layout. It rejects payloads shorter than 28 bytes
+(`SALT_SIZE + NONCE_SIZE`) with `InvalidData("Data too short")`, and
+non-base64 input with `InvalidData("Failed to decode base64: …")`.
 
 ## Key Derivation — `src/encryption.rs:178-227`
 
 ```rust
-fn derive_key(api_key: &str, salt: &[u8]) -> CryptoResult<DerivedKey>
+fn derive_key(api_key: &str, salt: &[u8], version: u8) -> CryptoResult<DerivedKey>
 ```
 
-1. Build the cache key `(SHA-256(api_key) hex, base64(salt))`; return a clone
-   on a hit (`hash_api_key`, `src/encryption.rs:49-58`).
+1. Select the Argon2id parameters for the payload version
+   (`argon2_params_for_version`); an unknown version is an error.
+2. Build the cache key `(SHA-256(api_key) hex, base64(salt), version)`; return
+   a clone on a hit (`hash_api_key`, `src/encryption.rs:49-58`). The version is
+   part of the key because two versions may use the same salt with different
+   KDF parameters.
 2. Run Argon2id with the fixed parameters above into `[u8; 32]`.
 3. Insert into the session cache (10 000-entry cap, evict-half on overflow)
    and return a `DerivedKey`, zeroizing the stack buffer
@@ -105,12 +116,17 @@ full SHA-256 digest so one user's entry can never collide with another's.
 
 ### Versioning Constraint
 
-The payload format carries **no version byte and no KDF identifier**. The
-salt is stored in the clear but the parameters are not. Therefore **changing
-any Argon2 parameter silently breaks every existing encrypted payload**: the
-server keeps serving ciphertext that the client can no longer derive a key
-for. Version the format (add a parameter/KDF id to the payload) *before*
-retuning memory, time, or parallelism — never retune in place.
+The payload format carries a **version byte and, through it, a KDF
+identifier**: `magic ‖ version ‖ salt ‖ nonce ‖ ciphertext`. The salt is
+stored in the clear but the parameters are not, so the version selects them
+(`argon2_params_for_version`). Changing an Argon2 parameter therefore
+requires a **new version**, not a change to the existing one — the payloads
+written under the old version keep decrypting. Never retune the parameters of
+an existing version in place.
+
+The pre-magic layout (`salt ‖ nonce ‖ ciphertext`, version `0`) is still
+readable: `from_base64` detects the missing magic and parses it with the
+parameters of version 1, which are the parameters it was written with.
 
 The same applies to the AES-256-GCM construction and the 12-byte nonce size
 (`src/encryption.rs:130-131`): changing either invalidates stored data.
@@ -123,22 +139,29 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> // :
 pub type CryptoResult<T> = Result<T, CryptoError>;                       // :128
 ```
 
-**Encrypt** (`:229-252`): random salt → `derive_key` →
+**Encrypt** (`:294-317`): salt → `derive_key(salt, version)` →
 `Aes256Gcm::new_from_slice` → random nonce → `encrypt` → `key.zeroize()` →
-`salt‖nonce‖ciphertext` base64. Identical plaintexts produce different
-ciphertexts (fresh salt and nonce each time).
+`magic‖version‖salt‖nonce‖ciphertext` base64. Identical plaintexts produce
+different ciphertexts (fresh nonce each time; a fresh salt for a
+single-payload call).
 
-**Decrypt** (`:254-273`): base64 split → `derive_key(salt)` → nonce length
-check (`InvalidData("Invalid nonce length")`) → `decrypt` (GCM tag verified) →
-`drop(std::mem::take(&mut key))` → UTF-8 conversion. Any tampering of salt
-(wrong key), nonce, or ciphertext fails; truncated or non-base64 input fails
-as `InvalidData`.
+`encrypt_with_salt` takes the salt from the caller so that a **batch shares
+one salt**: the Argon2id derivation is then performed once for the batch
+instead of once per snippet (the derived-key cache hits for every payload
+after the first). Every payload still gets its own random nonce, so the
+ciphertexts stay independent under the shared key.
+
+**Decrypt** (`:319-338`): base64 split → `derive_key(salt, version)` → nonce
+length check (`InvalidData("Invalid nonce length")`) → `decrypt` (GCM tag
+verified) → `drop(std::mem::take(&mut key))` → UTF-8 conversion. Any
+tampering of salt (wrong key), nonce, or ciphertext fails; truncated or
+non-base64 input fails as `InvalidData`.
 
 ## What Sync Actually Encrypts
 
 | Path | Behaviour |
 |------|-----------|
-| Upload | `encrypt_snippets` (`src/sync.rs:1428-1434`) encrypts each local snippet via `encrypt_snippet`; records that fail encryption are collected into `failed_ids` (`src/sync.rs:1439-1460`) and surface as `skipped_count`. |
+| Upload | `encrypt_snippets` (`src/sync.rs:1452-1460`) encrypts each local snippet with **one shared batch salt** (`encrypt_snippet_with_salt`), so the Argon2id derivation happens once per batch; records that fail encryption are collected into `failed_ids` (`src/sync.rs:1463-1484`) and surface as `skipped_count`. |
 | Upload shape | `encrypt_snippet` (`src/sync.rs:1389-1419`) returns a `ProtoSnippet` with `description = ""`, `tags = []`, `command = <base64 ciphertext>`, and `encrypted = true`. |
 | Download | `decrypt_snippet` (`src/sync.rs:1463-1491`) returns the snippet unchanged when `encrypted == false` (plaintext records are passed through as-is), otherwise decrypts `command`, JSON-parses it back into `EncryptedSnippetData`, and restores `description`, `command`, and `tags`. |
 | Download failures | A decryption failure increments the page's decrypt-failure counter and the snippet's id is appended to the skipped-id list (`src/sync.rs:849-857`). |
@@ -151,13 +174,15 @@ cap are refused, and the refusal is reported to the client in `skipped_ids`.
 ## Key Cache
 
 ```rust
-static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>> // :63-64
+static KEY_CACHE: LazyLock<Mutex<HashMap<(String, String, u8), DerivedKey>>> // :63-64
 pub fn clear_key_cache()                                                // :95
 pub(crate) fn key_cache_guard() -> KeyCacheGuard                         // :90
 ```
 
 Session-local only: it avoids re-running Argon2id for the same
-`(api_key, salt)` pair within one sync. `KeyCacheGuard` is an RAII guard whose
+`(api_key, salt, version)` triple within one sync. Sharing one salt across a
+batch is what makes the cache effective: with a per-snippet salt every payload
+had its own cache entry and every snippet paid a full Argon2id derivation. `KeyCacheGuard` is an RAII guard whose
 `Drop` clears the whole cache (`src/encryption.rs:82-88`); it is taken at the
 top of `sync_encrypted_inner` (`src/sync.rs:504`) and of
 `run_sync_with_limits` (`src/sync_commands.rs:675`), so the cache never

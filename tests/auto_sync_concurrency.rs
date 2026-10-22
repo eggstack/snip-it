@@ -564,6 +564,20 @@ auto_sync_failure = "ignore"
         h.join().unwrap();
     }
 
+    // Every writer's snippet must survive. The writers run concurrently, so
+    // this is the assertion that catches a lost update: a load-then-save
+    // cycle that does not hold the local-data lock across both steps drops
+    // the other writers' snippets. Asserting only the exit codes cannot see
+    // that — the writers report success while their data is gone.
+    let lib_path = config_dir.join("libraries").join("concurrent.toml");
+    let content = fs::read_to_string(&lib_path).unwrap();
+    for i in 0..20 {
+        assert!(
+            content.contains(&format!("concurrent {i}")),
+            "snippet 'concurrent {i}' was lost by a concurrent writer"
+        );
+    }
+
     // If pending marker exists, it must pass integrity validation.
     if let Some(raw) = read_pending_raw(&config_dir) {
         assert!(raw.contains("schema = 2"), "marker must be schema v2");
