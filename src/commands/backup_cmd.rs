@@ -3,7 +3,7 @@
 //! `snp backup` command — create a secret-free backup snapshot.
 
 pub use super::backup_archive::{
-    BackupEntryKind, BackupFormat, BackupManifest, BackupManifestEntry, BackupRelativePath,
+    BackupEntryKind, BackupManifest, BackupManifestEntry, BackupRelativePath,
 };
 use super::backup_archive::{
     atomic_write_backup, read_for_snapshot, read_library_generation, redact_sync_config,
@@ -30,9 +30,6 @@ pub struct BackupArgs {
     /// Include sync.toml in backup (API key redacted)
     #[arg(long)]
     pub include_sync_state: bool,
-    /// Backup format
-    #[arg(long, value_enum, default_value = "directory")]
-    pub format: BackupFormat,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -43,10 +40,8 @@ pub fn run(
     output: Option<PathBuf>,
     include_usage: bool,
     include_sync_state: bool,
-    format: BackupFormat,
     json: bool,
 ) -> SnipResult<()> {
-    let _ = format;
     let config_dir = get_config_dir();
     if !config_dir.exists() {
         return Err(SnipError::runtime_error(

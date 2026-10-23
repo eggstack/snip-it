@@ -8,16 +8,22 @@
 //! `<name=|_opt1_||_opt2_||_opt3_||>`.
 
 /// Severity level for a variable diagnostic message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Retained: part of the documented variable-diagnostics API
+// (`architecture/utils/variables.md`); the diagnostic vocabulary is unified in
+// a later milestone, so the type stays until then.
 #[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {
     Warning,
     Error,
 }
 
 /// A diagnostic message produced during variable parsing.
-#[derive(Debug, Clone)]
+// Retained: part of the documented variable-diagnostics API
+// (`architecture/utils/variables.md`); the diagnostic vocabulary is unified in
+// a later milestone, so the type stays until then.
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct VariableDiagnostic {
     pub severity: DiagnosticSeverity,
     pub message: String,
@@ -329,6 +335,9 @@ pub fn parse_variables(command: &str) -> Vec<Variable> {
 /// - Malformed choice syntax (e.g., `<name=|_unclosed`)
 /// - Empty choices list
 /// - Duplicate variable names
+// Retained: documented variable-diagnostics entry point
+// (`architecture/utils/variables.md`); the diagnostic vocabulary is unified in
+// a later milestone, so the function stays until then.
 #[allow(dead_code)]
 pub fn parse_variables_diagnostics(command: &str) -> (Vec<Variable>, Vec<VariableDiagnostic>) {
     let tokens = extract_variable_tokens(command);
@@ -617,24 +626,32 @@ impl VariableAssignments {
     }
 
     /// Check if a variable has been assigned.
+    // Retained: exercised by the `VariableAssignments` unit tests; no
+    // production caller reads the assignment set as a whole.
     #[allow(dead_code)]
     pub fn contains(&self, name: &str) -> bool {
         self.0.contains_key(name)
     }
 
     /// Iterate over (name, value) pairs.
+    // Retained: exercised by the `VariableAssignments` unit tests; no
+    // production caller reads the assignment set as a whole.
     #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.0.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
     /// Number of assignments.
+    // Retained: exercised by the `VariableAssignments` unit tests; no
+    // production caller reads the assignment set as a whole.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Whether there are no assignments.
+    // Retained: exercised by the `VariableAssignments` unit tests; no
+    // production caller reads the assignment set as a whole.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()

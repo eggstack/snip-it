@@ -492,9 +492,29 @@ impl SyncClient {
         last_sync: i64,
         library_id: &str,
     ) -> SnipResult<crate::proto::SyncResponse> {
+        self.sync_encrypted_with_cursors(local_snippets, last_sync, 0, library_id)
+            .await
+    }
+
+    /// Sync with both cursors.
+    ///
+    /// `last_sync` is the timestamp cursor and `last_sync_sequence` is the
+    /// server's write-sequence cursor. Both are sent in every request: the
+    /// server picks the sequence filter when the sequence cursor is non-zero
+    /// and falls back to the timestamp filter otherwise, so a client that
+    /// holds no sequence cursor keeps working against a server that does not
+    /// serve one.
+    pub async fn sync_encrypted_with_cursors(
+        &mut self,
+        local_snippets: Vec<crate::proto::Snippet>,
+        last_sync: i64,
+        last_sync_sequence: i64,
+        library_id: &str,
+    ) -> SnipResult<crate::proto::SyncResponse> {
         self.sync_encrypted_inner(
             local_snippets,
             last_sync,
+            last_sync_sequence,
             library_id,
             DEFAULT_CLIENT_REQUEST_CEILING,
         )
@@ -514,7 +534,7 @@ impl SyncClient {
         library_id: &str,
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
-        self.sync_encrypted_inner(local_snippets, last_sync, library_id, byte_ceiling)
+        self.sync_encrypted_inner(local_snippets, last_sync, 0, library_id, byte_ceiling)
             .await
     }
 
@@ -526,6 +546,7 @@ impl SyncClient {
         &mut self,
         local_snippets: Vec<crate::proto::Snippet>,
         last_sync: i64,
+        last_sync_sequence: i64,
         library_id: &str,
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
@@ -554,6 +575,7 @@ impl SyncClient {
             encrypted_snippets,
             encrypt_failed_ids,
             last_sync,
+            last_sync_sequence,
             library_id,
             byte_ceiling,
         )
@@ -571,6 +593,7 @@ impl SyncClient {
         encrypted_snippets: Vec<crate::proto::Snippet>,
         encrypt_failed_ids: Vec<String>,
         last_sync: i64,
+        last_sync_sequence: i64,
         library_id: &str,
         byte_ceiling: usize,
     ) -> SnipResult<crate::proto::SyncResponse> {
@@ -583,6 +606,7 @@ impl SyncClient {
             encrypted_snippets,
             library_id,
             last_sync,
+            last_sync_sequence,
             self.settings.sync_limit_value(),
             byte_ceiling,
         )?;
@@ -601,6 +625,7 @@ impl SyncClient {
                     api_key: String::new(),
                     local_snippets: Vec::new(),
                     last_sync_timestamp: last_sync,
+                    last_sync_sequence,
                     library_id: library_id.to_string(),
                     limit: self.settings.sync_limit_value(),
                     offset: 0,
@@ -609,6 +634,7 @@ impl SyncClient {
                 let has_more = response.has_more;
                 let snippets_len = response.snippets.len();
                 let server_timestamp = response.server_timestamp;
+                let server_sequence = response.server_sequence;
                 let message = response.message.clone();
                 let total_count = response.total_count;
 
@@ -624,6 +650,7 @@ impl SyncClient {
                 return self
                     .paginate_remaining(
                         last_sync,
+                        last_sync_sequence,
                         library_id,
                         &api_key,
                         &mut offset,
@@ -631,6 +658,7 @@ impl SyncClient {
                         &mut server_decrypt_failed_count,
                         &mut all_skipped_ids,
                         server_timestamp,
+                        server_sequence,
                         message,
                         total_count,
                         has_more,
@@ -648,6 +676,7 @@ impl SyncClient {
                     api_key: String::new(),
                     local_snippets: batch.clone(),
                     last_sync_timestamp: last_sync,
+                    last_sync_sequence,
                     library_id: library_id.to_string(),
                     limit: self.settings.sync_limit_value(),
                     offset,
@@ -656,6 +685,7 @@ impl SyncClient {
                 let has_more = response.has_more;
                 let snippets_len = response.snippets.len();
                 let server_timestamp = response.server_timestamp;
+                let server_sequence = response.server_sequence;
                 let message = response.message.clone();
                 let total_count = response.total_count;
 
@@ -671,6 +701,7 @@ impl SyncClient {
                 return self
                     .paginate_remaining(
                         last_sync,
+                        last_sync_sequence,
                         library_id,
                         &api_key,
                         &mut offset,
@@ -678,6 +709,7 @@ impl SyncClient {
                         &mut server_decrypt_failed_count,
                         &mut all_skipped_ids,
                         server_timestamp,
+                        server_sequence,
                         message,
                         total_count,
                         has_more,
@@ -706,6 +738,7 @@ impl SyncClient {
                     api_key: String::new(),
                     local_snippets: Vec::new(),
                     last_sync_timestamp: last_sync,
+                    last_sync_sequence,
                     library_id: library_id.to_string(),
                     limit: self.settings.sync_limit_value(),
                     offset: 0,
@@ -714,6 +747,7 @@ impl SyncClient {
                 let has_more = response.has_more;
                 let snippets_len = response.snippets.len();
                 let server_timestamp = response.server_timestamp;
+                let server_sequence = response.server_sequence;
                 let message = response.message.clone();
                 let total_count = response.total_count;
 
@@ -729,6 +763,7 @@ impl SyncClient {
                 return self
                     .paginate_remaining(
                         last_sync,
+                        last_sync_sequence,
                         library_id,
                         &api_key,
                         &mut offset,
@@ -736,6 +771,7 @@ impl SyncClient {
                         &mut server_decrypt_failed_count,
                         &mut all_skipped_ids,
                         server_timestamp,
+                        server_sequence,
                         message,
                         total_count,
                         has_more,
@@ -756,6 +792,7 @@ impl SyncClient {
     async fn paginate_remaining(
         &mut self,
         last_sync: i64,
+        last_sync_sequence: i64,
         library_id: &str,
         api_key: &str,
         offset: &mut i32,
@@ -763,6 +800,7 @@ impl SyncClient {
         server_decrypt_failed_count: &mut usize,
         all_skipped_ids: &mut Vec<String>,
         mut server_timestamp: i64,
+        mut server_sequence: i64,
         mut message: String,
         mut total_count: i32,
         first_has_more: bool,
@@ -781,6 +819,7 @@ impl SyncClient {
                 *server_decrypt_failed_count,
                 push_rejected_count,
                 server_timestamp,
+                server_sequence,
                 message,
                 total_count,
             );
@@ -808,6 +847,7 @@ impl SyncClient {
                 api_key: String::new(),
                 local_snippets: Vec::new(),
                 last_sync_timestamp: last_sync,
+                last_sync_sequence,
                 library_id: library_id.to_string(),
                 limit: self.settings.sync_limit_value(),
                 offset: *offset,
@@ -817,6 +857,7 @@ impl SyncClient {
             let has_more = response.has_more;
             let snippets_len = response.snippets.len();
             server_timestamp = response.server_timestamp;
+            server_sequence = response.server_sequence;
             message = response.message.clone();
             total_count = response.total_count;
 
@@ -838,6 +879,7 @@ impl SyncClient {
                     *server_decrypt_failed_count,
                     push_rejected_count,
                     server_timestamp,
+                    server_sequence,
                     message,
                     total_count,
                 );
@@ -894,6 +936,7 @@ impl SyncClient {
         server_decrypt_failed_count: usize,
         push_rejected_count: usize,
         server_timestamp: i64,
+        server_sequence: i64,
         message: String,
         total_count: i32,
     ) -> SnipResult<crate::proto::SyncResponse> {
@@ -910,6 +953,7 @@ impl SyncClient {
             message,
             snippets: all_server_snippets,
             server_timestamp,
+            server_sequence,
             skipped_count: i32::try_from(total_skipped).unwrap_or(i32::MAX),
             skipped_ids: all_skipped_ids,
             has_more: false,
@@ -1612,12 +1656,14 @@ fn sync_request_encoded_len(
     batch: &[crate::proto::Snippet],
     library_id: &str,
     last_sync: i64,
+    last_sync_sequence: i64,
     sync_limit: i32,
 ) -> usize {
     let request = SyncRequest {
         api_key: String::new(),
         local_snippets: batch.to_vec(),
         last_sync_timestamp: last_sync,
+        last_sync_sequence,
         library_id: library_id.to_string(),
         limit: sync_limit,
         offset: 0,
@@ -1634,8 +1680,13 @@ fn varint_encoded_len(mut value: usize) -> usize {
     length
 }
 
-fn sync_request_base_encoded_len(library_id: &str, last_sync: i64, sync_limit: i32) -> usize {
-    sync_request_encoded_len(&[], library_id, last_sync, sync_limit)
+fn sync_request_base_encoded_len(
+    library_id: &str,
+    last_sync: i64,
+    last_sync_sequence: i64,
+    sync_limit: i32,
+) -> usize {
+    sync_request_encoded_len(&[], library_id, last_sync, last_sync_sequence, sync_limit)
 }
 
 fn snippet_field_encoded_len(snippet: &crate::proto::Snippet) -> usize {
@@ -1656,10 +1707,17 @@ fn snippet_field_encoded_len(snippet: &crate::proto::Snippet) -> usize {
 /// append one snippet, measure, keep or finalize. After an overflow split the
 /// new singleton is immediately re-validated so an oversized item following a
 /// small item is caught before any remote mutation.
+/// Build byte-bounded upload batches, measuring the envelope that carries
+/// the sequence cursor as well.
+///
+/// The sequence cursor is part of every `SyncRequest`, so it is part of the
+/// measured envelope: a non-zero cursor costs a few more bytes on the wire
+/// and the ceiling must account for it.
 pub(crate) fn build_upload_batches(
     mut encrypted_snippets: Vec<crate::proto::Snippet>,
     library_id: &str,
     last_sync: i64,
+    last_sync_sequence: i64,
     sync_limit: i32,
     byte_ceiling: usize,
 ) -> SnipResult<Vec<Vec<crate::proto::Snippet>>> {
@@ -1668,7 +1726,8 @@ pub(crate) fn build_upload_batches(
 
     let mut batches: Vec<Vec<crate::proto::Snippet>> = Vec::new();
     let mut current_batch: Vec<crate::proto::Snippet> = Vec::new();
-    let base_encoded_size = sync_request_base_encoded_len(library_id, last_sync, sync_limit);
+    let base_encoded_size =
+        sync_request_base_encoded_len(library_id, last_sync, last_sync_sequence, sync_limit);
     let mut current_encoded_size = base_encoded_size;
 
     for snippet in encrypted_snippets {
@@ -1788,6 +1847,7 @@ mod tests {
                 encrypted_snippets,
                 encrypt_failed_ids,
                 last_sync,
+                0,
                 library_id,
                 byte_ceiling,
             )
@@ -2215,9 +2275,15 @@ mod tests {
 
     #[test]
     fn test_build_upload_batches_empty_list() {
-        let batches =
-            build_upload_batches(Vec::new(), "lib", 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING)
-                .unwrap();
+        let batches = build_upload_batches(
+            Vec::new(),
+            "lib",
+            0,
+            0,
+            1000,
+            DEFAULT_CLIENT_REQUEST_CEILING,
+        )
+        .unwrap();
         assert!(batches.is_empty());
     }
 
@@ -2225,7 +2291,8 @@ mod tests {
     fn test_build_upload_batches_single_small_item() {
         let snippets = vec![make_encrypted_snippet("a", 100)];
         let batches =
-            build_upload_batches(snippets, "lib", 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING).unwrap();
+            build_upload_batches(snippets, "lib", 0, 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING)
+                .unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].len(), 1);
         assert_eq!(batches[0][0].id, "a");
@@ -2237,7 +2304,8 @@ mod tests {
             .map(|i| make_encrypted_snippet(&format!("s{i}"), 50))
             .collect();
         let batches =
-            build_upload_batches(snippets, "lib", 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING).unwrap();
+            build_upload_batches(snippets, "lib", 0, 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING)
+                .unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].len(), 5);
     }
@@ -2253,13 +2321,14 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![snippets[0].clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
         };
         let single_size = one_request.encoded_len();
         // Set ceiling to exactly fit one snippet.
-        let batches = build_upload_batches(snippets, "lib", 0, 1000, single_size).unwrap();
+        let batches = build_upload_batches(snippets, "lib", 0, 0, 1000, single_size).unwrap();
         assert_eq!(batches.len(), 3);
         for batch in &batches {
             assert_eq!(batch.len(), 1);
@@ -2275,13 +2344,14 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![snippets[0].clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
         };
         let single_size = one_request.encoded_len();
         // Ceiling allows one but not two.
-        let batches = build_upload_batches(snippets, "lib", 0, 1000, single_size + 1).unwrap();
+        let batches = build_upload_batches(snippets, "lib", 0, 0, 1000, single_size + 1).unwrap();
         // Two snippets fit in one batch (their combined size <= single_size + 1),
         // third goes to a new batch.
         assert!(batches.len() >= 2);
@@ -2295,6 +2365,7 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![snippets[0].clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
@@ -2302,7 +2373,7 @@ mod tests {
         let single_size = one_request.encoded_len();
         // Set ceiling to half the single item size so it's definitely too large.
         let ceiling = single_size / 2;
-        let result = build_upload_batches(snippets, "lib", 0, 1000, ceiling);
+        let result = build_upload_batches(snippets, "lib", 0, 0, 1000, ceiling);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(
@@ -2328,6 +2399,7 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![snippets[0].clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
@@ -2335,7 +2407,7 @@ mod tests {
         let small_size = one_request.encoded_len();
         // Ceiling fits the small item but not the oversized one.
         let ceiling = small_size + 10;
-        let result = build_upload_batches(snippets, "lib", 0, 1000, ceiling);
+        let result = build_upload_batches(snippets, "lib", 0, 0, 1000, ceiling);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(
@@ -2362,6 +2434,7 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![small.clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
@@ -2372,7 +2445,7 @@ mod tests {
         // overflow singleton that gets re-validated.
         let mut snippets = vec![small, huge, small2];
         snippets.sort_by(|a, b| a.id.cmp(&b.id));
-        let result = build_upload_batches(snippets, "lib", 0, 1000, ceiling);
+        let result = build_upload_batches(snippets, "lib", 0, 0, 1000, ceiling);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(
@@ -2393,12 +2466,14 @@ mod tests {
             snippets.clone(),
             "lib",
             0,
+            0,
             1000,
             DEFAULT_CLIENT_REQUEST_CEILING,
         )
         .unwrap();
         let batches2 =
-            build_upload_batches(snippets, "lib", 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING).unwrap();
+            build_upload_batches(snippets, "lib", 0, 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING)
+                .unwrap();
         let ids1: Vec<_> = batches1.iter().flatten().map(|s| &s.id).collect();
         let ids2: Vec<_> = batches2.iter().flatten().map(|s| &s.id).collect();
         assert_eq!(ids1, ids2);
@@ -2414,13 +2489,14 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![snippets[0].clone()],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
         };
         let single_size = one_request.encoded_len();
         // Ceiling fits one but not two.
-        let batches = build_upload_batches(snippets, "lib", 0, 1000, single_size + 1).unwrap();
+        let batches = build_upload_batches(snippets, "lib", 0, 0, 1000, single_size + 1).unwrap();
         // First batch has at most one snippet, second has the rest.
         assert!(batches.len() >= 2);
     }
@@ -2432,7 +2508,7 @@ mod tests {
             make_encrypted_snippet("b", 200),
             make_encrypted_snippet("c", 200),
         ];
-        let estimated = sync_request_base_encoded_len("lib", 0, 1000)
+        let estimated = sync_request_base_encoded_len("lib", 0, 0, 1000)
             + snippets
                 .iter()
                 .map(snippet_field_encoded_len)
@@ -2441,6 +2517,7 @@ mod tests {
             api_key: String::new(),
             local_snippets: snippets,
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: "lib".to_string(),
             limit: 1000,
             offset: 0,
@@ -2454,12 +2531,13 @@ mod tests {
             .map(|i| make_encrypted_snippet(&format!("s{i}"), 300))
             .collect();
         let ceiling = DEFAULT_CLIENT_REQUEST_CEILING.min(2000);
-        let batches = build_upload_batches(snippets, "lib", 0, 1000, ceiling).unwrap();
+        let batches = build_upload_batches(snippets, "lib", 0, 0, 1000, ceiling).unwrap();
         for (i, batch) in batches.iter().enumerate() {
             let request = SyncRequest {
                 api_key: String::new(),
                 local_snippets: batch.clone(),
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: "lib".to_string(),
                 limit: 1000,
                 offset: 0,
@@ -2482,13 +2560,14 @@ mod tests {
             .map(|i| make_encrypted_snippet(&format!("s{i}"), 200))
             .collect();
         let ceiling = DEFAULT_CLIENT_REQUEST_CEILING.min(2000);
-        let batches = build_upload_batches(snippets, "lib", 0, 1000, ceiling).unwrap();
+        let batches = build_upload_batches(snippets, "lib", 0, 0, 1000, ceiling).unwrap();
         assert!(batches.len() > 1, "need multiple batches for this test");
         for (i, batch) in batches.iter().enumerate() {
             let sync_req = SyncRequest {
                 api_key: String::new(),
                 local_snippets: batch.clone(),
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: "lib".to_string(),
                 limit: 1000,
                 offset: 0,
@@ -2528,6 +2607,7 @@ mod tests {
                 api_key: String::new(),
                 local_snippets: vec![snippets[0].clone()],
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: "lib".to_string(),
                 limit: 1000,
                 offset: 0,
@@ -2535,7 +2615,8 @@ mod tests {
             req.encoded_len()
         };
         let batches =
-            build_upload_batches(snippets, "lib", 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING).unwrap();
+            build_upload_batches(snippets, "lib", 0, 0, 1000, DEFAULT_CLIENT_REQUEST_CEILING)
+                .unwrap();
         assert!(
             batches.len() > 1,
             "400 large snippets should produce multiple batches, got {} (one snippet = {} bytes, ceiling = {} bytes)",
@@ -2549,6 +2630,7 @@ mod tests {
                 api_key: String::new(),
                 local_snippets: batch.clone(),
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: "lib".to_string(),
                 limit: 1000,
                 offset: 0,
@@ -2961,6 +3043,7 @@ mod tests {
             api_key: String::new(),
             local_snippets: vec![make_encrypted_snippet("shared-1", 128)],
             last_sync_timestamp: 42,
+            last_sync_sequence: 7,
             library_id: "library".to_string(),
             limit: 100,
             offset: 7,

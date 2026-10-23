@@ -8,7 +8,7 @@
 
 use crate::config::{SyncDirection, SyncSettings};
 use crate::error::{SnipError, SnipResult};
-use crate::library::{self, Snippet, Snippets};
+use crate::library::{self, SequenceCursor, Snippet, Snippets, SyncCursorKind};
 use crate::proto::Snippet as ProtoSnippet;
 use crate::sync;
 use crate::utils::atomic::{AtomicWriteOptions, Durability, atomic_replace};
@@ -325,9 +325,19 @@ fn handle_library_not_found(
                     // recovery marker here would leave no durable trace that
                     // records were dropped, so they would never be retried.
                     let has_failures = retry_response.skipped_count > 0;
+                    // The server library was re-created, so its sequence
+                    // space starts from scratch: the stored sequence cursor
+                    // points into a library that no longer exists and is
+                    // cleared rather than advanced. The recorded cursor kind
+                    // returns to unknown, so the next pulling sync bootstraps
+                    // against the new library.
                     if !has_failures
-                        && let Err(e) =
-                            mgr.update_last_sync(lib_name, retry_response.server_timestamp)
+                        && let Err(e) = mgr.update_sync_cursors(
+                            lib_name,
+                            retry_response.server_timestamp,
+                            SyncCursorKind::Unknown,
+                            SequenceCursor::Reset,
+                        )
                     {
                         status.failed += 1;
                         results.push((lib_name.to_string(), false, e.to_string()));
@@ -458,12 +468,23 @@ impl From<&Snippet> for ProtoSnippet {
     }
 }
 
-fn get_library_sync_info(mgr: &mut library::LibraryManager, lib_name: &str) -> (String, i64) {
+/// Read the library's server linkage and both sync cursors.
+///
+/// Returns the library id, the timestamp cursor, and the server-assigned
+/// write-sequence cursor. A library that has never synced on the sequence
+/// path has no sequence cursor and sends zero, which keeps the server on
+/// the timestamp filter.
+fn get_library_sync_info(
+    mgr: &mut library::LibraryManager,
+    lib_name: &str,
+) -> (String, i64, i64, SyncCursorKind) {
     match mgr.get_library_by_filename(lib_name) {
         Some(l) => {
             let id = l.library_id.clone();
             let server_id = l.server_id.clone();
             let last_sync = l.last_sync.unwrap_or(0);
+            let last_sync_sequence = l.last_sync_sequence.unwrap_or(0);
+            let sync_cursor_kind = l.sync_cursor_kind;
             if server_id.as_deref() != Some(id.as_str()) {
                 tracing::warn!(
                     "Library '{}' has library_id '{}' but server_id '{:?}' — possible stale config",
@@ -476,15 +497,127 @@ fn get_library_sync_info(mgr: &mut library::LibraryManager, lib_name: &str) -> (
                     {
                         tracing::error!(library = %lib_name, error = %e, "Failed to repair stale library linkage");
                     }
-                    return (server_id, last_sync);
+                    // The relink points the library at a different server-side
+                    // library, so the stored sequence cursor no longer applies
+                    // and the recorded cursor kind is reset. Report the state
+                    // that is now on disk, not the one that was replaced.
+                    return (server_id, last_sync, 0, SyncCursorKind::Unknown);
                 }
                 // Without an authoritative server ID, return an empty ID so
                 // the caller follows the normal create/re-link path.
-                return (String::new(), last_sync);
+                return (
+                    String::new(),
+                    last_sync,
+                    last_sync_sequence,
+                    sync_cursor_kind,
+                );
             }
-            (id, last_sync)
+            (id, last_sync, last_sync_sequence, sync_cursor_kind)
         }
-        None => (String::new(), 0),
+        None => (String::new(), 0, 0, SyncCursorKind::Unknown),
+    }
+}
+
+/// The client's stored cursor state for one library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClientCursor {
+    /// Which cursor the server is serving.
+    kind: SyncCursorKind,
+    /// The stored write-sequence cursor, if the client holds one.
+    sequence: Option<i64>,
+}
+
+/// The cursors one sync request carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RequestCursors {
+    /// `last_sync_timestamp`: zero means "no timestamp cursor".
+    timestamp: i64,
+    /// `last_sync_sequence`: zero means "no sequence cursor".
+    sequence: i64,
+}
+
+/// Choose the cursors for one sync request.
+///
+/// The three request shapes the server distinguishes are: a sequence delta
+/// (a non-zero sequence cursor), a timestamp delta (a non-zero timestamp
+/// cursor), and a full sync (neither). Only the full sync delivers the
+/// complete library, so it is the only shape whose watermark the client may
+/// adopt — which is why it is the bootstrap.
+///
+/// `pulls` is false for a push-only sync. Such a sync discards the rows the
+/// server returns, so it must not bootstrap (that would download the whole
+/// library for nothing) and it must not advance a sequence cursor.
+fn request_cursors(state: ClientCursor, timestamp: i64, pulls: bool) -> RequestCursors {
+    match state.kind {
+        SyncCursorKind::Unknown if pulls => RequestCursors {
+            timestamp: 0,
+            sequence: 0,
+        },
+        SyncCursorKind::Sequence => RequestCursors {
+            timestamp,
+            sequence: state.sequence.unwrap_or(0),
+        },
+        _ => RequestCursors {
+            timestamp,
+            sequence: 0,
+        },
+    }
+}
+
+/// Apply the server's answer to the client's cursor state.
+///
+/// `merged` is true when the client merged the rows the server returned. A
+/// push-only sync does not merge them, so it must neither adopt nor advance a
+/// sequence cursor: the watermark covers rows the client never received, and
+/// adopting it would skip them forever.
+///
+/// The two server answers a sequence-path client can see are now distinct:
+/// "the server sent no sequence" (zero) and "the sequence did not advance"
+/// (the same value it was given). The first drops the client back onto the
+/// timestamp path; the second leaves the stored cursor where it is.
+fn apply_server_sequence(
+    before: ClientCursor,
+    server_sequence: i64,
+    merged: bool,
+) -> (SyncCursorKind, SequenceCursor) {
+    if !merged {
+        // The client discarded the server's rows. The cursor stays where it
+        // was, so the next pulling sync re-requests the same range.
+        return (before.kind, SequenceCursor::Keep);
+    }
+    match before.kind {
+        // The request was the bootstrap full sync, so the client now holds
+        // the complete library and the watermark is adoptable.
+        SyncCursorKind::Unknown => {
+            if server_sequence != 0 {
+                (
+                    SyncCursorKind::Sequence,
+                    SequenceCursor::Advance(server_sequence),
+                )
+            } else {
+                // The server does not serve a sequence. Stay on the timestamp
+                // path and do not repeat the bootstrap.
+                (SyncCursorKind::Timestamp, SequenceCursor::Keep)
+            }
+        }
+        // A timestamp delta is answered with zero by rule, so the client
+        // stays on the timestamp path.
+        SyncCursorKind::Timestamp => (SyncCursorKind::Timestamp, SequenceCursor::Keep),
+        SyncCursorKind::Sequence => {
+            if server_sequence != 0 {
+                // The server answered on the sequence path. An unchanged
+                // value means the sequence did not advance, not that the
+                // server stopped serving one.
+                (
+                    SyncCursorKind::Sequence,
+                    SequenceCursor::Advance(server_sequence),
+                )
+            } else {
+                // The server stopped serving a sequence: fall back to the
+                // timestamp cursor and drop the stored one.
+                (SyncCursorKind::Timestamp, SequenceCursor::Reset)
+            }
+        }
     }
 }
 
@@ -786,7 +919,8 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
 
-        let (library_id, _last_sync) = get_library_sync_info(&mut mgr, lib_name);
+        let (library_id, _last_sync, _last_sync_sequence, _sync_cursor_kind) =
+            get_library_sync_info(&mut mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::info!(library = %lib_name, "Creating library on server");
@@ -889,7 +1023,8 @@ pub(crate) fn run_sync_with_limits(
             continue;
         }
 
-        let (library_id, last_sync) = get_library_sync_info(&mut mgr, lib_name);
+        let (library_id, last_sync, last_sync_sequence, sync_cursor_kind) =
+            get_library_sync_info(&mut mgr, lib_name);
 
         if library_id.is_empty() {
             tracing::warn!(library = %lib_name, "Library not linked to server, skipping");
@@ -921,13 +1056,31 @@ pub(crate) fn run_sync_with_limits(
                 continue;
             }
 
-            let result =
-                runtime.block_on(client.sync_encrypted(local_snippets, last_sync, &library_id));
+            // The cursors this request carries depend on which cursor the
+            // server is serving and on whether this sync pulls. A push-only
+            // sync discards the server's rows, so it must not bootstrap (that
+            // would download the whole library for nothing) and it must not
+            // advance a sequence cursor.
+            let client_cursor = ClientCursor {
+                kind: sync_cursor_kind,
+                sequence: (last_sync_sequence != 0).then_some(last_sync_sequence),
+            };
+            let pulls = direction != SyncDirection::Push;
+            let cursors = request_cursors(client_cursor, last_sync, pulls);
+
+            let result = runtime.block_on(client.sync_encrypted_with_cursors(
+                local_snippets,
+                cursors.timestamp,
+                cursors.sequence,
+                &library_id,
+            ));
 
             match result {
                 Ok(response) => {
                     if response.success {
                         let new_timestamp = response.server_timestamp;
+                        // Captured before `response` is partially moved.
+                        let server_sequence = response.server_sequence;
 
                         // Don't advance last_sync when encryption failures occurred,
                         // so failed snippets are retried on next sync.
@@ -939,9 +1092,18 @@ pub(crate) fn run_sync_with_limits(
                             // partial failure, not a merge conflict: counting
                             // them as conflicts reported an encryption or
                             // storage rejection as if two devices had raced.
+                            //
+                            // The sequence cursor is left untouched: this sync
+                            // discarded the server's rows, so the watermark
+                            // covers rows the client never received.
                             status.pushed += 1;
                             if !has_failures {
-                                if let Err(e) = mgr.update_last_sync(lib_name, new_timestamp) {
+                                if let Err(e) = mgr.update_sync_cursors(
+                                    lib_name,
+                                    new_timestamp,
+                                    sync_cursor_kind,
+                                    SequenceCursor::Keep,
+                                ) {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
                             } else {
@@ -962,8 +1124,18 @@ pub(crate) fn run_sync_with_limits(
 
                         match merge_and_save(&lib_path, lib_name, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
+                                // The client merged the server's rows, so it
+                                // holds everything the watermark covers and may
+                                // adopt it.
+                                let (new_kind, sequence_cursor) =
+                                    apply_server_sequence(client_cursor, server_sequence, true);
                                 if !has_failures
-                                    && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
+                                    && let Err(e) = mgr.update_sync_cursors(
+                                        lib_name,
+                                        new_timestamp,
+                                        new_kind,
+                                        sequence_cursor,
+                                    )
                                 {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
@@ -1037,19 +1209,41 @@ pub(crate) fn run_sync_with_limits(
         }
 
         if direction == SyncDirection::Pull && !library_id.is_empty() {
-            let result = runtime.block_on(client.sync_encrypted(vec![], last_sync, &library_id));
+            // A pull-only sync merges the server's rows, so it is the shape
+            // that may adopt the server's watermark.
+            let client_cursor = ClientCursor {
+                kind: sync_cursor_kind,
+                sequence: (last_sync_sequence != 0).then_some(last_sync_sequence),
+            };
+            let cursors = request_cursors(client_cursor, last_sync, true);
+
+            let result = runtime.block_on(client.sync_encrypted_with_cursors(
+                vec![],
+                cursors.timestamp,
+                cursors.sequence,
+                &library_id,
+            ));
 
             match result {
                 Ok(response) => {
                     if response.success {
                         let new_timestamp = response.server_timestamp;
+                        // Captured before `response` is partially moved.
+                        let server_sequence = response.server_sequence;
                         let server_snippets = response.snippets;
 
                         match merge_and_save(&lib_path, lib_name, &server_snippets) {
                             Ok((_merged, _backup, conflicts)) => {
                                 let has_failures = response.skipped_count > 0;
+                                let (new_kind, sequence_cursor) =
+                                    apply_server_sequence(client_cursor, server_sequence, true);
                                 if !has_failures
-                                    && let Err(e) = mgr.update_last_sync(lib_name, new_timestamp)
+                                    && let Err(e) = mgr.update_sync_cursors(
+                                        lib_name,
+                                        new_timestamp,
+                                        new_kind,
+                                        sequence_cursor,
+                                    )
                                 {
                                     tracing::warn!(library = %lib_name, error = %e, "Failed to update sync timestamp");
                                 }
@@ -1419,8 +1613,242 @@ pub fn run_default_sync(runtime: &tokio::runtime::Runtime) -> SnipResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::{Snippet, Snippets};
+    use crate::library::{LibraryConfig, LibraryMeta, Snippet, Snippets};
     use crate::proto::Snippet as ProtoSnippet;
+
+    /// A manager over a throwaway config directory.
+    fn test_manager() -> (tempfile::TempDir, library::LibraryManager) {
+        let temp = tempfile::tempdir().expect("test helper: temp dir");
+        let config_dir = temp.path().to_path_buf();
+        let manager = library::LibraryManager {
+            config_dir: config_dir.clone(),
+            libraries_dir: config_dir.join("libraries"),
+            premade_dir: config_dir.join("premade"),
+            config: LibraryConfig {
+                libraries: vec![LibraryMeta {
+                    filename: "work".to_string(),
+                    library_id: "lib-id".to_string(),
+                    is_primary: true,
+                    last_sync: None,
+                    last_sync_sequence: None,
+                    sync_cursor_kind: SyncCursorKind::Unknown,
+                    server_id: None,
+                }],
+                generation: 0,
+            },
+        };
+        (temp, manager)
+    }
+
+    /// A response that carries no sequence leaves the stored sequence cursor
+    /// untouched: the client keeps using the timestamp cursor, which is the
+    /// path taken against a server that does not serve the sequence.
+    #[test]
+    fn test_a_zero_valued_response_sequence_leaves_the_sequence_cursor_unchanged() {
+        let (_temp, mut mgr) = test_manager();
+
+        mgr.update_sync_cursors(
+            "work",
+            42,
+            SyncCursorKind::Sequence,
+            SequenceCursor::Advance(7),
+        )
+        .unwrap();
+        assert_eq!(mgr.last_sync_sequence("work"), Some(7));
+
+        // A sequence-path client that gets no sequence back has fallen off
+        // the sequence path: the stored cursor is dropped, not kept.
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Sequence,
+                sequence: Some(7),
+            },
+            0,
+            true,
+        );
+        assert_eq!(kind, SyncCursorKind::Timestamp);
+        assert_eq!(cursor, SequenceCursor::Reset);
+        mgr.update_sync_cursors("work", 43, kind, cursor).unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), None);
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Timestamp);
+        assert_eq!(
+            mgr.get_library_by_filename("work").unwrap().last_sync,
+            Some(43)
+        );
+    }
+
+    /// A response that carries a sequence advances the stored sequence cursor.
+    #[test]
+    fn test_a_non_zero_response_sequence_advances_the_sequence_cursor() {
+        let (_temp, mut mgr) = test_manager();
+
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Sequence,
+                sequence: Some(7),
+            },
+            9,
+            true,
+        );
+        assert_eq!(kind, SyncCursorKind::Sequence);
+        assert_eq!(cursor, SequenceCursor::Advance(9));
+        mgr.update_sync_cursors("work", 42, kind, cursor).unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), Some(9));
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Sequence);
+    }
+
+    /// The bootstrap: an unknown cursor kind plus a server that answers a
+    /// sequence moves the client onto the sequence path.
+    #[test]
+    fn test_the_bootstrap_adopts_the_server_sequence() {
+        let (_temp, mut mgr) = test_manager();
+
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Unknown);
+
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Unknown,
+                sequence: None,
+            },
+            5,
+            true,
+        );
+        assert_eq!(kind, SyncCursorKind::Sequence);
+        assert_eq!(cursor, SequenceCursor::Advance(5));
+        mgr.update_sync_cursors("work", 42, kind, cursor).unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), Some(5));
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Sequence);
+    }
+
+    /// A bootstrap against a server that does not serve a sequence leaves the
+    /// client on the timestamp path and does not repeat the bootstrap.
+    #[test]
+    fn test_the_bootstrap_against_a_timestamp_only_server_stays_on_the_timestamp_path() {
+        let (_temp, mut mgr) = test_manager();
+
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Unknown,
+                sequence: None,
+            },
+            0,
+            true,
+        );
+        assert_eq!(kind, SyncCursorKind::Timestamp);
+        assert_eq!(cursor, SequenceCursor::Keep);
+        mgr.update_sync_cursors("work", 42, kind, cursor).unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), None);
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Timestamp);
+    }
+
+    /// A push-only sync discards the server's rows, so it must not adopt or
+    /// advance a sequence cursor: the watermark covers rows the client never
+    /// received.
+    #[test]
+    fn test_a_push_only_sync_never_adopts_or_advances_the_sequence_cursor() {
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Unknown,
+                sequence: None,
+            },
+            5,
+            false,
+        );
+        assert_eq!(kind, SyncCursorKind::Unknown);
+        assert_eq!(cursor, SequenceCursor::Keep);
+
+        let (kind, cursor) = apply_server_sequence(
+            ClientCursor {
+                kind: SyncCursorKind::Sequence,
+                sequence: Some(7),
+            },
+            9,
+            false,
+        );
+        assert_eq!(kind, SyncCursorKind::Sequence);
+        assert_eq!(cursor, SequenceCursor::Keep);
+    }
+
+    /// The request shape follows the recorded cursor kind: an unknown kind
+    /// bootstraps with a full sync, the sequence kind sends the stored
+    /// cursor, and the timestamp kind sends the timestamp delta.
+    #[test]
+    fn test_the_request_shape_follows_the_recorded_cursor_kind() {
+        let unknown = ClientCursor {
+            kind: SyncCursorKind::Unknown,
+            sequence: None,
+        };
+        let bootstrap = request_cursors(unknown, 42, true);
+        assert_eq!(bootstrap.timestamp, 0);
+        assert_eq!(bootstrap.sequence, 0);
+
+        // A push-only sync must not bootstrap: it would download the whole
+        // library for rows the client discards.
+        let push_only = request_cursors(unknown, 42, false);
+        assert_eq!(push_only.timestamp, 42);
+        assert_eq!(push_only.sequence, 0);
+
+        let sequence = ClientCursor {
+            kind: SyncCursorKind::Sequence,
+            sequence: Some(7),
+        };
+        let delta = request_cursors(sequence, 42, true);
+        assert_eq!(delta.timestamp, 42);
+        assert_eq!(delta.sequence, 7);
+
+        let timestamp = ClientCursor {
+            kind: SyncCursorKind::Timestamp,
+            sequence: None,
+        };
+        let delta = request_cursors(timestamp, 42, true);
+        assert_eq!(delta.timestamp, 42);
+        assert_eq!(delta.sequence, 0);
+    }
+
+    /// A re-created server library starts its sequence space from scratch, so
+    /// the stored cursor is cleared instead of advanced.
+    #[test]
+    fn test_the_sequence_cursor_is_cleared_for_a_recreated_library() {
+        let (_temp, mut mgr) = test_manager();
+
+        mgr.update_sync_cursors(
+            "work",
+            42,
+            SyncCursorKind::Sequence,
+            SequenceCursor::Advance(7),
+        )
+        .unwrap();
+        mgr.update_sync_cursors("work", 43, SyncCursorKind::Unknown, SequenceCursor::Reset)
+            .unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), None);
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Unknown);
+    }
+
+    /// A relink points the library at a different server-side library, so the
+    /// stored sequence cursor no longer applies and the recorded cursor kind
+    /// returns to unknown.
+    #[test]
+    fn test_a_relink_clears_the_sequence_cursor_and_the_cursor_kind() {
+        let (_temp, mut mgr) = test_manager();
+
+        mgr.update_sync_cursors(
+            "work",
+            42,
+            SyncCursorKind::Sequence,
+            SequenceCursor::Advance(7),
+        )
+        .unwrap();
+        mgr.relink_server_library("work", "server-id-2", Some(0))
+            .unwrap();
+
+        assert_eq!(mgr.last_sync_sequence("work"), None);
+        assert_eq!(mgr.sync_cursor_kind("work"), SyncCursorKind::Unknown);
+    }
 
     fn make_local_snippet(id: &str, desc: &str, cmd: &str, updated_at: i64) -> Snippet {
         Snippet {

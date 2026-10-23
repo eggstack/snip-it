@@ -76,6 +76,34 @@ Note: `Snippet::new()` creates a snippet with an empty `id` field. The determini
 - **Server ID**: Optional `library_id` for sync linkage (`src/library/model.rs`, `LibraryMeta`)
 - **Server link**: Optional `server_id` for tracking server association (`src/library/model.rs`, `LibraryMeta`)
 - **Primary flag**: `is_primary` boolean — exactly one library is primary (`src/library/model.rs`, `LibraryMeta`)
+- **Sync cursors**: `last_sync` (timestamp cursor), `last_sync_sequence` (write-sequence cursor), and `sync_cursor_kind` (which cursor the server is serving) — `src/library/model.rs:86-102`
+
+### The sync cursor metadata
+
+`LibraryMeta.sync_cursor_kind` (`src/library/model.rs:96-102`,
+`src/library/model.rs:122-152`) records **which delta cursor the server is
+serving** for that library. It has three values, serialized lowercase:
+
+| Value | Meaning |
+|-------|---------|
+| `unknown` | The client has not probed the server. The next **pulling** sync is a bootstrap full sync. |
+| `timestamp` | The server does not serve a sequence. The client sends the timestamp delta and never sends a sequence cursor. |
+| `sequence` | The client holds a sequence cursor in `LibraryMeta.last_sync_sequence` and sends it on every request. |
+
+- **The field is additive.** It is `#[serde(default)]`, so a library file
+  written before the field existed loads as `unknown`: no file is rewritten
+  and no migration runs. `unknown` is also the state of a library that has
+  never been probed (`src/library/model.rs:101-102`, `:139-140`).
+- **The cursors are library metadata, not snippet data.** They are never part
+  of a snippet's synced fields and never enter the conflict fingerprint, which
+  hashes only `id`, `description`, `command`, `tags`, `created_at`,
+  `updated_at`, `device_id`, and `deleted` (`src/sync_commands.rs:1360-1383`).
+  Moving a library between the timestamp path and the sequence path therefore
+  cannot change a snippet's identity, its merge order, or its conflict
+  outcome.
+- **The deterministic snippet ID derivation is unaffected.** The ID is derived
+  from the snippet's own content by `normalize_snippet_ids()`
+  (`src/library/persistence.rs:38`); the cursor metadata is not an input to it.
 
 ### Lifecycle Rules
 
@@ -127,7 +155,40 @@ Note: `Snippet::new()` creates a snippet with an empty `id` field. The determini
   maximum (clock skew on one device, or a restore from an old backup) is
   still delivered to every client, because it is delivered at its
   `visible_at` position.
-- The remaining wart — the cursor is a timestamp, so the `>=` filter
-  re-delivers boundary rows and second granularity still matters — is
-  tracked as the proposed protocol-level follow-up in
-  `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+- **There is now a second, exact cursor.** `snippets.sequence` is a
+  server-assigned, strictly increasing **per-library write sequence**. A
+  request that carries a non-zero `last_sync_sequence` is filtered on
+  `sequence >= ?` instead of `visible_at >= ?`, and the server hands back
+  `MAX(sequence)` in `SyncResponse.server_sequence`. The counter lives in
+  the database (`library_sequences`), the bump shares the transaction with
+  the row write, and a unique index on `(library_id, sequence)` makes a
+  counter race a loud failure. The backfill preserves the pre-migration
+  `updated_at` ordering, so a migrated database selects the same rows as an
+  unmigrated one for the first sync.
+- **The bootstrap hands the client the exact cursor.** A request that carries
+  no cursor at all is the bootstrap full sync: it delivers the whole library,
+  and the server answers it with the library's sequence watermark
+  (`snip-sync/src/lib.rs:1689-1704`). A **timestamp-only delta** is answered
+  with zero, because a delta does not deliver the library's whole history, so
+  its watermark is not adoptable by that client. The client records which
+  cursor the server is serving in `LibraryMeta.sync_cursor_kind`; see
+  `architecture/sync.md` and `architecture/server.md`.
+- **The residual limitation of the timestamp path.** `visible_at` is a
+  *position in time, not a receipt*: the client's stored timestamp cursor is
+  the library's `MAX(visible_at)`, not a count of the rows the client holds. A
+  client that advanced its cursor over rows it never received — a push-only
+  sync discards the server's rows but still stores the response's
+  `server_timestamp` (`src/sync_commands.rs:1089-1108`) — can never receive
+  them again, because the filter `visible_at >= T` only looks forward. A row
+  written by a device whose clock lags carries the watermark as of its write
+  (`snip-sync/src/db.rs:813-828`), so a client whose cursor already sits above
+  that position is not served it again. The **sequence** path removes the gap:
+  the server assigns the sequence per write (`snip-sync/src/db.rs:294-314`),
+  so a lagging device's row still carries a value above every cursor the
+  client can hold.
+- **The remaining wart — the timestamp cursor is still a timestamp**, so the
+  `>=` filter re-delivers boundary rows and second granularity still
+  matters for clients that hold no sequence cursor — is tracked as the
+  protocol-level follow-up in `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+  The sequence cursor and its bootstrap handshake together complete that
+  ADR's Option A; see `architecture/proto.md` and `architecture/sync.md`.

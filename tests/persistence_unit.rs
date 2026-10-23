@@ -149,13 +149,6 @@ fn test_parent_dir_sync_behavior() {
         report.parent_sync_supported.is_some(),
         "DurableUserData should probe parent dir sync"
     );
-
-    let opts = AtomicWriteOptions::for_durability(Durability::EphemeralCoordination);
-    let report = atomic_replace(&path, b"ephemeral", &opts).unwrap();
-    assert_eq!(
-        report.parent_sync_supported, None,
-        "EphemeralCoordination should skip dir sync"
-    );
 }
 
 #[test]
@@ -183,16 +176,6 @@ fn test_sensitive_config_permissions() {
         mode, 0o600,
         "SensitiveConfig should produce 0o600 permissions"
     );
-}
-
-#[test]
-fn test_ephemeral_skips_dir_sync() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("lock");
-    let opts = AtomicWriteOptions::for_durability(Durability::EphemeralCoordination);
-    let report = atomic_replace(&path, b"", &opts).unwrap();
-    assert_eq!(report.parent_sync_supported, None);
-    assert_eq!(fs::read_to_string(&path).unwrap(), "");
 }
 
 #[test]

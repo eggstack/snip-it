@@ -295,7 +295,7 @@ remainder on whitespace. Starting from field 3, index 19 is field 22
 parser reads `START22` and *not* `FIELD21`.
 
 > **Duplicated parser.** The same field-22 parser exists independently at
-> `src/transaction.rs:98-102` for the owned-record lock family. The logic is
+> `src/record_lock.rs:111-116` for the owned-record lock family. The logic is
 > currently identical; a change to one must be mirrored in the other or the
 > two families will disagree about PID identity.
 
@@ -387,74 +387,104 @@ conflated.
 | Metadata purpose | diagnostic only |
 | Users | auto-sync execution / worker / pending locks; `snip-sync` server singleton |
 
-### Owned-record family — documented in [persistence.md](persistence.md)
+### Owned-record family — one implementation, two wait policies
 
 | Property | Value |
 |----------|-------|
 | Authority | `create_new(true)` plus an ownership record written into the file |
+| Implementation | `src/record_lock.rs` — the **single** owned-record lock protocol |
 | Lock files | `<state_dir>/transaction.lock`, `<state_dir>/local-data.lock` |
-| Record | `pid`, `nonce`, `start_token`, `created_at_unix_ms`, `schema_version` (plus `operation` in the transaction record, `src/transaction.rs:988`) |
-| On `Drop` | unlink, but only after ownership verification via `remove_owned_lock_file` (`src/transaction.rs:1014`, `src/local_data.rs:93`) |
-| Stale reclaim | rename to a quarantine file |
-| Users | transaction lock, local-data lock |
+| Record | `pid`, `nonce`, `start_token`, `created_at_unix_ms`, `schema_version` (plus `operation` in the transaction record, `src/transaction.rs:863`) |
+| On `Drop` | unlink, but only after ownership verification via `remove_owned_lock_file` (`src/record_lock.rs:420`) |
+| Stale reclaim | rename to a quarantine file, ownership-verified against the observed record (`src/record_lock.rs:692`) |
+| Users | transaction lock (`src/transaction.rs:962`), local-data lock (`src/local_data.rs:131`) |
 
 The two families coexist in one directory tree but never contend with each
 other: they lock different files.
 
-### Known asymmetry between the two owned-record locks
+#### The shared protocol
 
-The **local-data** lock's stale reclaim is **ownership-verified**:
-`quarantine_local_data_lock(lock_path, observed)`
-(`src/local_data.rs:322-354`) re-reads the record and compares it against the
-record the caller observed before renaming. Both reclaim call sites pass the
-observed record — dead owner (`src/local_data.rs:268`) and PID reuse via
-start-token mismatch (`src/local_data.rs:297`). If the record changed, the
-rename is skipped and the current owner is left alone.
+`src/record_lock.rs` owns the protocol body **once**
+(`acquire_owned_lock`, `src/record_lock.rs:455`):
 
-The **transaction** lock's `quarantine_stale_lock`
-(`src/transaction.rs:1268`) is **not** ownership-verified — it takes only a
-path and renames unconditionally. Its four call sites are
-`src/transaction.rs:1175` (empty record), `:1195` (malformed record), `:1213`
-(dead owner), and `:1245` (PID reuse). Because "read the record" and "check
-the owner is dead" are not atomic, a writer that decided to reclaim can rename
-away a *live* lock that another writer had already reclaimed and re-acquired
-in the meantime — putting two processes inside the critical section. The
-local-data lock closed exactly this hole; the transaction lock did not.
+1. create the lock file with `create_new(true)`;
+2. write the pre-serialized record to the open handle, then `sync_all` it — a
+   sync failure is a **warning**, not an error;
+3. if the write fails, **remove the file this call created** — a 0-byte
+   leftover would make every later acquirer spin through the empty ladder
+   (`write_record`, `src/record_lock.rs:650`);
+4. read and classify an existing record: empty → bounded retry ladder, then
+   quarantine; malformed or partially written → bounded retry ladder, then
+   quarantine; dead owner → reclaim; live owner → the caller's wait policy;
+5. observe the owner with `ProcessIdentity::observe` and apply the
+   conservative ownership rule;
+6. release on `Drop` through an ownership-verified removal
+   (`src/record_lock.rs:420`).
+
+The **record payload** is supplied by the caller, so the shared module never
+grows a field only one caller needs: the transaction record carries
+`operation`, the local-data record does not. The on-disk format is unchanged —
+a lock written by a pre-unification build still parses, and re-serializes
+byte-identically (cross-version parse tests in `src/transaction.rs` and
+`src/local_data.rs`).
+
+`is_transient_lock_contention` is defined **once**
+(`src/record_lock.rs:770`): on Windows a just-deleted file can briefly
+surface `PermissionDenied` while in a pending-delete state, so it retries
+like `AlreadyExists`; on Unix a `PermissionDenied` is a stable
+misconfiguration and must fail fast instead of spinning.
+
+#### The wait policy is a parameter
+
+`OwnedLockWaitPolicy` (`src/record_lock.rs:234`) is a **required** parameter
+of the acquisition: a caller cannot inherit the other caller's contract by
+omission. It encodes the three places where the two locks historically
+differed — all of them about *when the wait ends*:
+
+| Arm | `FailFast` (transaction) | `WaitForProgress` (local-data) |
+|-----|--------------------------|--------------------------------|
+| Live owner | returns the caller's held-lock error immediately — "Transaction lock held: Another transaction (&lt;op&gt;) is in progress (PID &lt;pid&gt;). Wait for it to complete." | extends the deadline every time the lock changes hands, sleeps with a bounded backoff, then returns the caller's timeout error — "Local data lock held: Timed out waiting for the local data lock; the lock did not change hands for 30 seconds." |
+| Unreadable record | bounded by the flat 30 s deadline → "Transaction lock acquisition timed out" | no deadline |
+| Empty record | no deadline — the retry ladder plus the quarantine step resolve it | bounded by the progress-extended deadline → "Local data lock held: Timed out waiting for the local data lock; the lock record stayed empty for 30 seconds, …" |
+| Window | flat 30 s (`LOCK_ACQUIRE_TIMEOUT`) | 30 s base window, 300 s hard cap, 250 ms poll ceiling |
+
+#### Ownership rule (both locks)
+
+A lock is reclaimed **only** when the recorded start token and the observed
+start token are both present and differ (the PID-reuse case). An
+unverifiable owner — no recorded token, no observed token, or matching tokens
+— is a **live** owner and is never reclaimed.
+
+The reclaim path is **ownership-verified for both locks**: the record at the
+lock path is re-read and compared with the observed record before the
+quarantine rename, so a reclaimer that judged an owner dead cannot rename
+away a lock that another writer reclaimed and re-acquired in the interim.
+
+> **Correction.** Earlier revisions of this document claimed the transaction
+> lock's quarantine was *not* ownership-verified while the local-data lock's
+> was. That was wrong: the transaction lock verified ownership too. The two
+> owned-record locks had **identical** reclaim semantics and differed only in
+> their wait policy.
 
 > **Scope note.** This document covers the kernel-backed family. The
-> transaction/local-data locks, their bounded retry ladders, and their
-> quarantine semantics are owned by [persistence.md](persistence.md). The
-> asymmetry above is reported here because it is a difference between the two
-> owned-record locks, and it is not currently described in any architecture
-> document.
+> transaction/local-data lock *records*, their bounded retry ladders, and the
+> mutation gate are owned by [persistence.md](persistence.md); the protocol
+> that both locks share is owned by `src/record_lock.rs`.
 
 ### Related owned-record lock behavior (for contrast)
 
-- The transaction lock's retry ladder is **platform-gated**:
-  `is_transient_lock_contention` is **Windows-only**
-  (`src/transaction.rs:1038-1047`). On Unix a `PermissionDenied` on read is
-  a stable misconfiguration, so retrying it would spin forever without an
-  error or a timeout.
-- It also carries a **30 s deadline** as defense in depth
-  (`src/transaction.rs:1027`, checked at `:1131-1140`), and a failed
-  `write_all` no longer leaves a 0-byte lock file behind
-  (`src/transaction.rs:1097-1104`).
-- That deadline is what keeps the user-visible commands from hanging: the
-  transaction lock is taken by the recovery path
-  (`src/transaction.rs:782`), by `snp repair`'s finalize step
-  (`src/transaction.rs:886`), by `snp restore`
-  (`src/commands/restore_cmd.rs:1147`), and — indirectly — by the mutation
-  gate (`src/transaction.rs:2510`), which may acquire it through
-  `recover_transaction_by_id`.
-- The local-data lock's empty arm uses the same ladder, with backoff
-  (`src/local_data.rs:288-289`), a 30 s deadline (`src/local_data.rs:128`), and
-  quarantine (`src/local_data.rs:356-370`); a failed `write_all` deletes the
-  file it created (`src/local_data.rs:152-163`).
+- The transaction lock is taken by the recovery path
+  (`src/transaction.rs:664`), by `snp repair`'s finalize step
+  (`src/transaction.rs:771`), by `snp restore`
+  (`src/commands/restore_cmd.rs:1224`), and — indirectly — by the mutation
+  gate, which may acquire it through `recover_transaction_by_id`.
 - The lock hierarchy is `LocalDataLock → TransactionLock → writes`
-  (`src/commands/restore_cmd.rs:1133`).
+  (`src/commands/restore_cmd.rs:1223-1224`).
 - `save_library` derives both its mutation-gate path and its local-data-lock
   path from the **config directory**, not from the target library path
-  (`src/library/persistence.rs:264-265`).
+  (`src/library/persistence.rs:274`).
+- A failed record write never leaves a 0-byte lock file behind
+  (`src/record_lock.rs:650`).
 
 ---
 
@@ -466,6 +496,7 @@ local-data lock closed exactly this hole; the transaction lock did not.
 | `src/auto_sync/execution_lock.rs` | Execution-lock and worker-lock wrappers over the primitive, plus their error types |
 | `src/auto_sync/pending_lock.rs` | Pending-marker lock wrapper (`PendingTxnGuard`) |
 | `src/utils/process.rs` | `is_process_alive` and `remove_owned_lock_file` — shared liveness and ownership semantics |
+| `src/record_lock.rs` | The owned-record lock protocol: `acquire_owned_lock`, `OwnedLockWaitPolicy`, `OwnedLockGuard`, `quarantine_owned_lock` |
 | `src/auto_sync/worker.rs` | Detached worker entry point that takes the execution lock |
 | `src/auto_sync/status.rs` | Status/deferral paths that take the execution lock |
 | `src/commands/sync_cmd.rs` | Manual sync paths that wait on the execution lock |

@@ -60,9 +60,13 @@ Closure records and archive
 | Distribution and release | `subsystems/distribution-release-roadmap.md` | M001-M005 (matrix, installers, platform, publication, corrective) | closed |
 | Server lifecycle and HTTP runtime | `subsystems/server-lifecycle-http-roadmap.md` | M001-M004 (lifecycle, Axum trial, leaf, parity) | closed |
 | Updater transport | `subsystems/updater-transport-roadmap.md` | M001-M005 (self-update, consolidation, timeout, 0.1.7, 0.2.0) | closed |
-| CLI, library, selector, sync-policy consolidation | `subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 (CLI, inspection, boundaries, parity, retry) | closed |
+| CLI, library, selector, sync-policy consolidation | `subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 (CLI, inspection, boundaries, parity, retry); M006 (search-parity verification corrective) | complete |
 | Local MCP integration | `subsystems/mcp-integration-roadmap.md` | M001 (server + registration) | closed |
 | Eggstack dependency refresh | `subsystems/eggstack-dependency-refresh-roadmap.md` | M001 (eggfetch/eggserve adoption and parity) | closed |
+| Maintenance and duplicate-policy consolidation | `subsystems/maintenance-consolidation-roadmap.md` | M001-M003 (dead subsystem removal, backup/snapshot policy, diagnostic vocabulary) | active |
+| Locking protocol and ordering convergence | `subsystems/locking-convergence-roadmap.md` | M001-M003 (owned-record protocol, kernel-lock protocol, ordering contract) | active |
+| Snippet CRUD surface | `subsystems/snippet-crud-surface-roadmap.md` | M001-M003 (non-interactive delete, folder/favorite write path, field update) | active |
+| Sync cursor protocol | `subsystems/sync-cursor-protocol-roadmap.md` | M001-M002 (monotonic sequence cursor, cursor-precision convergence) | active |
 
 Pre-convention flat-plan mapping: `000` → archived direction (superseded
 by canonical docs plus `distribution-release`/`mcp-integration`);

@@ -39,12 +39,10 @@ the transaction journal, the lock hierarchy, or the TOML fidelity rules — see
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(dead_code)]
 pub enum Durability {
     DurableUserData,
     SensitiveConfig,
     RecoverableMetadata,
-    EphemeralCoordination,
 }
 ```
 — `src/utils/atomic.rs:21-40`
@@ -60,17 +58,15 @@ code.
 | `DurableUserData` | **Yes** (`src/utils/atomic.rs:402-408`) | **Yes**, fail-closed (`:233-255`) | `0o600` (`:383-387`) | No | **Error** |
 | `SensitiveConfig` | **Yes** (`src/utils/atomic.rs:402-408`) | **Yes**, fail-closed (`:233-255`) | `0o600` (`:383-387`) | **Yes** (`:62`) | **Error** |
 | `RecoverableMetadata` | No | Best-effort, warn (`:257-264`) | `0o600` (`:383-387`) | No | Warning only |
-| `EphemeralCoordination` | No | **Skipped** — `None` (`:195-197`) | `0o600` (`:383-387`) | No | n/a |
 
 > **Correction — permissions are `0o600` for every class.** The enum-level
 > doc comment (`src/utils/atomic.rs:17-20`) states that every variant applies
 > `mode(0o600)` to the temp file unconditionally, and the implementation sets
 > it that way (`src/utils/atomic.rs:383-387`); the renamed target inherits
-> that inode's mode. The per-variant doc comments on `RecoverableMetadata` and
-> `EphemeralCoordination` (`src/utils/atomic.rs:33-39`) mention only fsync and
-> cleanup expectations, not permissions. The four classes genuinely differ only
-> in fsync behavior (and `SensitiveConfig` in symlink rejection) — **not** in
-> file mode.
+> that inode's mode. The per-variant doc comment on `RecoverableMetadata`
+> (`src/utils/atomic.rs:33-36`) mentions only fsync and cleanup expectations,
+> not permissions. The three classes genuinely differ only in fsync behavior
+> (and `SensitiveConfig` in symlink rejection) — **not** in file mode.
 >
 > The one way to get a non-`0o600` target is `preserve_permissions(true)`,
 > which snapshots the pre-existing mode and restores it after the rename
@@ -166,7 +162,7 @@ pub struct AtomicWriteReport {
 |-------|---------|
 | `target_existed` | whether the target path existed before the write (`src/utils/atomic.rs:357`) |
 | `bytes_written` | length of the byte slice handed to `atomic_replace` (`src/utils/atomic.rs:438`) |
-| `parent_sync_supported` | `Some(true)` = dir fsync succeeded; `Some(false)` = failed or unsupported; `None` = not probed (ephemeral class) (`src/utils/atomic.rs:93`, `:439`) |
+| `parent_sync_supported` | `Some(true)` = dir fsync succeeded; `Some(false)` = failed or unsupported; `None` = not probed (`RecoverableMetadata` skips the dir sync) (`src/utils/atomic.rs:85`, `:460`) |
 
 > **Subtlety.** `target_existed` is computed with `target.exists()`
 > (`src/utils/atomic.rs:357`), which **follows** symlinks, while validation
@@ -353,7 +349,6 @@ computed **from the live file on disk**, not from a source buffer.
 | Sync settings | sync settings TOML | `"sync"` | `src/config/sync_settings.rs:496` |
 | Import report | JSON report | `"import-report"` | `src/commands/import_cmd.rs:549` |
 | Backup manifest | manifest TOML | `"manifest"` | `src/commands/backup_archive.rs:318` |
-| Migration writes | minimal / updated config | `"migration"` | `src/migration.rs:160`, `:177` |
 | Usage index | usage index | `"usage"` | `src/usage.rs:161` |
 
 ### `atomic_replace`
@@ -375,10 +370,10 @@ computed **from the live file on disk**, not from a source buffer.
 | Auto-sync status file | `DurableUserData` | `src/auto_sync/status.rs:167-171` |
 | Auto-sync pending marker | `DurableUserData` | `src/auto_sync/pending.rs:390-394` |
 
-> **Gap worth noting.** `RecoverableMetadata` and `EphemeralCoordination` have
-> **no production call sites** today — every production caller uses one of the
-> two durable classes (`DurableUserData` or `SensitiveConfig`). The classes
-> exist for the durability taxonomy, not because the current writers need them.
+> **Gap worth noting.** `RecoverableMetadata` has **no production call sites**
+> today — every production caller uses one of the two durable classes
+> (`DurableUserData` or `SensitiveConfig`). The class exists for the durability
+> taxonomy, not because the current writers need it.
 
 ---
 
@@ -405,8 +400,8 @@ computed **from the live file on disk**, not from a source buffer.
    (`src/utils/atomic.rs:386`, `:292`).
 3. **`DurableUserData` and `SensitiveConfig` fail closed** when the parent
    directory cannot be fsynced (`src/utils/atomic.rs:247-253`).
-4. **`EphemeralCoordination` never fsyncs** — neither the file nor the
-   directory (`src/utils/atomic.rs:195-197`, `:402-408`).
+4. **`RecoverableMetadata` never fsyncs the file** and only best-effort
+   fsyncs the directory (`src/utils/atomic.rs:257-264`, `:402-408`).
 5. **A symlink at the target is replaced, never followed**
    (`src/utils/atomic.rs:126-131`).
 6. **`reject_symlink` defaults to `true` only for `SensitiveConfig`**

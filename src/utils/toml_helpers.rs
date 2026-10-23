@@ -328,6 +328,9 @@ fn can_be_literal_string(value: &str) -> bool {
 /// output changes the quoting style for no reason. snip-it's own save pipeline
 /// writes `toml::to_string_pretty` output verbatim. This helper is retained
 /// for callers that hand-write TOML and need the same conversion.
+// Retained: deliberately unreachable from the save path — it must never
+// rewrite serializer output (`architecture/utils/toml_helpers.md`). It exists
+// for callers that hand-write TOML.
 #[allow(dead_code)]
 pub(crate) fn quote_strings_containing_backslashes(toml_str: &str) -> String {
     fix_toml_strings(toml_str, |content| content.contains('\\'))

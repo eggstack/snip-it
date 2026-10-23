@@ -282,15 +282,16 @@ byte-truncated (`snip-sync/src/lib.rs:1168`, `:1536`) — a page that had
 rows dropped for size still reports `has_more`, so the client does not stop
 early and lose data.
 
-### `since` and `last_sync_timestamp`
+### `since`, `last_sync_timestamp`, and `last_sync_sequence`
 
-Two different fields carry the incremental-sync watermark, and they are
+Three different fields carry the incremental-sync watermark, and they are
 **not** interchangeable:
 
 | Field | Message | Used for |
 |-------|---------|----------|
 | `since` | `GetSnippetsRequest` (`:42`) | The download filter of the read-only `GetSnippets` RPC |
-| `last_sync_timestamp` | `SyncRequest` (`:71`) | The download filter **and** the watermark the client stores after a completed `Sync` |
+| `last_sync_timestamp` | `SyncRequest` (`:71`) | The timestamp download filter **and** the watermark the client stores after a completed `Sync` |
+| `last_sync_sequence` | `SyncRequest` (`:86`) | The write-sequence download filter; zero means "no sequence cursor" |
 
 **The download filter is inclusive (`>=`), not exclusive (`>`).** The server
 SQL is:
@@ -299,9 +300,24 @@ SQL is:
 -- snip-sync/src/db.rs:fetch_snippets
 WHERE user_id = ?
   AND library_id = ?
-  AND visible_at >= ?
+  AND visible_at >= ?      -- the timestamp cursor
   AND (? OR deleted = 0)
 ```
+
+or, on the sequence path:
+
+```sql
+WHERE user_id = ?
+  AND library_id = ?
+  AND sequence >= ?        -- the write-sequence cursor
+  AND (? OR deleted = 0)
+```
+
+The predicate is chosen by the request: a **non-zero `last_sync_sequence`
+selects the sequence form**, anything else falls back to the timestamp form.
+There is no separate negotiation round trip — the cursor in the request *is*
+the negotiation. `snip-sync/src/db.rs:DeltaCursor` holds the two forms and
+`count_snippets`/`fetch_snippets` bind the matching predicate.
 
 The filter is on `visible_at`, the **server-assigned** cursor position of a
 row, not on the client-chosen `updated_at`: a row pushed with an
@@ -318,17 +334,14 @@ With `>`, a row written in the same second as the previous sync's watermark
 would be skipped by every future incremental sync. Re-delivering boundary
 rows is safe because merges are idempotent by snippet identity.
 
-> **Partially resolved.** The schema comment at `snip-proto/proto/sync.proto`
+> **Resolved.** The schema comment at `snip-proto/proto/sync.proto`
 > said *"Results are filtered to records with updated_at strictly greater than
 > since"* — that was **wrong**. The behaviour is `>=`. The `.proto` comments
 > have now been corrected to state `>=` (and to explain the second-granularity
 > reason), and the `SyncRequest.local_snippets` comment was corrected to say
 > that every local record is merged rather than only those newer than
-> `last_sync_timestamp`. The copy in the **generated** stub at
-> `snip-proto/src/snip_proto.rs:357-358` (and `:642`) still carries the old
-> wording — it is regenerated only on an explicit regen, and
-> `protoc-gen-tonic` is not part of the normal toolchain. See
-> [Known Drift](#known-drift-between-the-proto-and-the-generated-stubs).
+> `last_sync_timestamp`. The **generated** stub was regenerated and now
+> carries the same wording.
 
 **`last_sync_timestamp` does not gate the upload.** It selects the page of
 *returned* records; every record in `SyncRequest.local_snippets` is merged
@@ -341,9 +354,7 @@ conflict resolution (`snip-sync/src/lib.rs:1457-1509`,
 > page of server rows returned in the response."*
 > (`snip-proto/proto/sync.proto:74-76`). The older wording — *"Only records
 > newer than last_sync_timestamp are considered for insertion or conflict
-> resolution"* — survives only in the generated stub at
-> `snip-proto/src/snip_proto.rs:48-49`. See
-> [Known Drift](#known-drift-between-the-proto-and-the-generated-stubs).
+> resolution"* — is gone from the generated stub as well.
 
 ### The watermark does not advance while paginating
 
@@ -437,23 +448,23 @@ the schema.
 
 ### Known drift between the proto and the generated stubs
 
-The checked-in stub is **newer than the schema** for two comments. The
-generated file was regenerated in commit `9d35dc1` ("Fix reported repository
-bugs"), but the matching `.proto` comments were not updated at the time. The
-`.proto` comments have since been corrected to match the implementation; the
-stub retains the old wording until the next explicit regen.
+The stub was **newer than the schema** for two comments: the generated file
+was regenerated in commit `9d35dc1` ("Fix reported repository bugs"), but the
+matching `.proto` comments were not updated at the time. The `.proto`
+comments were corrected afterwards, and the stub was regenerated when the
+write-sequence cursor was added. Both sides now carry the same wording.
 
 | Topic | `snip-proto/proto/sync.proto` | `snip-proto/src/snip_proto.rs` | Reality |
 |-------|--------------------|---------------------|---------|
-| `since` filter | *"…the records the server delivers at or after the cursor `since` (>=)"* (corrected again — the cursor is server-assigned, not `updated_at`) | *"strictly greater than since"* (`:357-358`, `:642`) | **`>=` on the server-assigned cursor** — `snip-sync/src/db.rs:fetch_snippets` |
-| `last_sync_timestamp` | *"Every local record is considered for insertion or conflict resolution; `last_sync_timestamp` only selects the page of server rows returned."* (corrected) | *"The server uses each record's own timestamp for conflict resolution; `last_sync_timestamp` only selects returned data."* (`:48-49`) | Both correct — the stub was right first |
+| `since` filter | *"…the records the server delivers at or after the cursor `since` (>=)"* | the same wording | **`>=` on the server-assigned cursor** — `snip-sync/src/db.rs:fetch_snippets` |
+| `last_sync_timestamp` | *"Every local record is considered for insertion or conflict resolution; `last_sync_timestamp` only selects the page of server rows returned."* | the same wording | Both correct |
 
-Doc comments do not affect the wire format, so the drift is harmless to
-compatibility — but it is a trap for anyone reading the schema as the
+Doc comments do not affect the wire format, so the drift was harmless to
+compatibility — but it was a trap for anyone reading the schema as the
 specification. The `.proto` file is the schema and the **implementation** is
-the behavioural truth. The `.proto` comments have been corrected; the
-generated stub still carries the old wording and will pick it up on the next
-explicit regen.
+the behavioural truth. Regenerate the stub whenever the `.proto` comments
+change; a `protoc` + `tonic-prost-build` run reproduces the checked-in file
+byte for byte.
 
 ## Publishing
 
@@ -465,13 +476,13 @@ snip-proto  →  snip-sync  →  snip-it
 
 | Crate | Version | Path dependency |
 |-------|---------|-----------------|
-| `snip-proto` | 0.1.3 | — |
-| `snip-sync` | 0.1.6 | `snip-proto = { version = "0.1.3", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
-| `snip-it` | 1.3.9 | `snip-proto = { version = "0.1.3", path = "snip-proto" }` (`Cargo.toml:126`) |
+| `snip-proto` | 0.1.4 | — |
+| `snip-sync` | 0.1.7 | `snip-proto = { version = "0.1.4", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
+| `snip-it` | 1.4.0 | `snip-proto = { version = "0.1.4", path = "snip-proto" }` (`Cargo.toml:140`) |
 
 **A proto change requires bumping `snip-proto`'s version in both
-dependents.** `snip-sync/Cargo.toml:58` and `Cargo.toml:126` both pin
-`version = "0.1.3"`; after a proto change both must be updated to the new
+dependents.** `snip-sync/Cargo.toml:58` and `Cargo.toml:140` both pin
+`version = "0.1.4"`; after a proto change both must be updated to the new
 version, or `crates.io` will resolve the old published `snip-proto`.
 
 Publishing is manual and local — there is no CI token or workflow that
@@ -505,6 +516,17 @@ publishes. See `RELEASING.md` and `CONTRIBUTING.md`.
   inclusive by design (second-granularity timestamps). `visible_at` is the
   server-assigned cursor position; `updated_at` stays the client's logical
   modification time.
+- **A non-zero `last_sync_sequence` selects the sequence filter**
+  (`sequence >= ?`); a non-zero `last_sync_timestamp` selects the timestamp
+  filter; **a request that carries neither cursor is the bootstrap** and is
+  served by the timestamp filter with no lower bound, so it delivers the
+  complete library. The server returns `server_sequence` in exactly two
+  cases — the request carried a sequence cursor, or the request carried no
+  cursor at all (the bootstrap) — and answers zero for a timestamp-only
+  request, because a delta does not deliver the library's whole history and
+  its watermark is therefore not adoptable by that client. A client that
+  never sends a sequence cursor never receives a value it cannot
+  interpret.
 - **`last_sync_timestamp` does not gate uploads.** It selects the returned
   page; merges use each record's own `updated_at`.
 - **The watermark does not advance while `has_more` is true.**

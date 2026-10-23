@@ -67,7 +67,6 @@
   - `DurableUserData` — sync recovery markers, auto-sync status and pending markers, `select --output` files, restored files, rollback restores
   - `SensitiveConfig` — theme files and restored credential files (adds symlink rejection on top of `DurableUserData`)
   - `RecoverableMetadata` — no production caller yet; currently exercised only by `src/utils/atomic.rs` tests
-  - `EphemeralCoordination` — no production caller yet; currently exercised only by `src/utils/atomic.rs` tests
 
 ### 13. Transaction journals for multi-file ops
 - Use free functions in `transaction.rs` (`begin_transaction` / `advance_to_*` / `commit_transaction`) for any operation touching 2+ files — there is no `Transaction::begin()` API
@@ -76,9 +75,8 @@
 - Never schedule sync before local transaction is consistent
 
 ### 14. Schema versioning for migrations
-- Use `migration.rs` with `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`); read via `get_schema_version()`
-- `write_schema_version` uses `toml::Table` (not `toml::Value`) to preserve array-of-tables structure
-- Always test idempotency: second run should be a no-op
+- The persisted library format carries **no schema version**; the dead versioning framework (`src/migration.rs`) was removed
+- Introducing a schema version is a **schema change**: it requires a migration that is idempotent (a second run must be a no-op) and a version bump
 
 ### 15. Validation-first repair
 - Always run validation before repair (`src/commands/validate_cmd.rs` emits a `Severity` and a `Repairability` per diagnostic)
@@ -136,7 +134,6 @@ inherits it); they differ **only** in fsync behavior.
 | `DurableUserData` | Recovery markers, auto-sync status/pending, restored files | yes | required (hard error on failure) | — |
 | `SensitiveConfig` | Theme files, restored credential files | yes | required (hard error on failure) | symlink rejection (its only behavioral difference from `DurableUserData`) |
 | `RecoverableMetadata` | Reconstructible metadata — no production caller yet | no | best-effort (warns, continues, returns `Ok(Some(false))`) | — |
-| `EphemeralCoordination` | Coordination artifacts — no production caller yet | no | none | — |
 
 `write_private_atomic` takes no class argument: it always fsyncs the file and
 fsyncs the parent directory only under `#[cfg(unix)]`.
@@ -154,11 +151,10 @@ fsyncs the parent directory only under `#[cfg(unix)]`.
 - On crash recovery: `gate_mutation_on_interrupted_transactions()` auto-recovers a single actionable journal and refuses on multiple actionable journals, on corrupt journals, and on `Failed`-state journals
 - Journal is removed only after successful commit
 
-### Schema Migrations (`src/migration.rs`)
-- `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`) tracks schema state
-- `write_schema_version` preserves TOML array-of-tables structure
-- Migrations are idempotent: re-running applies no changes
-- `get_schema_version()` reads the `schema_version` key from the file's TOML table (a missing or unparsable file yields `LEGACY`; an out-of-range integer fails closed)
+### Schema Migrations
+- The persisted library format carries **no schema version**; the dead versioning framework (`src/migration.rs`) was removed as unreferenced code
+- Adding a schema version is a schema change: ship a migration that is idempotent (re-running applies no changes) together with a version bump
+- A migration that rewrites a library file must preserve TOML array-of-tables structure — operate on `toml::Table`, never `toml::Value`
 
 ### Validation (`src/commands/validate_cmd.rs`)
 - Read-only checks: orphan detection, primary selection, ID uniqueness, TOML parseability

@@ -4,21 +4,31 @@
 Guide agents through `src/selector.rs` (deterministic non-TUI resolution),
 `src/mcp/` (read-only stdio MCP server), and the **search-parity contract**
 that binds `snp get --query`, `snp list --filter`, and MCP `snippets_search`
-to one function.
+to one field set and one match primitive.
 
 This is the highest-risk-to-break, lowest-visibility invariant in the repo.
-There is **no compiler error** when parity breaks and often **no failing
-test** unless you happen to run the right target. Read this before touching
-search, filters, or any new consumer of snippet text.
+There is **no compiler error** when parity breaks. The parity suite
+(`tests/selector_search_parity.rs`) now **gates the build** — it runs in
+`scripts/check.sh` — so a parity regression fails CI, but only for the
+surfaces the suite actually covers. Read this before touching search,
+filters, or any new consumer of snippet text.
 
 ---
 
-## The parity contract (one function, three consumers)
+## The parity contract (one field set, one match primitive, three consumers)
 
-`selector::searchable_text(snippet, fields)` (`src/selector.rs:142`) is the
-single source of truth for *which fields participate* in a search. Deleted
-filtering, fuzzy scoring, and ranking live with the callers; this helper only
-decides field membership, precisely so the three surfaces cannot drift.
+Two functions bind `snp get --query`, `snp list --filter`, and MCP
+`snippets_search` to one behavior:
+
+- `selector::searchable_text(snippet, fields)` (`src/selector.rs:142`) is the
+  single source of truth for *which fields participate* in a search. It only
+  decides field membership.
+- `selector::score_fuzzy_matches(snippets, query, fields)`
+  (`src/selector.rs:209`) is the **single match primitive** that all three
+  surfaces call. It decides *which snippets a query selects* — the deleted
+  filter, the empty-query rule, and the fuzzy match itself. Because all
+  three call it, they cannot disagree about the match set. Only the
+  *ranking* of the returned indices is left to the callers.
 
 | Field | Always searched | Conditional |
 |-------|-----------------|-------------|
@@ -30,7 +40,47 @@ decides field membership, precisely so the three surfaces cannot drift.
 | sync metadata (`id`, `device_id`, timestamps, `deleted`) | **never** | — |
 | credentials / keychain data | **never** | — |
 
-### `SearchFields` presets (`src/selector.rs:91-125`)
+### Contract item 1 — an empty query is "no filter"
+
+An **empty** query matches **every non-deleted snippet**, with **no
+scores** — including snippets whose searchable text is empty (no
+description, command, tags, or output). The rule is identical on all three
+surfaces:
+
+| Surface | Empty argument | Result |
+|---------|----------------|--------|
+| `snp get --query ""` | empty query | every non-deleted snippet in scope |
+| `snp list --filter ""` | empty filter | exactly what `snp list` with no `--filter` returns |
+| MCP `snippets_search` | `query: ""` | every non-deleted snippet in scope |
+
+A **non-empty** query matches the `searchable_text` projection only: a
+snippet with an empty projection never matches, and deleted snippets never
+match any query.
+
+Rationale: two of the three surfaces already behaved this way; "no filter"
+is the natural reading of an empty argument; and the alternative ("match
+nothing searchable") would contradict `snp list` with no filter at all,
+which returns every live snippet. When the documentation is silent, the
+tiebreak is to preserve the behavior of the larger number of current
+surfaces.
+
+### Contract item 2 — cross-library order differs by surface family, by design
+
+| Family | Surfaces | Cross-library order |
+|---|---|---|
+| **Selector family** — resolves per library, then aggregates | `snp get --query` (and `--resolution all`), `snp run/clip/edit --library all`, MCP `snippet_get` | library name → description → snippet ID (`selector::sort_matches`) |
+| **Merged-set family** — merges the libraries first, then scores the merged set | `snp list --filter`, MCP `snippets_search` | global relevance (`sort::rank_snippets` under `SnippetSort::Relevance`) |
+
+Within a **single** library the two orders coincide — same set, same
+relevance order — because there is only one library to merge. Across more
+than one library they can differ. That is intentional and is pinned by the
+parity suite on each surface; it is **not** a defect.
+
+Rationale: changing `get` would alter the documented `get --resolution all`
+aggregate order and MCP `snippet_get`, which is outside this milestone's
+scope.
+
+### `SearchFields` presets (`src/selector.rs:91-128`)
 
 | Constructor | tags | output | Used by |
 |-------------|------|--------|---------|
@@ -38,6 +88,11 @@ decides field membership, precisely so the three surfaces cannot drift.
 | `description_and_command()` | ❌ | ❌ | historical minimum only |
 | `fuzzy_default()` | ✅ | ❌ | alias of `default()` |
 | `with_output()` | ✅ | ✅ | `snp list --search-output`, MCP `search_output: true` |
+
+Every surface builds `SearchFields` through these named constructors — never
+through a struct literal. The default path is `fuzzy_default()`; the opt-in
+path (`snp list --search-output`, MCP `search_output: true`) is
+`with_output()`.
 
 `output` is bounded for scoring via `OutputPresentation::for_scoring()`
 (512 chars) — do not score raw `snippet.output`.
@@ -49,7 +104,11 @@ decides field membership, precisely so the three surfaces cannot drift.
 3. Add the opt-in surface: a CLI flag (`snp list --search-output`) and the MCP
    `search_output` parameter must move together.
 4. Extend `tests/selector_search_parity.rs` — this is the only thing that
-   catches a regression.
+   catches a regression. **The parity suite gates the build**: it runs in
+   `scripts/check.sh` (`--features test-support`), so the CI workflows
+   inherit the gate through that same script. A regression that breaks
+   parity now fails CI — but there is still **no compiler error** when
+   parity breaks.
 5. Confirm the field is not in the never-searchable list above.
 
 ---
@@ -61,15 +120,15 @@ correctness bug**, not a style issue.
 
 | Function | Effect | Use for |
 |----------|--------|---------|
-| `resolve_selector(&selector)` (`src/selector.rs:703`) | Constructs `LibraryManager`, calls `ensure_library_mode()` — **can migrate, create, and rewrite metadata** | Commands that already own recovery/gating |
-| `resolve_selector_readonly(&selector)` (`src/selector.rs:645`) | Uses `readonly_library_sources()` — no migration, no directory creation, no metadata rewrite | Read-only commands, MCP, inspection |
-| `resolve_exact_target(...)` (`src/selector.rs:626`) | Builds an exact selector and delegates to the **mutating** resolver | Mutating callers needing ID/description/command matching |
+| `resolve_selector(&selector)` (`src/selector.rs:736`) | Constructs `LibraryManager`, calls `ensure_library_mode()` — **can migrate, create, and rewrite metadata** | Commands that already own recovery/gating |
+| `resolve_selector_readonly(&selector)` (`src/selector.rs:678`) | Uses `readonly_library_sources()` — no migration, no directory creation, no metadata rewrite | Read-only commands, MCP, inspection |
+| `resolve_exact_target(...)` (`src/selector.rs:659`) | Builds an exact selector and delegates to the **mutating** resolver | Mutating callers needing ID/description/command matching |
 
 - MCP is read-only, so it must never reach the mutating `resolve_selector`.
   Only `snippet_get` calls `resolve_selector_readonly` directly
-  (`src/mcp/tools.rs:160`); `snippets_list` and `snippets_search` go
-  `load_snippets()` (`src/mcp/tools.rs:234`) → `library_sources()`
-  (`src/mcp/tools.rs:253`) → `readonly_library_sources()`. Both routes are
+  (`src/mcp/tools.rs:150`); `snippets_list` and `snippets_search` go
+  `load_snippets()` (`src/mcp/tools.rs:224`) → `library_sources()`
+  (`src/mcp/tools.rs:243`) → `readonly_library_sources()`. Both routes are
   read-only, but they are not the same route.
 - Guards: `tests/readonly_no_recovery.rs` and
   `tests/readonly_library_resolution.rs` assert the readonly path performs no
@@ -89,8 +148,8 @@ paths:
   (`src/selector.rs:65-71`) → `LibraryScope::AllLibraries`. Used by `snp get`,
   exact-mode `run`/`clip`/`edit`, and MCP `snippet_get`.
 - **Read-only library path** — `LibraryManager::resolve_readonly_sources`
-  (`src/library/manager.rs:261-295`) matches the literal `"all"` itself, in
-  three separate arms (`:256`, `:266`, `:278`). Used by `snp list`,
+  (`src/library/manager.rs:295-336`) matches the literal `"all"` itself, in
+  three separate arms (`:303`, `:313`, `:325`). Used by `snp list`,
   `load_readonly_snippets`, and MCP `snippets_list` / `snippets_search`.
 
 They agree today, but they are separate code — changing one does not change
@@ -102,7 +161,7 @@ definition of `"all"` handling"; that is true only of the selector path.)
 - **Read-only library path** understands `"all"` independently. Used by
   `snp list`, `load_readonly_snippets`, and MCP `snippets_list` /
   `snippets_search`.
-- **`commands::get_library_path`** (`src/commands/mod.rs:91`) does **not**:
+- **`commands::get_library_path`** (`src/commands/mod.rs:92`) does **not**:
   it calls `get_library_by_filename("all")` and returns `library_not_found`.
   Used by the single-library mutating commands (`snp new`, `snp edit`).
 - **`snp search` rejects `"all"` on purpose.** Its interactive selector edits
@@ -113,10 +172,10 @@ definition of `"all"` handling"; that is true only of the selector path.)
 So `snp get --library all` and `snp list --library all` work, and
 `snp search --library all` is a deliberate, accurate error. `all` is also a
 **reserved library name** — `validate_library_name` rejects it
-(`src/library/model.rs:213-223`), so `snp library create all` fails.
+(`src/library/model.rs:247-252`), so `snp library create all` fails.
 
 Read-only commands must resolve through `commands::load_readonly_snippets`
-(`src/commands/mod.rs:169-189`) → `library::readonly_library_sources`, never
+(`src/commands/mod.rs:170-190`) → `library::readonly_library_sources`, never
 through the mutating `get_library_path`; `ensure_library_mode()` must not run
 on a read path.
 
@@ -160,7 +219,9 @@ authoritative scope table.
 
 ### MCP ↔ CLI parity obligations
 
-1. `snippets_search` uses `searchable_text` — same fields as `get --query`.
+1. `snippets_search` uses `searchable_text` **and** `score_fuzzy_matches` —
+   the same fields and the same match primitive as `get --query` and
+   `list --filter`.
 2. `snippet_get` matching uses the same case rules as `snp get` flags.
 3. MCP must not gain a tool that mutates or executes.
 
@@ -174,7 +235,7 @@ Deep dive: [`../architecture/mcp.md`](../architecture/mcp.md),
 
 | Target | Protects |
 |--------|----------|
-| `tests/selector_search_parity.rs` | field-membership parity across the three surfaces |
+| `tests/selector_search_parity.rs` | field-membership and match parity across all three surfaces (`get --query`, `list --filter`, MCP `snippets_search`); runs in `scripts/check.sh`, so it gates the build |
 | `tests/selector_integration.rs` | selector matching and ambiguity behavior |
 | `tests/mcp_integration.rs` | tool dispatch, params, read-only boundary |
 | `tests/readonly_no_recovery.rs` | readonly resolver performs no recovery (feature-gated) |
@@ -182,7 +243,7 @@ Deep dive: [`../architecture/mcp.md`](../architecture/mcp.md),
 | `src/selector.rs` unit tests | `LibraryScope`, `SearchFields`, `exact_selector` |
 
 ```bash
-cargo test --test selector_search_parity
+cargo test --test selector_search_parity   # also runs in scripts/check.sh
 cargo test --test mcp_integration
 cargo test --features test-support --test readonly_no_recovery -- --test-threads=1
 ```
@@ -205,3 +266,10 @@ needs `unsafe` (edition 2024).
 - Writing a diagnostic to stdout in the MCP server — corrupts the protocol.
 - Assuming `search --library all` should work because `get --library all` does.
   `snp search` deliberately rejects it (the selector operates on one library file).
+- Treating an empty query/filter as "match nothing". An empty query is
+  **"no filter"** on all three surfaces — it matches every non-deleted
+  snippet, including snippets whose searchable text is empty.
+- Assuming `snp get --query --library all` and `snp list --library all
+  --filter` must produce the same **order** across libraries. They use
+  different order families by design (selector family vs merged-set
+  family); the two coincide only within a single library.

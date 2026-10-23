@@ -14,7 +14,7 @@
 - [Backup Format](#backup-format)
 - [Restore Semantics](#restore-semantics)
 - [Repair Command](#repair-command)
-- [Migration Framework](#migration-framework)
+- [Schema Versioning](#schema-versioning)
 - [Identity Contract](#identity-contract)
 - [Security Properties](#security-properties)
 - [Key Files](#key-files)
@@ -64,7 +64,6 @@ pub enum Durability {
     DurableUserData,       // fsync before rename, parent dir sync
     SensitiveConfig,       // 0o600 permissions, symlink rejection
     RecoverableMetadata,   // no fsync
-    EphemeralCoordination, // no fsync, no dir sync
 }
 ```
 
@@ -73,15 +72,14 @@ pub enum Durability {
 | `DurableUserData` | Yes | Yes (hard failure) | `0o600` temp file | No |
 | `SensitiveConfig` | Yes | Yes (hard failure) | `0o600` | Yes |
 | `RecoverableMetadata` | No | Yes (best-effort) | `0o600` temp file | No |
-| `EphemeralCoordination` | No | No | `0o600` temp file | No |
 
 On Unix the temp file is always created `0o600`, so a replaced file keeps
 `0o600` unless `preserve_permissions` restores the previous mode.
 
 Exact fsync semantics (`src/utils/atomic.rs`):
 
-- **File fsync** — `file.sync_all()` runs only for `DurableUserData` and `SensitiveConfig` (`atomic.rs:402-408`). The other two classes get `file.flush()` only, which pushes to the kernel buffer but not to the device.
-- **Directory fsync** — `sync_parent_dir()` hard-fails the write for `DurableUserData`/`SensitiveConfig` when the parent-dir fsync errors (`atomic.rs:228-255`). `RecoverableMetadata` downgrades a directory-fsync failure to a warning (`atomic.rs:257-264`). `EphemeralCoordination` skips the directory fsync entirely (`atomic.rs:195-197`).
+- **File fsync** — `file.sync_all()` runs only for `DurableUserData` and `SensitiveConfig` (`atomic.rs:402-408`). `RecoverableMetadata` gets `file.flush()` only, which pushes to the kernel buffer but not to the device.
+- **Directory fsync** — `sync_parent_dir()` hard-fails the write for `DurableUserData`/`SensitiveConfig` when the parent-dir fsync errors (`atomic.rs:228-255`). `RecoverableMetadata` downgrades a directory-fsync failure to a warning (`atomic.rs:257-264`).
 - **Temp-file mode** — `0o600` for *every* class on Unix (`atomic.rs:383-387`); `write_private_atomic` likewise creates its temp at `0o600` (`atomic.rs:292`).
 - **Windows** — `std` offers no creation-time permission knob, so the temp file inherits the parent directory's ACL. Windows installs rely on the user-private `%APPDATA%` directory ACLs instead of a file-level DACL (`atomic.rs:273-277`).
 
@@ -111,7 +109,7 @@ pub struct AtomicWriteOptions {
 6. For `DurableUserData` and `SensitiveConfig`, call `sync_all` on the file
 7. Atomic `rename` over the target
 8. Restore original permissions if `preserve_permissions` was set
-9. Sync parent directory — for `DurableUserData`/`SensitiveConfig` a failure fails the write; for `RecoverableMetadata` it is logged and ignored; `EphemeralCoordination` skips it
+9. Sync parent directory — for `DurableUserData`/`SensitiveConfig` a failure fails the write; for `RecoverableMetadata` it is logged and ignored
 10. On any failure, `TempFileGuard` cleans up the temp file
 
 Target validation (`validate_target`, `atomic.rs:112-167`) rejects directories, FIFOs, sockets, and device nodes. A symlink is **replaced, never followed** — the final `rename` swaps the directory entry itself, so an allowed symlink is a valid target (`atomic.rs:126-131`).
@@ -330,7 +328,7 @@ pub struct StagedFile {
 
 #### TransactionLock
 
-File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)`. The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce, PID, and start token match the guard's nonce, PID, and start token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
+File-create guard ensuring exclusive access. `acquire_transaction_lock(state_dir, operation)` creates `transaction.lock` via `create_new(true)` inside the shared owned-record protocol (`src/record_lock.rs`). The lock file contains a TOML record with `schema_version`, `pid`, `nonce`, `created_at_unix_ms`, `operation`, and `start_token` fields. On acquisition, if the lock already exists, the system checks PID liveness via `ProcessIdentity::observe(existing.pid)` — dead owners are reclaimed, live owners cause an error. **Ownership verification**: the system observes the process at `existing.pid` and compares the observed start token with the persisted start token, not the contender's own start token. This prevents a live owner from being classified as PID reuse. Ownership is verified on `Drop`: the lock file is only removed if the stored nonce, PID, and start token match the guard's nonce, PID, and start token, preventing old owners from removing a replacement owner's lock. Malformed locks are quarantined (renamed to `transaction.lock.quarantine.<uuid>`) rather than silently deleted.
 
 **Bounded retry ladder.** A record that is *empty, unparseable, or only partially written* goes through a bounded retry ladder before quarantine, because "a live writer called `create_new` but has not finished writing" is an observable state, and a partially written record is indistinguishable from a malformed one; quarantining immediately would rename away a live owner's lock and admit a second writer into the critical section.
 
@@ -339,18 +337,18 @@ The ladder has three arms (`transaction.rs:1151-1201`):
 | Arm | Condition | Bound | Action |
 |-----|-----------|-------|--------|
 | Readable | `toml::from_str` succeeds | — | Resets **both** counters (`transaction.rs:1152-1160`) |
-| Empty | parse fails **and** `content.trim().is_empty()` | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_stale_lock` (`transaction.rs:1161-1180`) |
-| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_stale_lock` (`transaction.rs:1181-1200`) |
+| Empty | parse fails **and** `content.trim().is_empty()` | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_owned_lock` (`src/record_lock.rs:692`) |
+| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_owned_lock` (`src/record_lock.rs:692`) |
 
 Both retry arms sleep 1 ms between attempts. A *readable* record resets both counters, so a waiter that sees scattered empty reads over a long legitimate acquisition never eventually quarantines a perfectly good lock.
 
-**Transient contention is platform-gated.** `is_transient_lock_contention` (`transaction.rs:1029-1047`) returns `true` only on Windows for `PermissionDenied`: a just-deleted file can briefly surface `PermissionDenied` in a pending-delete state. On Unix the same condition is *stable* (lock file owned by another UID, or a non-traversable `.transaction` directory), so retrying it spins forever with no error and no timeout. The `#[cfg(windows)]` / `#[cfg(not(windows))]` split is the fix for a hang that applied the Windows workaround unconditionally.
+**Transient contention is platform-gated.** `is_transient_lock_contention` (`src/record_lock.rs:770-778`) returns `true` only on Windows for `PermissionDenied`: a just-deleted file can briefly surface `PermissionDenied` in a pending-delete state. On Unix the same condition is *stable* (lock file owned by another UID, or a non-traversable `.transaction` directory), so retrying it spins forever with no error and no timeout. The `#[cfg(windows)]` / `#[cfg(not(windows))]` split is the fix for a hang that applied the Windows workaround unconditionally.
 
 **Deadline.** `LOCK_ACQUIRE_TIMEOUT` is 30 s (`transaction.rs:1023-1027`). The deadline is checked in the "lock removed or transient read" arm (`transaction.rs:1131-1140`) and returns `Transaction lock acquisition timed out`. The empty and malformed arms are bounded by their retry counters instead, not by the deadline.
 
 **A failed `write_all` no longer leaves a 0-byte lock file behind.** If the record write fails after `create_new` succeeded, the file this call created is removed before the error is returned (`transaction.rs:1097-1104`); otherwise every later acquirer would spin through the empty-content ladder on a file that can never become valid.
 
-**Quarantine is rename-based and GC'd.** `quarantine_stale_lock` (`transaction.rs:1268`) renames the lock to `transaction.lock.quarantine.<uuid>`; a `NotFound` from a concurrent writer's quarantine is treated as success. Old quarantine files are pruned by `prune_quarantine_files` with `QUARANTINE_RETENTION` = 7 days (`transaction.rs:1300-1301`).
+**Quarantine is rename-based and GC'd.** `quarantine_owned_lock` (`src/record_lock.rs:692`) renames the lock to `transaction.lock.quarantine.<uuid>`; a `NotFound` from a concurrent writer's quarantine is treated as success. Old quarantine files are pruned by `prune_quarantine_files` with `QUARANTINE_RETENTION` = 7 days (`src/record_lock.rs:781,790`).
 
 ### API
 
@@ -444,11 +442,16 @@ pub struct LocalDataLockInfo {
 
 ### Acquisition
 
-`acquire_local_data_lock(state_dir)` (`local_data.rs:111`) uses the same owned-lock protocol as the transaction lock: `create_new(true)` on `local-data.lock`, immediately write the TOML record, `sync_all` (warn-only on failure), and return the guard.
+`acquire_local_data_lock(state_dir)` (`local_data.rs:111`) uses the same owned-lock protocol as the transaction lock — the shared implementation in `src/record_lock.rs`: `create_new(true)` on `local-data.lock`, immediately write the TOML record, `sync_all` (warn-only on failure), and return the guard.
 
-- **Deadline** — 30 s from entry (`local_data.rs:128`). Exceeding it while the owner is alive returns `Local data lock held` / `Timed out waiting for local data lock after 30 seconds.` (`local_data.rs:282-287`).
-- **Backoff** — 10 ms doubling to a 1 s cap while a live owner holds the lock (`local_data.rs:288-289`).
-- **Transient contention** — the same platform-gated `is_transient_lock_contention` as the transaction lock (`local_data.rs:174, 184`).
+The two locks differ only by their **wait policy**, which is a required parameter of the shared protocol:
+
+- the transaction lock uses the **fail-fast** policy — a live owner is an immediate `Transaction lock held` error, and an unreadable record is bounded by a flat 30 s deadline;
+- the local-data lock uses the **wait-for-progress** policy — a 30 s base window that is extended on every hand-off, a 300 s hard cap, and a 250 ms poll ceiling.
+
+- **Deadline** — the 30 s base window from entry (`local_data.rs:154`), extended while the lock changes hands and bounded by the 300 s hard cap (`local_data.rs:155`). Exceeding it while the owner is alive returns `Local data lock held` / `Timed out waiting for local data lock after 30 seconds.`
+- **Backoff** — 10 ms doubling to a 250 ms cap while a live owner holds the lock (`local_data.rs:159`).
+- **Transient contention** — the same platform-gated `is_transient_lock_contention` as the transaction lock (`src/record_lock.rs:770-778`).
 
 ### Bounded Retry Ladder
 
@@ -457,8 +460,8 @@ The local-data lock uses the same three-arm ladder as the transaction lock (`loc
 | Arm | Condition | Bound | Action |
 |-----|-----------|-------|--------|
 | Readable | parse succeeds | — | Resets both counters (`local_data.rs:200-208`) |
-| Empty | parse fails and content is empty | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_local_data_lock(&lock_path, None)` (`local_data.rs:209-241`) |
-| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_local_data_lock(&lock_path, None)` (`local_data.rs:242-257`) |
+| Empty | parse fails and content is empty | quarantine when `empty_retries > 200`, or `> 50` and the file is older than 100 ms | `quarantine_owned_lock(&lock_path, None)` (`src/record_lock.rs:692`) |
+| Malformed / partially written | parse fails and content is non-empty | quarantine when `malformed_retries > 200` | `quarantine_owned_lock(&lock_path, None)` (`src/record_lock.rs:692`) |
 
 The empty arm additionally checks the 30 s deadline and returns a typed error naming the likely cause — a writer interrupted between creating and writing the lock file (`local_data.rs:229-238`).
 
@@ -470,11 +473,11 @@ The empty arm additionally checks the 30 s deadline and returns a typed error na
 
 Stale-lock reclaim renames the lock file. Reading the record and checking the owner's liveness are **not atomic**, so a writer that decided to reclaim could rename away a *live* lock that another writer had already reclaimed and re-acquired in the meantime — silently putting two processes inside the critical section.
 
-`quarantine_local_data_lock(lock_path, observed)` (`local_data.rs:322-354`) therefore re-reads the record and compares it to the one the caller observed before renaming. If the record changed, or is no longer parseable, the rename is **skipped** and the current owner is left alone. `observed = None` is used only for the empty/malformed arms, where there is no owner identity to compare — the same trade-off `Drop` makes for unparseable content.
+`quarantine_owned_lock(lock_path, observed)` (`src/record_lock.rs:692`) therefore re-reads the record and compares it to the one the caller observed before renaming. If the record changed, or is no longer parseable, the rename is **skipped** and the current owner is left alone. `observed = None` is used only for the empty/malformed arms, where there is no owner identity to compare — the same trade-off `Drop` makes for unparseable content.
 
 Both reclaim call sites pass the observed record: dead owner (`local_data.rs:268`) and PID reuse via start-token mismatch (`local_data.rs:297`).
 
-Quarantine files are named `local-data.lock.quarantine.<uuid>` and pruned by `prune_quarantine_files` with the same 7-day retention (`local_data.rs:356-370`).
+Quarantine files are named `local-data.lock.quarantine.<uuid>` and pruned by `prune_quarantine_files` with the same 7-day retention (`src/record_lock.rs:790`).
 
 ### Relationship to Backup Snapshot Capture
 
@@ -558,7 +561,7 @@ In strict mode, designated warning codes are elevated to errors: `W-ID-EMPTY`, `
 
 ### Manifest
 
-TOML or JSON (format depends on `BackupFormat`):
+TOML (the manifest is always written as `manifest.toml`):
 
 ```rust
 pub struct BackupManifest {
@@ -733,73 +736,30 @@ Transaction recovery inside repair goes through `recover_transaction_by_id`, so 
 
 ---
 
-## Migration Framework
+## Schema Versioning
 
-### Location
+The persisted library format carries **no schema version**, and the tree has
+no migration framework: `src/migration.rs` and its `SchemaVersion` /
+`Migration` / `write_schema_version` API were removed as dead code — they had
+no production call site.
 
-`src/migration.rs`
+Introducing a schema version is a **schema change**. It requires a migration
+that upgrades an existing file plus a version bump, and that migration must:
 
-### Schema Versioning
+- be **analysis-first** — compute the plan, and apply nothing when the plan is
+  empty;
+- write a pre-migration backup (`<path>.toml.pre-migration.bak`) **before** the
+  first mutating step, and restore the file from it if any step fails, so a
+  half-applied file is never left behind;
+- advance the version in order — each step's source version must match the
+  file's current version;
+- write the version key through **`toml::Table`, never `toml::Value`**:
+  `toml::Value` collapses array-of-tables, which the save path must preserve
+  (the golden corpus contract above).
 
-```rust
-pub struct SchemaVersion(pub u32);
-
-impl SchemaVersion {
-    pub const LEGACY: SchemaVersion = SchemaVersion(0);
-    pub const CURRENT: SchemaVersion = SchemaVersion(1);
-}
-```
-
-Version 0 represents unversioned/legacy files. Version 1 is the current schema. The version is stored as `schema_version = <N>` in the TOML top-level table (key constant `SCHEMA_KEY`, `migration.rs:99`).
-
-`get_schema_version` parses the file as a `toml::Table` so a document with multiple root keys is handled; a missing key, a missing file, an empty file, or an unparseable file all read back as `LEGACY` (`migration.rs:113-147`).
-
-### Migration Trait
-
-```rust
-pub trait Migration {
-    fn source(&self) -> SchemaVersion;
-    fn target(&self) -> SchemaVersion;
-    fn analyze(&self, path: &Path) -> SnipResult<MigrationPlan>;
-    fn apply(&self, plan: &MigrationPlan, path: &Path) -> SnipResult<MigrationOutput>;
-}
-```
-
-### Migration Operations
-
-```rust
-pub enum MigrationOperation {
-    RenameField { table, from, to },
-    AddField { table, name, default },
-    RemoveField { table, name },
-    Transform { description },
-}
-```
-
-### Key Functions
-
-| Function | Description |
-|----------|-------------|
-| `get_schema_version(path)` | Read `schema_version` from TOML file |
-| `needs_migration(path)` | Check if file version < `CURRENT` |
-| `write_schema_version(path, version)` | Write version using `toml::Table` for roundtripping |
-| `run_migrations(path, migrations)` | Apply migration chain in order |
-
-### Roundtripping
-
-`write_schema_version` parses the file as `toml::Table`, inserts the version key, and serializes back (`migration.rs:153-180`). This preserves array-of-tables structure and other TOML constructs that naive string insertion would corrupt.
-
-**`toml::Table`, not `toml::Value`.** `toml::Value` collapses array-of-tables — it is the exact failure the `toml::Table` choice exists to prevent.
-
-### Migration Chain
-
-`run_migrations` iterates through registered migrations in order. Each migration's `source` must match the current version. The chain advances from `LEGACY` → `CURRENT`.
-
-Each migration is **analyzed first**; the plan is only applied when it has operations. A best-effort pre-migration backup (`<path>.toml.pre-migration.bak`) is written once, before the first mutating step. If any step fails mid-chain, the file is restored from that backup, so the schema is never left at an intermediate version with half-applied data (`migration.rs:188-191, 205-217, 225-245`).
-
-### Current Usage
-
-`write_schema_version`, `needs_migration`, and `run_migrations` currently have **no production call sites** — they are exercised only by `src/migration.rs`'s own tests. They remain the canonical schema-versioning API and the template any future schema change must follow.
+Until such a change is designed, the format is unversioned: readers accept the
+current shape, and a malformed library file fails closed — a best-effort
+backup plus an error, never a synthesized writable empty.
 
 ---
 
@@ -932,7 +892,6 @@ This ensures repeated loads of identical file content produce identical IDs with
 | `src/commands/repair_cmd.rs` | Conservative repair, safe/unsafe classification, pre-repair backup |
 | `src/library/persistence.rs` | Library load/save, deterministic ID normalization, backup |
 | `src/library/manager.rs` | `libraries.toml` registry, primary selection, canonical read-only resolver |
-| `src/migration.rs` | Schema versioning, migration trait, TOML roundtripping |
 | `docs/IDENTITY_CONTRACT.md` | Snippet and library identity lifecycle rules |
 | `docs/PERSISTENCE_INVENTORY.md` | Every persisted artifact with its durability class |
 | `tests/persistence_unit.rs` | Atomic write and durability class tests |
@@ -946,7 +905,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 ## Invariants
 
 1. **The save path never post-processes `toml::to_string_pretty` output.** There is exactly one serialization-then-write site and nothing runs between them (`persistence.rs:249-257`).
-2. **`write_schema_version` uses `toml::Table`, never `toml::Value`** (`migration.rs:165`) — `toml::Value` collapses array-of-tables.
+2. **The persisted format carries no schema version.** Introducing one is a schema change: it requires a migration plus a version bump, and the version key must be written through `toml::Table` — never `toml::Value`, which collapses array-of-tables.
 3. **Every local mutation is gated** by `gate_mutation_on_interrupted_transactions(sync_state_dir, transaction_dir)`, and the gate receives *both* directories.
 4. **One interrupted journal → auto-rollback; multiple or incomplete journals → refuse** and direct the user to `snp repair` (`transaction.rs:2593-2613`).
 5. **Lock acquisition order is `LocalDataLock` → `TransactionLock` → writes** (`restore_cmd.rs:1133`). Never invert.
@@ -967,7 +926,7 @@ This ensures repeated loads of identical file content produce identical IDs with
 - **A lock that cannot be parsed is not automatically stale.** An empty or partially written record may belong to a live owner. Both locks use a bounded retry ladder before quarantining; quarantining on the first malformed read renames away a live lock and admits a second writer.
 - **`PermissionDenied` is transient only on Windows.** On Unix it is stable, so the transaction lock's `is_transient_lock_contention` returns `false` there. Applying the Windows workaround unconditionally caused the CLI to hang with no error and no timeout — including `snp repair`, `snp restore`, and the mutation gate.
 - **A failed `write_all` must delete the 0-byte lock file it created.** Otherwise every later acquirer spins on a record that can never become valid.
-- **Both locks' reclaims are ownership-verified.** `quarantine_local_data_lock` (`local_data.rs`) and `quarantine_stale_lock` (`transaction.rs`) re-read the record and compare it with the observed one before renaming. Without that check, a writer that decided to reclaim can rename away a *live* lock that another writer already re-acquired, putting two processes inside the critical section. The two are symmetric here — keep them that way.
+- **Both locks' reclaims are ownership-verified.** `quarantine_owned_lock` (`src/record_lock.rs`) — one shared implementation re-read the record and compare it with the observed one before renaming. Without that check, a writer that decided to reclaim can rename away a *live* lock that another writer already re-acquired, putting two processes inside the critical section. The two are symmetric here — keep them that way.
 - **`check_interrupted_transactions` is a scan helper, not the gate.** Calling the scan and proceeding anyway reproduces the corruption it exists to prevent.
 - **`save_library_internal` skips the gate and the lock.** It is valid only for callers that already hold both (restore). Do not call it from a new external path without that guarantee.
 - **Adding a cleanup/normalization pass after `toml::to_string_pretty` silently corrupts user data.** The serializer already picks correct quoting and escaping for tabs, trailing whitespace, and CRLF.

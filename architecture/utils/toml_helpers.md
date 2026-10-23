@@ -203,8 +203,6 @@ instead of silently available.
 
 - **The helpers run on the load path only.** The save path serializes with
   `toml::to_string_pretty` and does **not** post-process the result.
-- **`write_schema_version` must use `toml::Table`, not `toml::Value`**, so
-  array-of-tables survives (see [persistence.md](../persistence.md)).
 - **Multi-line regions (`"""…"""` and `'''…'''`) are never rewritten.**
 - **Only `\<` and `\>` trigger the repair.** A string with no illegal escape
   is copied verbatim, so a legal escape such as `\n` is left exactly as it is.

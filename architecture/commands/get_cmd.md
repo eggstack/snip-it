@@ -4,7 +4,7 @@
 
 ## Overview
 
-`src/commands/get_cmd.rs` (433 lines) retrieves snippets
+`src/commands/get_cmd.rs` (627 lines) retrieves snippets
 deterministically — no TUI, no execution, no clipboard. It resolves
 through the side-effect-free `resolve_selector_readonly` (legacy
 single-file checkouts read in place, never migrated) and renders one
@@ -57,13 +57,13 @@ with `schema: 1`.
 4. `resolve_selector_readonly(&selector)` (`get_cmd.rs:168`) → `NotFound →
    NotFound`; `Ambiguous(ids)` → stderr list + `Ambiguous` (JSON mode stays
    silent); `One(m)` / `Many` → `output_match` each, then `Success`
-   (`get_cmd.rs:170-195`).
-5. `output_match` (`get_cmd.rs:198`): JSON → `GetJsonOutput` with
+   (`get_cmd.rs:170-212`).
+5. `output_match` (`get_cmd.rs:236`): JSON → `GetJsonOutput` with
    `expanded` populated only when the command has variables
-   (`get_cmd.rs:206-230`); field/raw/expanded/default per the mode table
-   (`get_cmd.rs:232-252`). `raw` and `field` write bytes with no trailing
-   newline (`get_cmd.rs:254-262`); others `println!` (`get_cmd.rs:264`).
-6. `expand_without_prompt` (`get_cmd.rs:427`): explicit assignments win,
+   (`get_cmd.rs:215-234`); field/raw/expanded/default per the mode table
+   (`get_cmd.rs:256-276`). `raw` and `field` write bytes with no trailing
+   newline (`get_cmd.rs:279-286`); others `println!` (`get_cmd.rs:288`).
+6. `expand_without_prompt` (`get_cmd.rs:442`): explicit assignments win,
    then `<name=default>` defaults and choice fallbacks; unassigned required
    `<name>` tokens stay verbatim (never a bare-name substitution). The
    expansion is a **single left-to-right pass over the original command**:
@@ -74,17 +74,17 @@ with `schema: 1`.
 
 ## Read-only guarantee
 
-`resolve_selector_readonly` (`src/selector.rs:645`) consumes
-`library::readonly_library_sources` (`src/selector.rs:651`), which performs
+`resolve_selector_readonly` (`src/selector.rs:678`) consumes
+`library::readonly_library_sources` (`src/selector.rs:684`), which performs
 no migration and creates no files or directories. It never calls
 `ensure_library_mode()` — contrast `resolve_selector`
-(`src/selector.rs:703`), which does (`src/selector.rs:705`) and is used
+(`src/selector.rs:736`), which does (`src/selector.rs:738`) and is used
 only by the exact-selector `run`/`clip`/`edit` paths.
 
 `get` never calls `gate_mutation_on_interrupted_transactions()`; it takes
 no lock and never saves.
 
-`src/main.rs:933` classifies `Commands::Get(_)` under
+`src/main.rs:950` classifies `Commands::Get(_)` under
 `StartupRecoveryPolicy::SuppressReadOnly` + `StartupServices::Minimal`, so
 startup recovery is suppressed and no network service is started.
 
@@ -92,28 +92,54 @@ startup recovery is suppressed and no network service is started.
 
 `--library all` is supported by `get`. The literal `"all"` is mapped by
 `LibraryScope::from_filter_arg` (`src/selector.rs:65`) inside
-`exact_selector` (`src/selector.rs:608`) — the keyword owner for the
+`exact_selector` (`src/selector.rs:641`) — the keyword owner for the
 selector paths — and `resolve_selector_readonly` then hands the same
 literal to `readonly_library_sources`
-(`src/library/manager.rs:291`), so it means the same thing as on
+(`src/library/manager.rs:295-336`), so it means the same thing as on
 `snp list`, exact-mode `run`/`clip`/`edit`, and MCP.
 
 Resolution semantics of `resolve_selector_readonly`
-(`src/selector.rs:645-696`):
+(`src/selector.rs:678-729`):
 
 | `--library` | Result |
 |-------------|--------|
-| absent (`Primary`) | primary library; if no visible source, `runtime_error("No primary library")` (`src/selector.rs:655-660`) |
-| `all` (`AllLibraries`) | every visible library; with none visible → `NotFound` (`src/selector.rs:661`) |
-| a name (`Named`) | that named library; unknown name → `library_not_found`; no visible libraries → `NotFound` (`src/selector.rs:662-666`) |
+| absent (`Primary`) | primary library; if no visible source, `runtime_error("No primary library")` (`src/selector.rs:689-692`) |
+| `all` (`AllLibraries`) | every visible library; with none visible → `NotFound` (`src/selector.rs:694`) |
+| a name (`Named`) | that named library; unknown name → `library_not_found`; no visible libraries → `NotFound` (`src/selector.rs:698`) |
 
 With more than one source, matches are collected per library under
 `ResolutionPolicy::All` and then aggregated with the caller's real policy
-(`src/selector.rs:676-695`).
+(`src/selector.rs:709-728`).
 
 A library actually *named* `all` can no longer be created:
 `validate_library_name` rejects the reserved name
-(`src/library/model.rs:213-223`).
+(`src/library/model.rs:247-252`).
+
+## Search semantics
+
+`get --query` goes through the canonical match primitive
+`selector::score_fuzzy_matches` (`src/selector.rs:209`) — the same one
+`snp list --filter` and MCP `snippets_search` call.
+
+- **An empty query is "no filter."** `snp get --query ""` returns **every
+  non-deleted snippet in scope**, with no scores — including snippets whose
+  searchable text is empty (no description, command, tags, or output). A
+  non-empty query matches the `searchable_text` projection only: a snippet
+  with an empty projection never matches, and deleted snippets never match
+  any query.
+- **`get` has no output/notes opt-in.** There is no `--search-output` flag
+  on this surface, so `output`/notes never participate in `get --query`
+  matching — unlike `snp list --search-output` and MCP `search_output:
+  true`, which opt `SearchFields::with_output()` in. `get` is hard-wired to
+  `SearchFields::fuzzy_default()` (description + command + tags) at
+  `src/selector.rs:462`.
+- **Cross-library order is library → description → id.** With
+  `--library all`, `get` resolves per library and then aggregates through
+  `selector::finish_aggregate` (`src/selector.rs:591-626`), so the result is
+  ordered by library name, then description, then snippet ID — the *selector
+  family* order. `snp list --library all --filter` uses the other order
+  family (global relevance over the merged set) by design; within a single
+  library the two orders coincide.
 
 ## Mutation vs read-only
 
@@ -128,17 +154,23 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 ## Error / exit mapping
 
 - `NotFound` → exit 3; `Ambiguous` → exit 5; success → exit 0
-  (`CliOutcome`, `src/outcome.rs:50-66`).
+  (`CliOutcome`, `src/outcome.rs:18-42`).
 - Usage errors (no selector, conflicting modes, bad `--var`) →
   `runtime_error` (exit 1/2 family).
-- JSON serialization failure → `runtime_error` (`get_cmd.rs:224-227`).
-- `src/main.rs:879-894` returns the `CliOutcome` directly.
+- JSON serialization failure → `runtime_error` (`get_cmd.rs:248-251`).
+- `src/main.rs:893-908` returns the `CliOutcome` directly.
 
 ## Key invariants
 
 - Search parity: description + command always searchable, tags by
   default, output/notes only with opt-in (`list --search-output`,
   MCP `search_output`); folders/favorite/sync metadata never searchable.
+  All three surfaces share `selector::score_fuzzy_matches`, so they cannot
+  drift on *which* snippets a query selects.
+- An empty `--query` is **"no filter"**, not "match nothing": it returns
+  every non-deleted snippet in scope, with no scores.
+- Cross-library results (`--library all`) are ordered by library name →
+  description → snippet ID.
 - ID match is case-sensitive; description/command are case-insensitive
   — shared with run/clip/edit/MCP via `exact_selector`.
 - `--raw` is byte-exact for scripting (no trailing newline); `--field`
@@ -157,10 +189,16 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - `--field` and `--raw` suppress the trailing newline; `--json` and
   `--expanded` do not. Scripts that compare bytes must pick the right mode.
 - `--expanded` and `--json` both expand with the *non-interactive*
-  `expand_without_prompt` routine (`get_cmd.rs:279`), never
-  `expand_command` (the interactive path in `src/utils/variables.rs:644`);
+  `expand_without_prompt` routine (`get_cmd.rs:442`), never
+  `expand_command` (the interactive path in `src/utils/variables.rs:661`);
   required variables with no assignment stay verbatim in the `--expanded`
   output but would prompt in the interactive path.
+- `--query ""` is **"no filter"**, not "match nothing" — it returns every
+  non-deleted snippet in scope (with no scores), exactly as `snp list` with
+  no filter returns every live snippet.
+- `get --query` never searches `output`/notes — there is no
+  `--search-output` on this surface, so `output`/notes cannot widen the
+  match set here the way they can on `snp list --search-output`.
 
 ## Key Files
 
@@ -173,12 +211,12 @@ None. No `notify_mutation`, no runtime, no explicit sync.
 - `src/library/manager.rs` — `readonly_library_sources`, the read-only
   scope resolver.
 - `src/outcome.rs` — `CliOutcome` and the exit-code table.
-- `src/main.rs` — dispatch (`src/main.rs:879-894`).
+- `src/main.rs` — dispatch (`src/main.rs:893-908`).
 
 ## File / line references
 
 - `GetArgs`: `src/commands/get_cmd.rs:16`; `GetField`: `:55`
-- `GetJsonOutput`: `:68`; `run`: `:96`; `output_match`: `:198`
-- `expand_without_prompt`: `:279`; tests: `:332-433`
-- Selector: `src/selector.rs` (`exact_selector` `:579`,
-  `resolve_selector_readonly` `:623`)
+- `GetJsonOutput`: `:68`; `run`: `:96`; `output_match`: `:236`
+- `expand_without_prompt`: `:442`; tests: `:498-627`
+- Selector: `src/selector.rs` (`exact_selector` `:634`,
+  `resolve_selector_readonly` `:678`)

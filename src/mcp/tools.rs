@@ -10,13 +10,11 @@ use crate::error::{SnipError, SnipResult};
 use crate::library::{ResolvedLibrarySource, Snippet, readonly_library_sources};
 use crate::selector::{
     ResolutionPolicy, SearchFields, SelectionResult, SnippetSelector, matches_required_tags,
-    resolve_selector_readonly, searchable_text,
+    resolve_selector_readonly,
 };
 use crate::sort::{SnippetSort, SortOptions, rank_snippets};
-use fuzzy_matcher::FuzzyMatcher;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 1_000;
@@ -74,43 +72,35 @@ pub fn list(arguments: Option<&Value>) -> SnipResult<Value> {
 pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
     let args = parse_arguments::<SearchArguments>(arguments)?;
     let limit = bounded_limit(args.limit)?;
-    let snippets = load_snippets(args.library.as_deref())?;
+    let loaded = load_snippets(args.library.as_deref())?;
     let required_tags = args.tags.unwrap_or_default();
-    let fields = SearchFields {
-        include_tags: true,
-        include_output: args.search_output.unwrap_or(false),
+    // Same named-constructor convention as `snp list --search-output`:
+    // `search_output` opts output/notes in, everything else is the default.
+    let fields = if args.search_output.unwrap_or(false) {
+        SearchFields::with_output()
+    } else {
+        SearchFields::fuzzy_default()
     };
 
-    let matcher = crate::selector::shared_fuzzy_matcher();
-    let mut source = Vec::new();
-    let mut scores = HashMap::new();
-    for entry in snippets {
-        if entry.snippet.deleted {
-            continue;
-        }
-        if !matches_required_tags(&entry.snippet, &required_tags) {
-            continue;
-        }
-        let index = source.len();
-        if args.query.is_empty() {
-            source.push(entry);
-            continue;
-        }
-        let display = searchable_text(&entry.snippet, fields);
-        if display.is_empty() {
-            continue;
-        }
-        if let Some(score) = matcher.fuzzy_match(&display, &args.query) {
-            scores.insert(index, score);
-            source.push(entry);
-        }
+    // The shared match primitive, the same one `snp get --query` and
+    // `snp list --filter` use. Routing through it is what makes the three
+    // surfaces agree on *which* snippets a query selects — including the
+    // canonical empty-query rule (an empty query is "no filter" and matches
+    // every non-deleted snippet).
+    let entries: Vec<Snippet> = loaded.iter().map(|entry| entry.snippet.clone()).collect();
+    let (mut matched, scores) = crate::selector::score_fuzzy_matches(&entries, &args.query, fields);
+
+    // The explicit tag filter is an MCP-only narrowing: it intersects with
+    // the query matches. Applying it after the shared match yields the same
+    // set as applying it before, because both are conjunctive filters over
+    // the same library scope.
+    if !required_tags.is_empty() {
+        matched.retain(|index| matches_required_tags(&entries[*index], &required_tags));
     }
 
-    let snippets_only: Vec<Snippet> = source.iter().map(|entry| entry.snippet.clone()).collect();
-    let indices: Vec<usize> = (0..snippets_only.len()).collect();
     let ranked = rank_snippets(
-        &indices,
-        &snippets_only,
+        &matched,
+        &entries,
         Some(&scores),
         None,
         &SortOptions {
@@ -121,7 +111,7 @@ pub fn search(arguments: Option<&Value>) -> SnipResult<Value> {
     let results = ranked
         .into_iter()
         .take(limit)
-        .map(|index| snippet_json(&source[index]))
+        .map(|index| snippet_json(&loaded[index]))
         .collect::<Vec<_>>();
     Ok(json!({ "snippets": results }))
 }

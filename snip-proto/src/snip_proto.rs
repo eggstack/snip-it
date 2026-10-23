@@ -45,8 +45,9 @@ pub struct SyncRequest {
     /// Deprecated compatibility field. Prefer authorization metadata.
     #[prost(string, tag = "1")]
     pub api_key: ::prost::alloc::string::String,
-    /// Local records to merge. The server uses each record's own timestamp for
-    /// conflict resolution; `last_sync_timestamp` only selects returned data.
+    /// Local records to merge. Every local record is considered for insertion
+    /// or conflict resolution; last_sync_timestamp only selects the page of
+    /// server rows returned in the response.
     #[prost(message, repeated, tag = "2")]
     pub local_snippets: ::prost::alloc::vec::Vec<Snippet>,
     /// Unix timestamp returned by the previous completed sync.
@@ -61,6 +62,16 @@ pub struct SyncRequest {
     /// Number of records to skip for pagination.
     #[prost(int32, tag = "6")]
     pub offset: i32,
+    /// Server-assigned per-library write sequence returned by the previous
+    /// completed sync. Zero means "no sequence cursor": the server then
+    /// selects with the timestamp cursor (`last_sync_timestamp` / the
+    /// server-assigned `visible_at` position) exactly as it does today. A
+    /// non-zero value puts the request on the sequence path, where the server
+    /// selects the rows whose write sequence is greater than or equal to this
+    /// value. The sequence is assigned by the server and is never
+    /// client-supplied.
+    #[prost(int64, tag = "7")]
+    pub last_sync_sequence: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncResponse {
@@ -80,6 +91,13 @@ pub struct SyncResponse {
     pub has_more: bool,
     #[prost(int32, tag = "8")]
     pub total_count: i32,
+    /// The library's write-sequence watermark. Non-zero only when the request
+    /// carried a non-zero `last_sync_sequence`; zero otherwise. A client that
+    /// receives a non-zero value advances its sequence cursor; a client that
+    /// receives zero keeps using the timestamp cursor, which is the path taken
+    /// against a server that does not serve the sequence cursor.
+    #[prost(int64, tag = "9")]
+    pub server_sequence: i64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Snippet {
@@ -355,7 +373,14 @@ pub mod snippet_sync_client {
             self
         }
         /// Get non-deleted snippets from the selected library. Results are filtered
-        /// to records with updated_at strictly greater than since.
+        /// to the records the server delivers at or after the cursor `since`
+        /// (>=). The cursor is server-assigned and monotone: the server tracks it
+        /// per row, so a record pushed with an older updated_at (a device whose
+        /// clock is behind) is still delivered. The server uses >= deliberately:
+        /// the cursor has second granularity, so a strict > would skip rows
+        /// written in the same second as the previous cursor.
+        /// Re-delivering boundary rows is safe — merges are idempotent by snippet
+        /// identity.
         pub async fn get_snippets(
             &mut self,
             request: impl tonic::IntoRequest<super::GetSnippetsRequest>,
@@ -639,7 +664,14 @@ pub mod snippet_sync_server {
     #[async_trait]
     pub trait SnippetSync: std::marker::Send + std::marker::Sync + 'static {
         /// Get non-deleted snippets from the selected library. Results are filtered
-        /// to records with updated_at strictly greater than since.
+        /// to the records the server delivers at or after the cursor `since`
+        /// (>=). The cursor is server-assigned and monotone: the server tracks it
+        /// per row, so a record pushed with an older updated_at (a device whose
+        /// clock is behind) is still delivered. The server uses >= deliberately:
+        /// the cursor has second granularity, so a strict > would skip rows
+        /// written in the same second as the previous cursor.
+        /// Re-delivering boundary rows is safe — merges are idempotent by snippet
+        /// identity.
         async fn get_snippets(
             &self,
             request: tonic::Request<super::GetSnippetsRequest>,

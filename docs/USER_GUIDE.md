@@ -868,6 +868,20 @@ It exits 3 when nothing matches and 5 when a query matches more than one
 snippet, so a script can branch on the result instead of parsing stderr. The
 full table is [EXIT_CODES.md](EXIT_CODES.md).
 
+### Scripting with `snp delete`
+
+`snp delete` tombstones a snippet without a TUI and without a confirmation
+prompt, producing exactly the state the TUI's `d` key produces:
+
+```bash
+snp delete --id "$SNIPPET_ID"       # tombstone one snippet
+snp delete --query 'push a branch'  # fuzzy match; 5 if it is ambiguous
+```
+
+It exits 0 when the snippet was deleted, 3 when nothing matched, 5 when the
+selector matched more than one snippet, and 9 when the snippet was already
+deleted. Nothing is deleted unless exactly one snippet matches.
+
 `snp cron` prints a cron entry and offers to copy it to the clipboard:
 
 ```bash

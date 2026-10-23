@@ -5,6 +5,7 @@ use argon2::{
 use base64::Engine;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use sqlx::AssertSqlSafe;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
@@ -84,6 +85,35 @@ pub struct SnippetPage {
     pub total: i32,
 }
 
+/// The cursor the delta filter selects on.
+///
+/// The server keeps two cursors side by side. The **timestamp cursor**
+/// (`visible_at`) is second-granular and stays the filter for clients that
+/// send no sequence cursor. The **write-sequence cursor** (`sequence`) is
+/// server-assigned, strictly increasing per library, and exact. The request
+/// picks the form: a non-zero sequence cursor means the sequence form, and
+/// anything else falls back to the timestamp form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeltaCursor {
+    /// The timestamp cursor: `visible_at >= value`.
+    Timestamp(i64),
+    /// The write-sequence cursor: `sequence >= value`.
+    Sequence(i64),
+}
+
+impl DeltaCursor {
+    /// The SQL predicate and its bound value for this cursor form.
+    ///
+    /// The predicate is a literal, never caller input, so the assembled
+    /// statement stays free of injected values.
+    fn predicate(self) -> (&'static str, i64) {
+        match self {
+            DeltaCursor::Timestamp(value) => ("AND visible_at >= ?", value),
+            DeltaCursor::Sequence(value) => ("AND sequence >= ?", value),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
@@ -152,32 +182,35 @@ type SnippetRow = (String, String, String, String, i64, i64, String, i32, i32);
 
 /// Count the rows of the filtered range.
 ///
-/// `>=` (not `>`) is required for delta correctness: timestamps have second
-/// granularity and the watermark returned to the client is `MAX(visible_at)`.
-/// With `>`, a row written in the same second as the previous sync's
-/// watermark would be skipped by every future incremental sync.
-/// Re-delivering boundary rows is safe — merges are idempotent by snippet
-/// identity.
+/// `>=` (not `>`) is required for delta correctness: the watermark returned
+/// to the client is the maximum cursor value of the library, so a strict `>`
+/// would skip the boundary row itself. Re-delivering boundary rows is safe —
+/// merges are idempotent by snippet identity.
 async fn count_snippets(
     conn: &mut sqlx::SqliteConnection,
     user_id: &str,
     library_id: &str,
-    since: i64,
+    cursor: DeltaCursor,
     include_deleted: bool,
 ) -> DbResult<i32> {
-    let total: (i64,) = sqlx::query_as(
+    let (predicate, cursor_value) = cursor.predicate();
+    // The only dynamic part of the statement is `predicate`, which is a
+    // fixed literal chosen by the cursor form — no caller input reaches the
+    // SQL text, and every value is bound as a parameter.
+    let sql = AssertSqlSafe(format!(
         "SELECT COUNT(*) FROM snippets \
          WHERE user_id = ? \
            AND library_id = ? \
-           AND visible_at >= ? \
-           AND (? OR deleted = 0)",
-    )
-    .bind(user_id)
-    .bind(library_id)
-    .bind(since)
-    .bind(include_deleted)
-    .fetch_one(&mut *conn)
-    .await?;
+           {predicate} \
+           AND (? OR deleted = 0)"
+    ));
+    let total: (i64,) = sqlx::query_as(sql)
+        .bind(user_id)
+        .bind(library_id)
+        .bind(cursor_value)
+        .bind(include_deleted)
+        .fetch_one(&mut *conn)
+        .await?;
 
     Ok(saturating_i32(total.0))
 }
@@ -187,29 +220,32 @@ async fn fetch_snippets(
     conn: &mut sqlx::SqliteConnection,
     user_id: &str,
     library_id: &str,
-    since: i64,
+    cursor: DeltaCursor,
     limit: i32,
     offset: i32,
     include_deleted: bool,
 ) -> DbResult<Vec<Snippet>> {
-    let rows: Vec<SnippetRow> = sqlx::query_as(
+    let (predicate, cursor_value) = cursor.predicate();
+    // See `count_snippets`: the only dynamic part is a fixed literal.
+    let sql = AssertSqlSafe(format!(
         "SELECT id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted \
          FROM snippets \
          WHERE user_id = ? \
            AND library_id = ? \
-           AND visible_at >= ? \
+           {predicate} \
            AND (? OR deleted = 0) \
          ORDER BY updated_at DESC, id DESC \
-         LIMIT ? OFFSET ?",
-    )
-    .bind(user_id)
-    .bind(library_id)
-    .bind(since)
-    .bind(include_deleted)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&mut *conn)
-    .await?;
+         LIMIT ? OFFSET ?"
+    ));
+    let rows: Vec<SnippetRow> = sqlx::query_as(sql)
+        .bind(user_id)
+        .bind(library_id)
+        .bind(cursor_value)
+        .bind(include_deleted)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&mut *conn)
+        .await?;
 
     rows.into_iter()
         .map(
@@ -248,6 +284,34 @@ async fn fetch_snippets(
 }
 
 const MIGRATION_BATCH_SIZE: i64 = 100;
+
+/// Bump the library's write-sequence counter and return the new value.
+///
+/// The counter row is created on first use. The bump runs inside the
+/// caller's transaction, so it is committed with the row write or rolled
+/// back with it: a failed write never consumes a sequence value, and a
+/// consumed value is never handed out twice.
+async fn bump_library_sequence(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    library_id: &str,
+) -> DbResult<i64> {
+    sqlx::query(
+        "INSERT INTO library_sequences (library_id, sequence) VALUES (?, 0) \
+         ON CONFLICT(library_id) DO NOTHING",
+    )
+    .bind(library_id)
+    .execute(&mut **tx)
+    .await?;
+
+    let (sequence,): (i64,) = sqlx::query_as(
+        "UPDATE library_sequences SET sequence = sequence + 1 WHERE library_id = ? RETURNING sequence",
+    )
+    .bind(library_id)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(sequence)
+}
 
 impl Database {
     pub async fn connect(url: &str, max_connections: u32) -> DbResult<Self> {
@@ -348,8 +412,24 @@ impl Database {
                 deleted INTEGER NOT NULL DEFAULT 0,
                 encrypted INTEGER NOT NULL DEFAULT 0,
                 visible_at INTEGER NOT NULL DEFAULT 0,
+                sequence INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (library_id) REFERENCES libraries(id)
+            )
+            ",
+        )
+        .execute(&pool)
+        .await?;
+
+        // The per-library write-sequence counter. One row per library holds
+        // the last sequence the server handed out; the next write takes the
+        // next value. The counter lives in the database, so a server restart
+        // does not reset it.
+        sqlx::query(
+            "
+            CREATE TABLE IF NOT EXISTS library_sequences (
+                library_id TEXT PRIMARY KEY,
+                sequence INTEGER NOT NULL DEFAULT 0
             )
             ",
         )
@@ -383,7 +463,16 @@ impl Database {
             .execute(&pool)
             .await?;
 
-        Ok(Self { pool })
+        // The write-sequence cursor owns its column, its counter, and its
+        // indexes together: the unique index cannot be created before the
+        // column exists, and the column cannot be backfilled before the
+        // counter table exists. The migration runs inside `connect` so the
+        // server never serves a database whose sequence cursor is half
+        // installed.
+        let db = Self { pool };
+        db.migrate_snippet_sequence().await?;
+
+        Ok(db)
     }
 
     pub async fn ping(&self) -> DbResult<()> {
@@ -553,17 +642,31 @@ impl Database {
             ));
         }
 
-        sqlx::query(
-            "UPDATE snippets
-             SET deleted = 1, updated_at = MAX(updated_at, ?), visible_at = MAX(visible_at, ?)
-             WHERE library_id = ? AND user_id = ? AND deleted = 0",
+        // Tombstone the rows. Every tombstoned row takes a fresh write
+        // sequence, so a client that syncs on the sequence cursor sees the
+        // deletion instead of keeping the row it already had.
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM snippets WHERE library_id = ? AND user_id = ? AND deleted = 0",
         )
-        .bind(now)
-        .bind(now)
         .bind(library_id)
         .bind(user_id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
+
+        for (id,) in rows {
+            let sequence = bump_library_sequence(&mut tx, library_id).await?;
+            sqlx::query(
+                "UPDATE snippets
+                 SET deleted = 1, updated_at = MAX(updated_at, ?), visible_at = MAX(visible_at, ?), sequence = ?
+                 WHERE id = ?",
+            )
+            .bind(now)
+            .bind(now)
+            .bind(sequence)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(())
@@ -606,8 +709,17 @@ impl Database {
         offset: i32,
         include_deleted: bool,
     ) -> DbResult<(Vec<Snippet>, i32)> {
+        // The read-only `GetSnippets` RPC carries a timestamp cursor only, so
+        // it always filters on the timestamp cursor.
         let page = self
-            .get_snippets_page(user_id, library_id, since, limit, offset, include_deleted)
+            .get_snippets_page(
+                user_id,
+                library_id,
+                DeltaCursor::Timestamp(since),
+                limit,
+                offset,
+                include_deleted,
+            )
             .await?;
         Ok((page.snippets, page.total))
     }
@@ -626,7 +738,7 @@ impl Database {
         &self,
         user_id: &str,
         library_id: &str,
-        since: i64,
+        cursor: DeltaCursor,
         limit: i32,
         offset: i32,
         include_deleted: bool,
@@ -638,7 +750,7 @@ impl Database {
             &mut tx,
             user_id,
             library_id,
-            since,
+            cursor,
             page_limit.saturating_add(1),
             offset,
             include_deleted,
@@ -651,7 +763,7 @@ impl Database {
         let total = if !has_more && (!snippets.is_empty() || offset == 0) {
             offset.saturating_add(snippets.len() as i32)
         } else {
-            count_snippets(&mut tx, user_id, library_id, since, include_deleted).await?
+            count_snippets(&mut tx, user_id, library_id, cursor, include_deleted).await?
         };
 
         tx.commit().await?;
@@ -690,13 +802,22 @@ impl Database {
         let deleted = snippet.deleted as i32;
         let encrypted = snippet.encrypted as i32;
 
-        // The delta cursor is the library's `visible_at` watermark, not the
-        // client-chosen `updated_at`: a row stored *below* the watermark would
-        // never be delivered to any client, because the delta pull filters on
-        // `visible_at >= since`. The stored `updated_at` keeps the client's
-        // logical modification time verbatim — that is what the server's
-        // last-write-wins rule and the client's merge order compare — while
-        // `visible_at` carries the cursor position the row is delivered at.
+        // The server assigns the write sequence. The counter is bumped
+        // **first** so this transaction takes SQLite's write lock before it
+        // reads the watermark: two concurrent writes to one library serialize
+        // here and receive distinct sequence values instead of both reading
+        // the same counter. The bump shares the transaction with the row
+        // write, so a failed write consumes no sequence value.
+        let sequence = bump_library_sequence(tx, library_id).await?;
+
+        // The timestamp delta cursor is the library's `visible_at` watermark,
+        // not the client-chosen `updated_at`: a row stored *below* the
+        // watermark would never be delivered to any client, because the
+        // timestamp delta pull filters on `visible_at >= since`. The stored
+        // `updated_at` keeps the client's logical modification time verbatim
+        // — that is what the server's last-write-wins rule and the client's
+        // merge order compare — while `visible_at` carries the cursor position
+        // the row is delivered at.
         let (watermark,): (i64,) = sqlx::query_as(
             "SELECT COALESCE(MAX(visible_at), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
         )
@@ -714,11 +835,11 @@ impl Database {
         // winner that mirrors the client's fingerprint tie-break.
         //
         // The conflict comparison uses the client's raw `updated_at`, so the
-        // rule is unchanged by the cursor bookkeeping; only `visible_at`
-        // moves, and it never moves backwards.
+        // rule is unchanged by the cursor bookkeeping; only `visible_at` and
+        // `sequence` move, and neither moves backwards.
         let result = sqlx::query(
-            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted, visible_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted, visible_at, sequence)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
                  description = excluded.description,
                  command = excluded.command,
@@ -727,7 +848,8 @@ impl Database {
                  device_id = excluded.device_id,
                  deleted = excluded.deleted,
                  encrypted = excluded.encrypted,
-                 visible_at = MAX(snippets.visible_at, excluded.visible_at)
+                 visible_at = MAX(snippets.visible_at, excluded.visible_at),
+                 sequence = excluded.sequence
               WHERE excluded.user_id = snippets.user_id AND excluded.library_id = snippets.library_id \
             AND (excluded.updated_at > snippets.updated_at \
                  OR (excluded.updated_at = snippets.updated_at AND excluded.device_id > snippets.device_id) \
@@ -746,6 +868,7 @@ impl Database {
         .bind(deleted)
         .bind(encrypted)
         .bind(visible_at)
+        .bind(sequence)
         .execute(&mut **tx)
         .await?;
 
@@ -786,6 +909,111 @@ impl Database {
         .await?;
 
         Ok(timestamp)
+    }
+
+    /// The library's write-sequence watermark.
+    ///
+    /// This is the cursor the server hands back to a client that syncs on the
+    /// sequence path. It is the highest sequence any row of the library
+    /// holds, so it never moves backwards and never skips a row.
+    pub async fn get_latest_sequence(&self, user_id: &str, library_id: &str) -> DbResult<i64> {
+        let (sequence,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(sequence), 0) FROM snippets WHERE user_id = ? AND library_id = ?",
+        )
+        .bind(user_id)
+        .bind(library_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(sequence)
+    }
+
+    /// Add the write-sequence cursor: its column, its per-library counter,
+    /// and the unique index that turns a counter race into a loud failure.
+    ///
+    /// The backfill gives every row a sequence that preserves the
+    /// pre-migration `updated_at` ordering (ranked inside the row's library,
+    /// ties broken by the row id), so a migrated database selects the same
+    /// rows as an unmigrated one for the first sync and every client's stored
+    /// cursor stays valid. The counter is then seeded from the highest
+    /// sequence of each library, so the next write can never collide with a
+    /// backfilled row.
+    ///
+    /// Idempotent: it is safe to run on every start.
+    pub async fn migrate_snippet_sequence(&self) -> DbResult<bool> {
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('snippets')")
+                .fetch_all(&self.pool)
+                .await?;
+
+        let migrated = if columns.iter().any(|name| name == "sequence") {
+            false
+        } else {
+            sqlx::query("ALTER TABLE snippets ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+            // The rank of the row inside its library, ordered by the
+            // pre-migration `updated_at` and then by the row id. The
+            // backfilled ordering therefore preserves the pre-migration
+            // ordering, and every row of a library gets a distinct sequence.
+            sqlx::query(
+                "WITH ranked AS (
+                     SELECT id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY user_id, library_id
+                                ORDER BY updated_at ASC, id ASC
+                            ) AS rn
+                     FROM snippets
+                 )
+                 UPDATE snippets
+                 SET sequence = (SELECT rn FROM ranked WHERE ranked.id = snippets.id)",
+            )
+            .execute(&self.pool)
+            .await?;
+            true
+        };
+
+        // The counter must never hand out a value a row already holds, so it
+        // is seeded from the highest sequence of each library. The seed runs
+        // through a subquery with a `WHERE` clause: SQLite needs one to tell
+        // the upsert's `ON CONFLICT` apart from a join's `ON`.
+        sqlx::query(
+            "INSERT INTO library_sequences (library_id, sequence)
+             SELECT library_id, highest
+             FROM (
+                 SELECT library_id, MAX(sequence) AS highest
+                 FROM snippets
+                 GROUP BY library_id
+             ) WHERE true
+             ON CONFLICT(library_id) DO UPDATE
+                SET sequence = MAX(library_sequences.sequence, excluded.sequence)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // The unique index is the enforcement mechanism for the concurrent
+        // counter race: two rows sharing a (library_id, sequence) are
+        // rejected loudly instead of silently making one of them invisible.
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_snippets_library_sequence \
+             ON snippets(library_id, sequence)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // The range index for the sequence form of the delta filter.
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_snippets_user_library_sequence \
+             ON snippets(user_id, library_id, sequence, deleted)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        if migrated {
+            tracing::info!("Migrated snippets table: added the sequence write-cursor column");
+        }
+
+        Ok(migrated)
     }
 
     /// Add the `visible_at` cursor column to an existing database.
@@ -1677,5 +1905,385 @@ mod tests {
         assert_eq!(snippets.len(), 1);
         assert!(snippets[0].deleted);
         assert_eq!(snippets[0].updated_at, 200);
+    }
+
+    // ---------------------------------------------------------------------
+    // Write-sequence cursor
+    // ---------------------------------------------------------------------
+
+    fn sequence_snippet(id: &str, updated_at: i64) -> Snippet {
+        Snippet {
+            id: id.to_string(),
+            description: "Test".to_string(),
+            command: "echo".to_string(),
+            tags: vec![],
+            created_at: updated_at,
+            updated_at,
+            device_id: "d".to_string(),
+            deleted: false,
+            encrypted: false,
+        }
+    }
+
+    async fn snippet_sequences(db: &Database, library_id: &str) -> Vec<(String, i64)> {
+        sqlx::query_as("SELECT id, sequence FROM snippets WHERE library_id = ? ORDER BY sequence")
+            .bind(library_id)
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// The sequence watermark is the highest sequence the library holds.
+    #[tokio::test]
+    async fn test_sequence_watermark_is_the_library_maximum() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 0);
+
+        db.upsert_snippet(&sequence_snippet("a", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("b", 200), &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 2);
+        assert_eq!(snippet_sequences(&db, &lib_id).await.len(), 2);
+    }
+
+    /// Every write takes a sequence strictly greater than the library's
+    /// current maximum, whatever timestamp the client pushed — including a
+    /// push whose timestamp is older than the rows already stored.
+    #[tokio::test]
+    async fn test_write_assigns_a_sequence_above_the_library_maximum() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        db.upsert_snippet(&sequence_snippet("a", 300), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("b", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("c", 200), &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let rows = snippet_sequences(&db, &lib_id).await;
+        let sequences: Vec<i64> = rows.iter().map(|(_, sequence)| *sequence).collect();
+        assert_eq!(sequences, vec![1, 2, 3]);
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 3);
+    }
+
+    /// Two concurrent pushes to one library take distinct sequence values.
+    ///
+    /// The counter is bumped inside the write transaction, so the two
+    /// transactions serialize on it; the unique index on
+    /// `(library_id, sequence)` is the enforcement that turns a shared
+    /// value into a loud failure instead of a silent one.
+    #[tokio::test]
+    async fn test_concurrent_pushes_to_one_library_get_distinct_sequences() {
+        // A file-backed database: the in-memory database shares one cache
+        // across the pool, which serializes writes with a table lock
+        // instead of the write lock a real deployment uses.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("concurrent.sqlite");
+        let db = Database::connect(db_path.to_str().unwrap(), 5)
+            .await
+            .unwrap();
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let first_snippet = sequence_snippet("a", 100);
+        let second_snippet = sequence_snippet("b", 200);
+        let first = db.upsert_snippet(&first_snippet, &user_id, &lib_id);
+        let second = db.upsert_snippet(&second_snippet, &user_id, &lib_id);
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap();
+        second.unwrap();
+
+        let rows = snippet_sequences(&db, &lib_id).await;
+        assert_eq!(rows.len(), 2);
+        assert_ne!(
+            rows[0].1, rows[1].1,
+            "concurrent writes to one library must not share a sequence value"
+        );
+    }
+
+    /// A rolled-back write consumes no sequence value: the counter bump
+    /// shares the transaction with the row write.
+    #[tokio::test]
+    async fn test_rolled_back_write_does_not_consume_a_sequence_value() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let mut tx = db.pool().begin().await.unwrap();
+        db.upsert_snippet_in_tx(&mut tx, &sequence_snippet("a", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 0);
+        assert!(snippet_sequences(&db, &lib_id).await.is_empty());
+
+        // The next write takes the first sequence value.
+        db.upsert_snippet(&sequence_snippet("b", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 1);
+    }
+
+    /// The unique index is the enforcement of the counter race: two rows
+    /// that share a `(library_id, sequence)` are rejected loudly.
+    #[tokio::test]
+    async fn test_unique_index_rejects_a_shared_sequence_value() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        let insert = |id: &str, sequence: i64| {
+            sqlx::query(
+                "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted, visible_at, sequence)
+                 VALUES (?, ?, ?, 'd', 'echo', '[]', 1, 1, 'dev', 0, 0, 1, ?)",
+            )
+            .bind(id)
+            .bind(&user_id)
+            .bind(&lib_id)
+            .bind(sequence)
+        };
+
+        insert("a", 1).execute(db.pool()).await.unwrap();
+        let error = insert("b", 1).execute(db.pool()).await.unwrap_err();
+        assert!(
+            matches!(error, sqlx::Error::Database(_)),
+            "a shared sequence value must be rejected by the unique index, got {error:?}"
+        );
+    }
+
+    /// The migration backfills the sequence so that the backfilled ordering
+    /// preserves the pre-migration `updated_at` ordering, and seeds the
+    /// counter from the backfill so the next write cannot collide.
+    #[tokio::test]
+    async fn test_migrate_snippet_sequence_backfills_the_updated_at_ordering() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("legacy.sqlite");
+        let db = Database::connect(db_path.to_str().unwrap(), 1)
+            .await
+            .unwrap();
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        // Simulate a pre-migration database: no sequence column, no indexes.
+        sqlx::query("DROP INDEX IF EXISTS idx_snippets_library_sequence")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("DROP INDEX IF EXISTS idx_snippets_user_library_sequence")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE snippets DROP COLUMN sequence")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // Three legacy rows, inserted out of `updated_at` order.
+        for (id, updated_at) in [("c", 300_i64), ("a", 100), ("b", 200)] {
+            sqlx::query(
+                "INSERT INTO snippets (id, user_id, library_id, description, command, tags, created_at, updated_at, device_id, deleted, encrypted)
+                 VALUES (?, ?, ?, 'd', 'echo', '[]', ?, ?, 'dev', 0, 0)",
+            )
+            .bind(id)
+            .bind(&user_id)
+            .bind(&lib_id)
+            .bind(updated_at)
+            .bind(updated_at)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        assert!(db.migrate_snippet_sequence().await.unwrap());
+        // A second run is a no-op.
+        assert!(!db.migrate_snippet_sequence().await.unwrap());
+
+        let rows: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT id, updated_at, sequence FROM snippets ORDER BY sequence")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 3);
+        // The backfilled ordering preserves the pre-migration `updated_at`
+        // ordering.
+        assert_eq!(rows[0].0, "a");
+        assert_eq!(rows[1].0, "b");
+        assert_eq!(rows[2].0, "c");
+        assert!(rows[0].2 < rows[1].2 && rows[1].2 < rows[2].2);
+
+        // The counter is seeded from the backfill, so the next write takes a
+        // fresh value instead of colliding with a backfilled row.
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 3);
+        db.upsert_snippet(&sequence_snippet("d", 400), &user_id, &lib_id)
+            .await
+            .unwrap();
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 4);
+    }
+
+    /// A client that holds a sequence cursor receives exactly the rows
+    /// written after that sequence.
+    #[tokio::test]
+    async fn test_sequence_cursor_selects_the_rows_written_after_it() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        db.upsert_snippet(&sequence_snippet("a", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("b", 200), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("c", 300), &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let page = db
+            .get_snippets_page(&user_id, &lib_id, DeltaCursor::Sequence(2), 100, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 2);
+        let mut ids: Vec<&str> = page
+            .snippets
+            .iter()
+            .map(|snippet| snippet.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["b", "c"]);
+
+        // The cursor is inclusive: the boundary row is re-delivered, which
+        // is safe because merges are idempotent by snippet identity.
+        let page = db
+            .get_snippets_page(&user_id, &lib_id, DeltaCursor::Sequence(3), 100, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.snippets[0].id, "c");
+    }
+
+    /// An old client that sends no sequence cursor receives the rows the
+    /// timestamp filter would have selected.
+    #[tokio::test]
+    async fn test_timestamp_cursor_still_selects_the_timestamp_rows() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        db.upsert_snippet(&sequence_snippet("a", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("b", 200), &user_id, &lib_id)
+            .await
+            .unwrap();
+
+        let timestamp_page = db
+            .get_snippets_page(&user_id, &lib_id, DeltaCursor::Timestamp(0), 100, 0, true)
+            .await
+            .unwrap();
+        let sequence_page = db
+            .get_snippets_page(&user_id, &lib_id, DeltaCursor::Sequence(0), 100, 0, true)
+            .await
+            .unwrap();
+
+        assert_eq!(timestamp_page.total, 2);
+        assert_eq!(timestamp_page.total, sequence_page.total);
+        let mut timestamp_ids: Vec<&str> = timestamp_page
+            .snippets
+            .iter()
+            .map(|snippet| snippet.id.as_str())
+            .collect();
+        let mut sequence_ids: Vec<&str> = sequence_page
+            .snippets
+            .iter()
+            .map(|snippet| snippet.id.as_str())
+            .collect();
+        timestamp_ids.sort_unstable();
+        sequence_ids.sort_unstable();
+        assert_eq!(timestamp_ids, sequence_ids);
+    }
+
+    /// The delta filter stays scoped per user and per library: a sequence
+    /// cursor from one library must not select another library's rows, and
+    /// another user's rows are never selected.
+    #[tokio::test]
+    async fn test_sequence_cursor_is_scoped_to_its_library_and_user() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_a = db.get_default_library(&user_id).await.unwrap();
+        let lib_b = db.create_library(&user_id, "other").await.unwrap();
+
+        let other_user = db.create_user("other-key").await.unwrap();
+        let other_lib = db.get_default_library(&other_user).await.unwrap();
+
+        db.upsert_snippet(&sequence_snippet("a", 100), &user_id, &lib_a)
+            .await
+            .unwrap();
+        // Both libraries hold sequence value 1: the sequence space is
+        // per library.
+        db.upsert_snippet(&sequence_snippet("b", 100), &user_id, &lib_b)
+            .await
+            .unwrap();
+        db.upsert_snippet(&sequence_snippet("c", 100), &other_user, &other_lib)
+            .await
+            .unwrap();
+
+        let page = db
+            .get_snippets_page(&user_id, &lib_a, DeltaCursor::Sequence(1), 100, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.snippets[0].id, "a");
+
+        // Another user's library is never selected.
+        let page = db
+            .get_snippets_page(
+                &other_user,
+                &other_lib,
+                DeltaCursor::Sequence(1),
+                100,
+                0,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.snippets[0].id, "c");
+    }
+
+    /// A tombstone takes a fresh write sequence, so a client on the sequence
+    /// cursor sees the deletion.
+    #[tokio::test]
+    async fn test_delete_library_gives_the_tombstone_a_fresh_sequence() {
+        let db = setup_db().await;
+        let user_id = db.create_user("key").await.unwrap();
+        let lib_id = db.get_default_library(&user_id).await.unwrap();
+
+        db.upsert_snippet(&sequence_snippet("a", 100), &user_id, &lib_id)
+            .await
+            .unwrap();
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 1);
+
+        db.delete_library(&user_id, &lib_id).await.unwrap();
+
+        assert_eq!(db.get_latest_sequence(&user_id, &lib_id).await.unwrap(), 2);
+        let page = db
+            .get_snippets_page(&user_id, &lib_id, DeltaCursor::Sequence(2), 100, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert!(page.snippets[0].deleted);
     }
 }

@@ -219,7 +219,7 @@ Bare `snp` (no subcommand) defaults to the `run` TUI
 ## Dispatch
 
 `dispatch_command()` (`src/main.rs:470-908`) maps every `Commands` variant to
-its module 1:1 — except `data`, whose five subcommand arms each route to the
+its module 1:1 — except `data`, whose six subcommand arms each route to the
 `handle_*` helper of the matching top-level command. Each module exposes
 `run()` (except `premade_cmd` / `library_cmd`, which use subcommand-dispatched
 `run_list` / `run_get` / …).
@@ -228,17 +228,19 @@ Routing facts worth auditing:
 
 - **Top-level and `data` spellings share one code path.** `handle_validate`
   (`src/main.rs:432`), `handle_backup` (`src/main.rs:437`), `handle_restore`
-  (`src/main.rs:449`), `handle_repair` (`src/main.rs:458`), and `handle_status`
-  (`src/main.rs:465`) are the only implementations; `Commands::Validate`
+  (`src/main.rs:449`), `handle_repair` (`src/main.rs:458`), `handle_status`
+  (`src/main.rs:465`), and `handle_delete` (`src/main.rs:477`) are the only
+  implementations; `Commands::Validate`
   (`src/main.rs:845-847`), `Commands::Backup` (`src/main.rs:848-850`),
   `Commands::Restore` (`src/main.rs:851-853`), `Commands::Repair`
-  (`src/main.rs:842-844`), `Commands::Status` (`src/main.rs:854-856`) and all
-  five `DataCommands` arms (`src/main.rs:862-878`) call them.
+  (`src/main.rs:842-844`), `Commands::Status` (`src/main.rs:854-856`),
+  `Commands::Delete` (`src/main.rs:909-911`) and all
+  six `DataCommands` arms (`src/main.rs:862-892`) call them.
 - **Commands that own their outcome return it directly** instead of falling
   through to the `Ok(CliOutcome::Success)` tail at `src/main.rs:907`:
   `select` (`src/main.rs:632-639`), `doctor` (`src/main.rs:794-806`),
   `sync discard-pending` (`src/main.rs:753-756`), `get`
-  (`src/main.rs:879-894`).
+  (`src/main.rs:879-894`), `delete` (`src/main.rs:909-911`).
 - **Ambiguous exact matches** are reported to stderr by `report_ambiguous()`
   (`src/main.rs:416-426`) and return `CliOutcome::Ambiguous` (exit 5).
 - **`auto-sync-worker`** is dispatched to `snip_it::auto_sync::worker::run`
@@ -247,11 +249,11 @@ Routing facts worth auditing:
 ### Canonical `*Args` structs
 
 One canonical Clap `*Args` struct lives beside each handler — `ValidateArgs`,
-`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, plus `NewArgs`,
-`ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`, `EditArgs`,
-`GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`. `src/main.rs` keeps only
-the `Commands` composition, runtime/signal/log setup, dispatch, and outcome
-mapping. Shared shell spellings live in `shell_cmd::ShellIntegration`.
+`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, `DeleteArgs`, plus
+`NewArgs`, `ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`,
+`EditArgs`, `GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`. `src/main.rs`
+keeps only the `Commands` composition, runtime/signal/log setup, dispatch, and
+outcome mapping. Shared shell spellings live in `shell_cmd::ShellIntegration`.
 
 ### Exact selectors
 

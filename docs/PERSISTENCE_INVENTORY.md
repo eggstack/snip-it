@@ -6,9 +6,9 @@
 
 For each artifact: canonical path derivation, owner module/layer, schema/version, user-editable vs private, secret classification, durability class, max supported size, atomicity method, permissions/ACL expectation, symlink/non-regular-file policy, corruption handling, unknown-field policy, backup inclusion default, migration owner, and synchronization relevance.
 
-**Reading the "Durability class" column.** The four classes
-(`DurableUserData`, `SensitiveConfig`, `RecoverableMetadata`,
-`EphemeralCoordination`) live in `src/utils/atomic.rs` and are applied only
+**Reading the "Durability class" column.** The three classes
+(`DurableUserData`, `SensitiveConfig`, `RecoverableMetadata`) live in
+`src/utils/atomic.rs` and are applied only
 through `atomic_replace` / `atomic_write_bytes`. `write_private_atomic` takes
 **no** class — it always fsyncs the file and fsyncs the parent directory on
 Unix only. Artifacts written through it are therefore listed as "None
@@ -288,9 +288,13 @@ for the save path.
 
 ### 15. Migration Metadata
 
+The persisted library format carries **no schema version**; the dead versioning
+framework (`src/migration.rs`) was removed as unreferenced code. Introducing a
+schema version is a schema change that requires a migration and a version bump.
+
 | Property | Value |
 |----------|-------|
-| **Canonical path** | None (in-memory, or inline as `schema_version` in the library TOML's top-level table) |
+| **Canonical path** | None (the library TOML has no schema-version key) |
 | **Owner module** | `src/library/` (layout migration) |
 | **Schema** | N/A |
 | **User-editable** | No |
@@ -331,13 +335,11 @@ symlink policy — is
 [architecture/persistence.md § Durability Classes](../architecture/persistence.md#durability-classes).
 The two facts this inventory depends on:
 
-- All four classes apply `mode(0o600)` to the temp file; they differ **only** in
+- All three classes apply `mode(0o600)` to the temp file; they differ **only** in
   fsync behaviour. `DurableUserData` and `SensitiveConfig` both fsync the file
   and **require** a parent-directory fsync; `SensitiveConfig` additionally
   rejects a symlinked target. `RecoverableMetadata` does not fsync the file and
   downgrades a parent-directory fsync failure to a warning.
-  `EphemeralCoordination` skips both fsyncs and currently has **no production
-  caller**.
 - A class is applied only through `atomic_replace` / `atomic_write_bytes`.
   `write_private_atomic` takes no class — it always fsyncs the file and fsyncs
   the parent directory on Unix only.

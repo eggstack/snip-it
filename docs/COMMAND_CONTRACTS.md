@@ -19,6 +19,7 @@
 | `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 2, 4 |
 | `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 2, 3, 5 |
 | `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 2, 3, 5 |
+| `delete` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 3, 5, 9 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
 | `doctor` | No | No | Yes | Yes | No | No | No | Yes (diagnostic probes) | No | `--report json` | 0, 1, 6 |
@@ -40,8 +41,8 @@
 | `data` | — | — | — | — | — | — | — | — | — | — | — |
 
 `snp data <subcommand>` is a **mirror spelling** of the top-level commands
-(`validate`, `status`, `backup`, `restore`, `repair`); it has no independent
-contract. `auto-sync-worker` and `__self-replace` are internal/replace
+(`validate`, `status`, `backup`, `restore`, `repair`, `delete`); it has no
+independent contract. `auto-sync-worker` and `__self-replace` are internal/replace
 subprocesses and are not user-facing contracts.
 
 `snp mcp serve` is the only stdio-protocol command: **stdout carries protocol
@@ -49,6 +50,9 @@ messages only**, all diagnostics go to stderr, and it is read-only and
 non-executing. `snp mcp install` is the exception inside the `mcp` group: it
 spawns the MCP client's own CLI to register this binary and therefore mutates
 that client's configuration. See [`MCP.md`](MCP.md).
+
+**Removed flags.** `snp backup --format` was removed: the backup snapshot is
+always a directory layout, and the flag never selected a different behavior.
 
 ## Column Definitions
 

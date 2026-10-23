@@ -107,7 +107,6 @@ Hard rules:
 | `src/transaction.rs` | Journal, states, begin/commit/rollback, recovery scan |
 | `src/local_data.rs` | `LocalDataLock`, dir derivation, cross-process barriers |
 | `src/process_file_lock.rs` | Kernel flock/LockFileEx primitive |
-| `src/migration.rs` | `SchemaVersion`; `write_schema_version` must use `toml::Table` to preserve array-of-tables |
 | `auto_sync/schedule.rs` | Centralized scheduling decisions (`schedule_sync`) |
 | `auto_sync/pending.rs` / `pending_lock.rs` | Monotonic pending generation marker |
 | `auto_sync/execution_lock.rs` | `SyncExecutionLock` (wait_acquire / try_acquire) |

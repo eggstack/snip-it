@@ -1,6 +1,24 @@
 # CLI, Library, Selector, and Sync-Policy Consolidation Roadmap
 
-Status: closed
+Status: complete
+
+> **Roadmap reopened 2026-10-22.** M001–M005 remain closed and their history
+> is unchanged. The roadmap is reopened for one corrective milestone, M006,
+> which closes a verification gap in M004's search-parity contract: the
+> parity fixtures compare `snp list --filter` against MCP
+> `snippets_search` but never exercise `snp get --query`, and the fixture
+> target does not run in `scripts/check.sh` or in CI. The reason for the
+> change is recorded in
+> `plans/implementation/cli-library-sync-consolidation/006-search-parity-verification-corrective.md`
+> and in M006 below. No completed milestone status is altered.
+
+> **Roadmap closed 2026-10-22.** M006 closed the verification gap: the
+> parity suite now exercises all three surfaces and runs in
+> `scripts/check.sh`, and the two behaviors M004's contract left open — the
+> empty-query rule and the cross-library order — are decided, implemented,
+> and pinned by tests. The closure record is
+> `plans/closure/cli-library-sync-consolidation/006-status.md`. M001–M005
+> remain closed and their history is unchanged.
 
 Long-term references:
 
@@ -59,12 +77,24 @@ runtime, or MCP registration behavior beyond shared search parity.
 
 ## 4. Current state
 
-All milestones are closed. Duplicate Clap schemas and redundant
+M001 through M005 are closed. Duplicate Clap schemas and redundant
 outcome translations are removed with compatibility preserved.
 Side-effect-free shared resolution exists and read-only MCP reuses the
 canonical search projection. Hotspot files are split only along existing
 responsibilities. Sync retry policy is deduplicated behind the single
 macro with batch error-kind preservation.
+
+M006 is closed. The M004 implementation satisfied its stated requirement —
+the three surfaces share the canonical `selector::searchable_text`
+projection — but the evidence accepted for it did not cover every surface
+the contract names, and the fixture target was not connected to the build
+gate. M006 closed both gaps: the three surfaces now share one match
+primitive (`selector::score_fuzzy_matches`), the parity suite exercises all
+three surfaces and runs in `scripts/check.sh`, and the two behaviors the
+contract left open are decided and pinned — an empty query is "no filter" on
+all three surfaces, and the cross-library order differs by surface family on
+purpose. The closure record is
+`plans/closure/cli-library-sync-consolidation/006-status.md`.
 
 ## 5. Target architecture
 
@@ -86,10 +116,19 @@ M001 CLI surface + outcome
     |                   +--> M004 selector/search/MCP parity (hard: M002, M003)
     |                             |
     |                             `--> M005 retry dedup (hard: M001-M004 soft ordering)
+    |
+    `--> M006 search parity verification corrective (hard: M004)
 ```
 
 M001 first (deletion/consolidation order). M005 is a final internal
 cleanup with soft ordering on M002-M004 but hard on M001.
+
+M006 is a corrective pass over M004 and depends only on M004. It is
+sequenced last because it corrects the verification of an already-closed
+milestone rather than the milestone's implementation, and because the
+decisions it must settle — the empty-query semantics and the cross-library
+ordering semantics — are best made against the settled code that M002 and
+M003 left behind.
 
 ## 7. Milestones
 
@@ -241,6 +280,43 @@ Closure record:
 
 Predecessor flat plan: `plans/archive/flat-012-sync-retry-policy-deduplication.md`.
 
+### M006 — Search parity verification corrective
+
+Class: invariant
+
+Objective: close the verification gap in M004's search-parity contract by
+proving that `snp get --query`, `snp list --filter`, and MCP
+`snippets_search` share one search definition, and by making that proof
+gate the build.
+
+Dependencies: hard M004.
+
+Deliverable boundary: parity fixtures covering the third surface the
+contract names; the parity target added to `scripts/check.sh`; the
+empty-query and cross-library ordering semantics decided, implemented so
+the surfaces agree, documented, and pinned by tests.
+
+User or operator value: the cross-surface search contract is enforced by
+the build rather than asserted in a document, so a field added to one
+surface and forgotten in another fails the gate.
+
+Exit conditions: all three surfaces are compared against one fixture; the
+parity target runs in `scripts/check.sh`; the empty-query and cross-library
+semantics are decided and pinned; the existing nine parity cases still
+pass; the field set and the non-searchable exclusions are unchanged.
+
+Deferred work: none within this subsystem.
+
+Corrective plan:
+
+- `plans/implementation/cli-library-sync-consolidation/006-search-parity-verification-corrective.md`
+
+Closure record:
+
+- `plans/closure/cli-library-sync-consolidation/006-status.md`
+
+Predecessor flat plan: none.
+
 ## 8. Cross-cutting requirements
 
 ### Storage and migration
@@ -291,11 +367,11 @@ contract-crossing, an ADR.
 
 ## 11. Completion definition
 
-This workstream closes when M001-M005 each have accepted closure evidence
+This workstream closes when M001-M006 each have accepted closure evidence
 with duplicate policy deleted, readonly resolution adopted, boundaries
-respected, parity proven, and retry unified, and no unresolved
-medium-or-higher finding remains. All milestones are closed; the roadmap
-is closed.
+respected, parity proven and enforced by the build gate, retry unified,
+and no unresolved medium-or-higher finding remains. M001-M006 are all closed
+and no medium-or-higher finding remains, so the roadmap is complete.
 
 ## 12. Milestone status
 
@@ -306,3 +382,4 @@ is closed.
 | M003 module boundary + hotspots | closed | `plans/implementation/cli-library-sync-consolidation/003-module-boundary-and-hotspot-decomposition.md` | `plans/closure/cli-library-sync-consolidation/003-status.md` | — |
 | M004 selector/search/MCP parity | closed | `plans/implementation/cli-library-sync-consolidation/004-selector-search-and-mcp-read-parity.md` | `plans/closure/cli-library-sync-consolidation/004-status.md` | — |
 | M005 retry dedup | closed | `plans/implementation/cli-library-sync-consolidation/005-sync-retry-policy-deduplication.md` | `plans/closure/cli-library-sync-consolidation/005-status.md` | — |
+| M006 search parity verification corrective | closed | `plans/implementation/cli-library-sync-consolidation/006-search-parity-verification-corrective.md` | `plans/closure/cli-library-sync-consolidation/006-status.md` | — |

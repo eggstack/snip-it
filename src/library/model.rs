@@ -85,6 +85,21 @@ pub struct LibraryMeta {
     pub is_primary: bool,
     #[serde(default)]
     pub last_sync: Option<i64>,
+    /// The server-assigned write-sequence cursor of this library.
+    ///
+    /// `last_sync` is the timestamp cursor; this is the exact one. `None`
+    /// means the library holds no sequence cursor, and
+    /// [`LibraryMeta::sync_cursor_kind`] says which cursor the server is
+    /// actually serving.
+    #[serde(default)]
+    pub last_sync_sequence: Option<i64>,
+    /// Which delta cursor the server is serving for this library.
+    ///
+    /// Additive metadata: a library file written before this field existed
+    /// loads as [`SyncCursorKind::Unknown`], which is also the state of a
+    /// library that has never been probed.
+    #[serde(default)]
+    pub sync_cursor_kind: SyncCursorKind,
     #[serde(default)]
     pub server_id: Option<String>,
 }
@@ -97,9 +112,65 @@ impl LibraryMeta {
             library_id: String::new(),
             is_primary: false,
             last_sync: None,
+            last_sync_sequence: None,
+            sync_cursor_kind: SyncCursorKind::Unknown,
             server_id: None,
         }
     }
+}
+
+/// Which delta cursor the server is serving for a library.
+///
+/// The server can serve two kinds of delta cursor: the **timestamp** cursor
+/// (`visible_at`, the client's logical time) and the **write-sequence**
+/// cursor (a strictly increasing, server-assigned per-library value). A
+/// client that knows which one is in use can tell "the server sent no
+/// sequence" apart from "the sequence did not advance", which is what keeps
+/// it from silently drifting back onto the imprecise timestamp path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncCursorKind {
+    /// The cursor kind is not known yet.
+    ///
+    /// The client has not probed the server for a sequence cursor. The next
+    /// pulling sync is a bootstrap full sync, which is the only request shape
+    /// that delivers the complete library and therefore the only one whose
+    /// watermark the client may adopt.
+    #[default]
+    Unknown,
+    /// The server serves the timestamp cursor.
+    ///
+    /// The client sends `last_sync_timestamp` and no sequence cursor. This is
+    /// also the state of a client whose server is too old to serve a
+    /// sequence.
+    Timestamp,
+    /// The server serves the write-sequence cursor.
+    ///
+    /// The client sends `last_sync_sequence` on every request and holds the
+    /// matching cursor in [`LibraryMeta::last_sync_sequence`].
+    Sequence,
+}
+
+/// What to do with a library's stored write-sequence cursor after a sync.
+///
+/// The server answers a sequence only when the request carried one, or when
+/// the request carried no cursor at all (the bootstrap full sync). A
+/// timestamp-only delta is answered with zero, because a delta does not
+/// deliver the library's whole history and its watermark is therefore not
+/// adoptable by that client — so a zero answer must leave the stored cursor
+/// alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceCursor {
+    /// Leave the stored cursor untouched.
+    Keep,
+    /// Advance the stored cursor to this value.
+    Advance(i64),
+    /// Clear the stored cursor.
+    ///
+    /// Used when the server library was re-created: the old cursor points
+    /// into a library that no longer exists, and the new one starts its
+    /// sequence space from scratch.
+    Reset,
 }
 
 /// A single side-effect-free library source.

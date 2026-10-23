@@ -186,7 +186,6 @@ struct HalloyFormatting {
 #[derive(Debug, Clone, Default)]
 struct HalloyTextStyle {
     color: String,
-    #[allow(dead_code)]
     font_style: Option<FontStyle>,
 }
 
@@ -235,7 +234,6 @@ impl Serialize for HalloyTextStyle {
 #[derive(Debug, Clone, Default)]
 struct HalloyOptionalTextStyle {
     color: Option<String>,
-    #[allow(dead_code)]
     font_style: Option<FontStyle>,
 }
 
@@ -281,7 +279,6 @@ impl Serialize for HalloyOptionalTextStyle {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
 enum FontStyle {
     #[default]
     Normal,
@@ -330,11 +327,10 @@ fn opt_str_to_color(s: &Option<String>) -> Color {
 impl HalloyTheme {
     /// Project the rich Halloy schema onto snp-it's 10-color `Theme`.
     ///
-    /// See `plans/halloy-themes.md` §5c for the documented mapping table.
-    /// Each field walks a short fallback chain so that a partial theme
-    /// (e.g. one with no `[text]` section) still produces a coherent
-    /// palette. `Color::Reset` is treated as "missing" and walks
-    /// the chain.
+    /// Each Halloy field walks a short fallback chain (primary → secondary →
+    /// tertiary → reset) so that a partial theme (e.g. one with no `[text]`
+    /// section) still produces a coherent palette. `Color::Reset` is treated
+    /// as "missing" and walks the chain.
     fn into_snp_theme(self) -> Theme {
         // Pre-convert the frequently-used fields once. Each `_c` is a
         // concrete `Color` (or `Color::Reset` if the field was
@@ -393,16 +389,21 @@ pub struct ThemesConfig {
 }
 
 /// One entry in the theme directory listing.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ThemeInfo {
     /// Basename without `.toml`. Used as the persistent identifier
     /// (in `themes.toml`) and as the lookup key in `load_theme`.
     pub name: String,
     /// Absolute path to the on-disk `.toml` file.
+    // Retained: part of the documented `ThemeInfo` contract
+    // (`architecture/ui.md`); the theme picker reads `name` today.
+    #[allow(dead_code)]
     pub path: PathBuf,
     /// True if this theme was extracted from the bundled binary
     /// (vs. authored by the user).
+    // Retained: part of the documented `ThemeInfo` contract
+    // (`architecture/ui.md`); `list_themes()` sets it for the picker.
+    #[allow(dead_code)]
     pub is_bundled: bool,
 }
 
@@ -412,19 +413,12 @@ pub struct ThemeInfo {
 /// (mutating methods take `&mut self`); the active theme is published
 /// to a separate process-global `RwLock<Theme>` for cheap reads from
 /// the TUI draw loop.
-#[allow(dead_code)]
 pub struct ThemeManager {
-    #[allow(dead_code)]
-    config_dir: PathBuf,
-    #[allow(dead_code)]
     themes_dir: PathBuf,
-    #[allow(dead_code)]
     config_path: PathBuf,
-    #[allow(dead_code)]
     config: ThemesConfig,
 }
 
-#[allow(dead_code)]
 impl ThemeManager {
     /// Create a new `ThemeManager` rooted at the user's config dir.
     ///
@@ -463,7 +457,6 @@ impl ThemeManager {
         };
 
         Ok(Self {
-            config_dir,
             themes_dir,
             config_path,
             config,
@@ -549,6 +542,8 @@ impl ThemeManager {
     }
 
     /// Path to the `themes/` directory.
+    // Retained: documented `ThemeManager` accessor (`architecture/ui.md`).
+    #[allow(dead_code)]
     pub fn themes_dir(&self) -> &Path {
         &self.themes_dir
     }
@@ -570,7 +565,6 @@ impl ThemeManager {
 }
 
 /// Returns true if `name` is one of the themes compiled into the binary.
-#[allow(dead_code)]
 fn is_bundled_theme_name(name: &str) -> bool {
     if name == bundled_default_name() {
         return true;
@@ -583,12 +577,10 @@ fn is_bundled_theme_name(name: &str) -> bool {
 /// The basename (no extension) of `DEFAULT_BUNDLED`. The constant
 /// string in the generated file is `themes/Cyber Red.toml`, so the
 /// default theme name is `"Cyber Red"`.
-#[allow(dead_code)]
 fn bundled_default_name() -> &'static str {
     "Cyber Red"
 }
 
-#[allow(dead_code)]
 fn write_theme_if_missing(themes_dir: &Path, name: &str, content: &str) -> SnipResult<()> {
     let path = themes_dir.join(format!("{name}.toml"));
     if path.exists() {
@@ -601,7 +593,6 @@ fn write_theme_if_missing(themes_dir: &Path, name: &str, content: &str) -> SnipR
 /// Validates a theme name supplied by the user. Rejects path traversal,
 /// slashes, and NULs. Allows spaces, parens, dots, dashes, underscores —
 /// mirroring the diversity of Halloy community theme names.
-#[allow(dead_code)]
 fn validate_theme_name(name: &str) -> Result<(), (&'static str, &'static str)> {
     if name.is_empty() {
         return Err(("Invalid theme name", "Theme name cannot be empty"));
@@ -647,7 +638,6 @@ pub fn get_theme() -> Theme {
 /// Replace the active theme. The TUI's next draw frame will see the
 /// new colors. Used by the theme picker when the user navigates
 /// (preview) and when they commit a selection.
-#[allow(dead_code)]
 pub fn set_active_theme(theme: Theme) {
     *ACTIVE_THEME.write().unwrap_or_else(|e| e.into_inner()) = theme;
 }
@@ -882,7 +872,6 @@ mod tests {
     fn theme_manager_init_seeds_bundled() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -910,7 +899,6 @@ mod tests {
     fn theme_manager_init_preserves_user_files() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -928,7 +916,6 @@ mod tests {
     fn theme_manager_init_idempotent() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -942,7 +929,6 @@ mod tests {
     fn theme_manager_load_active_persists() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -959,7 +945,6 @@ mod tests {
     fn theme_manager_rejects_path_traversal() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -977,7 +962,6 @@ mod tests {
     fn theme_manager_load_parses_real_theme() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),
@@ -992,7 +976,6 @@ mod tests {
     fn theme_manager_list_sorted() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut mgr = ThemeManager {
-            config_dir: tmp.path().to_path_buf(),
             themes_dir: tmp.path().join("themes"),
             config_path: tmp.path().join("themes.toml"),
             config: ThemesConfig::default(),

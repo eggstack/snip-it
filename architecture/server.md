@@ -298,14 +298,82 @@ persisted in the file header.
 |-------|-----------------------|
 | `users` | `id` (PK), `api_key` (UNIQUE, Argon2id PHC hash), `api_key_prefix` (nullable, indexed), `created_at`, `updated_at` |
 | `libraries` | `id` (PK), `user_id` (FK → `users`), `name`, `created_at`, `deleted_at` (soft delete), `UNIQUE(user_id, name)` |
-| `snippets` | `id` (**global** PK), `user_id` (FK), `library_id` (FK), `description`, `command`, `tags` (JSON text, default `'[]'`), `created_at`, `updated_at`, `device_id`, `deleted` (0/1), `encrypted` (0/1) |
+| `snippets` | `id` (**global** PK), `user_id` (FK), `library_id` (FK), `description`, `command`, `tags` (JSON text, default `'[]'`), `created_at`, `updated_at`, `device_id`, `deleted` (0/1), `encrypted` (0/1), `visible_at` (timestamp cursor position), `sequence` (server-assigned write sequence) |
+| `library_sequences` | `library_id` (PK), `sequence` — the per-library write-sequence counter |
 
 Schema DDL: `snip-sync/src/db.rs:304-356`.
 
 Indexes: `idx_users_api_key_prefix`, `idx_snippets_user`,
 `idx_snippets_library`, `idx_snippets_updated`,
 `idx_snippets_user_library_updated (user_id, library_id, updated_at,
-deleted)`, `idx_libraries_user`.
+deleted)`, `idx_snippets_user_library_visible (user_id, library_id,
+visible_at, deleted)`, `idx_snippets_user_library_sequence (user_id,
+library_id, sequence, deleted)`, `idx_snippets_library_sequence` (**unique**
+on `(library_id, sequence)`), `idx_libraries_user`.
+
+### The per-library write sequence
+
+`snippets.sequence` is a **server-assigned, strictly increasing write
+sequence**, scoped to one library. It is the exact delta cursor: the
+timestamp cursor (`visible_at`) is second-granular, the sequence is not.
+
+- **The server assigns it.** A client never supplies a sequence value.
+- **The counter lives in the database** (`library_sequences`), one row per
+  library, so a server restart does not reset it.
+- **The bump and the row write share one transaction.** `bump_library_sequence`
+  (`snip-sync/src/db.rs`) is called from `upsert_snippet_in_tx` *before* the
+  upsert, so a rolled-back write consumes no sequence value. Bumping first
+  also takes SQLite's write lock before the transaction reads the
+  `visible_at` watermark, so two concurrent writes to one library serialize
+  on the counter instead of both reading the same value.
+- **A unique index on `(library_id, sequence)`** is the enforcement: a
+  counter race that produced a shared value is rejected loudly rather than
+  silently hiding a row.
+- **A tombstone takes a fresh sequence.** `delete_library` gives every row
+  it tombstones its own new sequence, so a client on the sequence cursor
+  sees the deletion.
+
+The migration (`migrate_snippet_sequence`) adds the column, **backfills it
+preserving the pre-migration `updated_at` ordering** (the row's rank inside
+its library, ties broken by the row id), seeds the counter from the
+backfill, and creates the indexes. It runs inside `Database::connect`, so a
+server never serves a database whose sequence cursor is half installed. The
+backfilled ordering is what makes a migrated database select the same rows
+as an unmigrated one for the first sync.
+
+### The sequence answer rule
+
+`Sync` picks both its filter and its answer from the request's two cursor
+fields (`snip-sync/src/lib.rs:1604-1609`, `:1670-1704`):
+
+| `last_sync_sequence` | `last_sync_timestamp` | Shape | Filter | `server_sequence` |
+|---|---|---|---|---|
+| non-zero | any | sequence delta | `sequence >= cursor` | the library's sequence watermark |
+| zero | non-zero | timestamp delta | `visible_at >= timestamp` | **zero** |
+| zero | zero | **full sync** (the bootstrap) | `visible_at >= 0` (every row) | the library's sequence watermark |
+
+- A **timestamp-only delta** is answered with zero on purpose: a delta does
+  not deliver the library's whole history, so the client cannot adopt the
+  watermark without skipping rows it never received.
+- The **bootstrap** — a request that carries no cursor at all — is the only
+  shape that delivers the complete library, so it is the only shape whose
+  watermark a client may adopt. It is answered with the watermark.
+- While the response is **paginated** the server echoes the request's own
+  sequence cursor and does not advance the watermark
+  (`snip-sync/src/lib.rs:1689-1690`), exactly as it withholds the timestamp
+  watermark while rows remain (`:1655-1668`).
+- **A zero watermark is reported as a minimum of 1.** In the protocol zero
+  means "no sequence", which a client cannot tell apart from a server that
+  does not serve one, so a library that has issued nothing reports the
+  position before its first row (`snip-sync/src/lib.rs:1701`). The inclusive
+  `sequence >=` filter (`snip-sync/src/db.rs:109-114`) keeps that safe: the
+  library's first row is issued with sequence 1
+  (`snip-sync/src/db.rs:294-314`) and is still delivered.
+
+The client side of this handshake — the recorded cursor kind and the state
+machine that turns the answer into the next request — is in
+`architecture/sync.md` ("The Bootstrap Handshake — Three Request Shapes" and
+"The Client Cursor State Machine").
 
 ### API-key hashing and lookup
 
@@ -387,6 +455,8 @@ so a legitimate second library can collide with the first.
 | `upsert_snippet(...)` | Test-only convenience wrapper (`#[cfg(test)]`, `snip-sync/src/db.rs:656`) |
 | `get_snippets(user, lib, since, limit, offset, include_deleted)` | Paginated delta read; total count + `has_more` computed by caller |
 | `get_latest_timestamp(user, lib)` | Sync watermark; held back while `has_more` to avoid skipping pages |
+| `get_latest_sequence(user, lib)` | Write-sequence watermark; returned when the request carried a sequence cursor or no cursor at all (the bootstrap), floored at 1 |
+| `migrate_snippet_sequence()` | Adds the sequence column, backfills it, seeds the counter, creates the indexes; runs in `connect` |
 | `get_default_library(user)` | Resolves the per-user `default` library id |
 | `create_library(user, name)` | Validates `alphanumeric/-/_`, length 1–64; `Conflict` on duplicate |
 | `list_libraries(user, limit, offset)` | Paginated with snippet counts |
@@ -908,7 +978,17 @@ Line counts at time of writing (`wc -l`):
   least one row and sets `has_more` so the watermark is not advanced.
 - **The `skipped_ids` watermark rule**: while `has_more` is true the
   server returns the *request's* `last_sync_timestamp`, not the newest
-  row's timestamp, so the client can fetch the remaining pages.
+  row's timestamp, so the client can fetch the remaining pages. The same
+  rule holds for the write sequence: `server_sequence` is the request's
+  own sequence while `has_more` is true.
+- **A non-zero `last_sync_sequence` in the request selects the sequence
+  filter** (`sequence >= ?`); zero falls back to the timestamp filter
+  (`visible_at >= ?`). `server_sequence` is returned when the request carried
+  a non-zero sequence **or no cursor at all** — the cursorless request is the
+  bootstrap full sync, the only shape that delivers the complete library and
+  therefore the only one whose watermark a client may adopt. A
+  **timestamp-only delta** is answered with zero, so a client that does not
+  use the sequence path never receives a value it cannot interpret.
 - **`snip-sync` must not terminate TLS**, and must not grow an in-process
   HTTP client. The `curl` transport is deliberate; the size gate is
   pinned by `tests/architecture.rs`.

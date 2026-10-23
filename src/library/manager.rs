@@ -6,7 +6,7 @@
 use super::model::validate_library_name;
 use super::model::{
     LibraryConfig, LibraryIndexInspection, LibraryMeta, PrimaryState, ResolvedLibrarySource,
-    library_not_found,
+    SequenceCursor, SyncCursorKind, library_not_found,
 };
 use super::persistence::write_library_file;
 use crate::config::{cached_read_toml, invalidate_toml_cache};
@@ -596,6 +596,12 @@ snippets = []
     }
 
     /// Atomically persists server linkage and the sync cursor for recovery.
+    ///
+    /// A relink points the library at a different server-side library, so any
+    /// stored sequence cursor refers to a sequence space that no longer
+    /// applies. It is cleared and the recorded cursor kind returns to
+    /// [`SyncCursorKind::Unknown`], which makes the next pulling sync a
+    /// bootstrap that re-learns the watermark from the new library.
     pub fn relink_server_library(
         &mut self,
         filename: &str,
@@ -610,6 +616,8 @@ snippets = []
         lib.library_id = server_id.to_string();
         lib.server_id = Some(server_id.to_string());
         lib.last_sync = last_sync;
+        lib.last_sync_sequence = None;
+        lib.sync_cursor_kind = SyncCursorKind::Unknown;
 
         self.bump_generation();
         self.save_config()?;
@@ -617,6 +625,10 @@ snippets = []
     }
 
     /// Clears server linkage metadata for a local library.
+    ///
+    /// The stored sequence cursor belongs to the server-side library the
+    /// local one was linked to, so it is cleared together with the linkage
+    /// and the recorded cursor kind returns to [`SyncCursorKind::Unknown`].
     pub fn unlink_server_library(&mut self, filename: &str) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
@@ -625,6 +637,8 @@ snippets = []
             .ok_or_else(|| Self::library_not_found_error(filename))?;
         lib.library_id.clear();
         lib.server_id = None;
+        lib.last_sync_sequence = None;
+        lib.sync_cursor_kind = SyncCursorKind::Unknown;
 
         self.bump_generation();
         self.save_config()?;
@@ -648,6 +662,8 @@ snippets = []
             library_id: String::new(),
             is_primary: is_first,
             last_sync: None,
+            last_sync_sequence: None,
+            sync_cursor_kind: SyncCursorKind::Unknown,
             server_id: None,
         };
 
@@ -660,16 +676,62 @@ snippets = []
 
     /// Updates the last-sync timestamp for a library.
     pub fn update_last_sync(&mut self, filename: &str, timestamp: i64) -> SnipResult<()> {
+        let kind = self.sync_cursor_kind(filename);
+        self.update_sync_cursors(filename, timestamp, kind, SequenceCursor::Keep)
+    }
+
+    /// Updates the sync cursors of a library.
+    ///
+    /// `timestamp` is the timestamp cursor. `sequence` is the server's
+    /// write-sequence cursor: [`SequenceCursor::Advance`] moves it,
+    /// [`SequenceCursor::Keep`] leaves it untouched, and
+    /// [`SequenceCursor::Reset`] clears it. A server that does not serve the
+    /// sequence cursor answers with zero, and a zero answer must never
+    /// clear or move the stored sequence cursor — the client stays on the
+    /// timestamp cursor until the server hands one out.
+    ///
+    /// `kind` records which cursor the server is serving, so a client can
+    /// tell "the server sent no sequence" apart from "the sequence did not
+    /// advance".
+    pub fn update_sync_cursors(
+        &mut self,
+        filename: &str,
+        timestamp: i64,
+        kind: SyncCursorKind,
+        sequence: SequenceCursor,
+    ) -> SnipResult<()> {
         self.gate_mutation()?;
         let _lock = self.acquire_local_data_lock()?;
         let lib = self
             .get_library_by_filename_mut(filename)
             .ok_or_else(|| Self::library_not_found_error(filename))?;
         lib.last_sync = Some(timestamp);
+        lib.sync_cursor_kind = kind;
+        match sequence {
+            SequenceCursor::Keep => {}
+            SequenceCursor::Advance(value) => lib.last_sync_sequence = Some(value),
+            SequenceCursor::Reset => lib.last_sync_sequence = None,
+        }
 
         self.bump_generation();
         self.save_config()?;
         Ok(())
+    }
+
+    /// Which delta cursor the server is serving for a library.
+    ///
+    /// A library that is not tracked, or whose metadata predates the field,
+    /// reports [`SyncCursorKind::Unknown`].
+    pub fn sync_cursor_kind(&self, filename: &str) -> SyncCursorKind {
+        self.get_library_by_filename(filename)
+            .map(|lib| lib.sync_cursor_kind)
+            .unwrap_or_default()
+    }
+
+    /// The stored write-sequence cursor of a library, if it has one.
+    pub fn last_sync_sequence(&self, filename: &str) -> Option<i64> {
+        self.get_library_by_filename(filename)
+            .and_then(|lib| lib.last_sync_sequence)
     }
 
     /// Error returned by mutators that target an unregistered library.

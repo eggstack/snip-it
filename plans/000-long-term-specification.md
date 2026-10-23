@@ -124,8 +124,8 @@ scope.
   field 22.
 - The save path does NOT post-process `toml::to_string_pretty`. The golden
   corpus (tabs, trailing spaces, CRLF) MUST survive save/load.
-  `write_schema_version` MUST use `toml::Table`, not `toml::Value`, to
-  preserve array-of-tables.
+  The persisted library format carries NO schema version; introducing one is a
+  schema change that requires a migration and a version bump.
 - Malformed library/`libraries.toml` fails closed (best-effort backup plus
   error, never synthesize a writable empty); missing/empty files give
   defaults. Missing-library recovery uses atomic `<library>.sync_recovery`

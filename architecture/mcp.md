@@ -17,9 +17,9 @@ can run a snippet), library mutation, the user-facing protocol contract
 ([diagnostics.md](diagnostics.md)).
 
 **Sources**: `src/mcp/mod.rs` (28 lines), `src/mcp/protocol.rs` (479),
-`src/mcp/tools.rs` (307), `src/mcp/client_install.rs` (269).
-CLI wiring: `McpCommands` (`src/main.rs:265`), classified `SuppressReadOnly` +
-`Minimal` (`src/main.rs:932`).
+`src/mcp/tools.rs` (297), `src/mcp/client_install.rs` (269).
+CLI wiring: `McpCommands` (`src/main.rs:267`), classified `SuppressReadOnly` +
+`Minimal` (`src/main.rs:949`).
 
 ## Module Map
 
@@ -136,7 +136,7 @@ Constants at `src/mcp/protocol.rs:17-21`.
 ```
 
   (`src/mcp/protocol.rs:338-366`). `isError` is true when the payload carries
-  an `error` key (`tools::is_error`, `src/mcp/tools.rs:208`), or when the tool
+  an `error` key (`tools::is_error`, `src/mcp/tools.rs:198`), or when the tool
   returned `Err` — the latter is rendered as
   `{"error": "data_error", "message": "..."}`.
 
@@ -145,19 +145,20 @@ Constants at `src/mcp/protocol.rs:17-21`.
 **File**: `src/mcp/tools.rs` — thin JSON adapters over the canonical
 `crate::selector` layer, so MCP cannot drift from `snp get` / `snp list`.
 All three take an optional `library` (name or `all`); unknown names surface as
-MCP `invalid_params` (`src/mcp/tools.rs:253-261`). Deleted snippets are always
-filtered out (`src/mcp/tools.rs:67`, `:88`; the selector also excludes them at
-`src/selector.rs:385`).
+MCP `invalid_params` (`src/mcp/tools.rs:243-250`). Deleted snippets are always
+filtered out (`src/mcp/tools.rs:65`; `snippets_search` filters them inside the
+shared match primitive — `src/selector.rs:221`, `:228-230` — and the selector
+also excludes them at `src/selector.rs:406`).
 
 | Tool | Arguments | Behavior |
 |------|-----------|----------|
-| `snippets_list` | `library?`, `limit?` (default 100, max 1000) | Lists snippet metadata in library order (`tools::list`, `src/mcp/tools.rs:61`) |
-| `snippets_search` | `query` (required), `library?`, `limit?`, `tags?`, `search_output?` | Fuzzy search with CLI-consistent relevance ranking (`tools::search`, `src/mcp/tools.rs:74`) |
-| `snippet_get` | exactly one of `id` / `description` / `command`, plus `library?` | Single-snippet retrieval with `snp get` identity semantics (`tools::get`, `src/mcp/tools.rs:129`) |
+| `snippets_list` | `library?`, `limit?` (default 100, max 1000) | Lists snippet metadata in library order (`tools::list`, `src/mcp/tools.rs:59`) |
+| `snippets_search` | `query` (required), `library?`, `limit?`, `tags?`, `search_output?` | Fuzzy search with CLI-consistent relevance ranking (`tools::search`, `src/mcp/tools.rs:72`) |
+| `snippet_get` | exactly one of `id` / `description` / `command`, plus `library?` | Single-snippet retrieval with `snp get` identity semantics (`tools::get`, `src/mcp/tools.rs:119`) |
 
 All argument structs carry `#[serde(deny_unknown_fields)]`
-(`src/mcp/tools.rs:31`, `:38`, `:53`), and every tool parses arguments through
-`parse_arguments()` (`src/mcp/tools.rs:212`), which rejects a non-object
+(`src/mcp/tools.rs:29`, `:36`, `:51`), and every tool parses arguments through
+`parse_arguments()` (`src/mcp/tools.rs:202`), which rejects a non-object
 `arguments` value with `-32602`.
 
 ### Advertised Schemas
@@ -209,48 +210,54 @@ The exact schemas returned by `tools/list` (`src/mcp/protocol.rs:250-302`):
 ### `snippets_list`
 
 - Loads every visible library through the read-only resolver, then takes the
-  first `limit` entries in library order (`src/mcp/tools.rs:61-72`). There is
+  first `limit` entries in library order (`src/mcp/tools.rs:59-70`). There is
   **no** fuzzy filter and **no** relevance ranking — this is a plain listing.
-- `limit` is bounded to 1–1000 by `bounded_limit()` (`src/mcp/tools.rs:224`); a
+- `limit` is bounded to 1–1000 by `bounded_limit()` (`src/mcp/tools.rs:214`); a
   missing limit defaults to 100, and `0` or `> 1000` is `-32602`.
 
 ### `snippets_search`
 
-- Builds `SearchFields { include_tags: true, include_output:
-  args.search_output.unwrap_or(false) }` (`src/mcp/tools.rs:79-82`), scores via
-  `searchable_text()` + `shared_fuzzy_matcher()`
-  (`src/mcp/tools.rs:99-106`), and ranks with
-  `rank_snippets(..., SnippetSort::Relevance)` (`src/mcp/tools.rs:111-120`) —
+- Builds `SearchFields::with_output()` / `SearchFields::fuzzy_default()`
+  (`src/mcp/tools.rs:79-83`) and scores via the shared match primitive
+  `selector::score_fuzzy_matches` (`src/mcp/tools.rs:91`), then ranks with
+  `rank_snippets(..., SnippetSort::Relevance)` (`src/mcp/tools.rs:101-110`) —
   the same ranking path as the CLI.
-- The optional `tags[]` argument pre-filters with `matches_required_tags()`:
-  a snippet is kept only if it carries **every** listed tag, compared
-  case-insensitively (`src/mcp/tools.rs:91`; `src/selector.rs:224`).
-- An empty `query` matches everything (up to `limit`) with no scores
-  (`src/mcp/tools.rs:95-98`).
+- Because the match comes from the shared primitive, MCP cannot drift from
+  `snp get --query` / `snp list --filter` on *which* snippets a query
+  selects.
+- The optional `tags[]` argument is an **MCP-only narrowing**: it is applied
+  as an **intersection** with the query matches — a snippet is kept only if it
+  carries **every** listed tag, compared case-insensitively
+  (`src/mcp/tools.rs:98-100`; `src/selector.rs:245-255`). The CLI has no
+  equivalent flag.
+- **An empty `query` is "no filter"**: it matches **every non-deleted snippet
+  in scope**, with no scores — including snippets whose searchable text is
+  empty. A non-empty query matches the searchable-text projection only, so a
+  snippet with an empty projection never matches.
 
 ### `snippet_get`
 
 - Enforces **exactly one** of `id` / `description` / `command`; zero or two or
   more is `-32602` "Provide exactly one of 'id', 'description', or 'command'"
-  (`src/mcp/tools.rs:131-143`). The schema's `oneOf` is the client-side mirror
+  (`src/mcp/tools.rs:121-134`). The schema's `oneOf` is the client-side mirror
   of the same rule.
 - Builds a `SnippetSelector` with `ResolutionPolicy::All` and the library scope
-  from `LibraryScope::from_filter_arg()` (`src/mcp/tools.rs:145-147`), then
-  resolves through `resolve_selector_readonly()` (`src/mcp/tools.rs:160`).
+  from `LibraryScope::from_filter_arg()` (`src/mcp/tools.rs:135-137`), then
+  resolves through `resolve_selector_readonly()` (`src/mcp/tools.rs:150`).
 - `ResolutionPolicy::All` yields `SelectionResult::Many` for ambiguity so MCP
   can report structured `ambiguous` with match identities — it never prompts
-  and never expands variables (`src/mcp/tools.rs:157-159`).
+  and never expands variables (`src/mcp/tools.rs:147-149`).
 
 ### Result JSON
 
-Snippet payload (`snippet_json`, `src/mcp/tools.rs:263`):
+Snippet payload (`snippet_json`, `src/mcp/tools.rs:253`):
 
 ```json
 { "id": "…", "library": "work", "description": "…", "command": "…",
   "tags": [], "folders": [], "favorite": false }
 ```
 
-Identity payload for ambiguity (`snippet_identity_json`, `src/mcp/tools.rs:275`):
+Identity payload for ambiguity (`snippet_identity_json`, `src/mcp/tools.rs:265`):
 
 ```json
 { "id": "…", "library": "work", "description": "…" }
@@ -283,48 +290,70 @@ These are enforced by construction, not by convention:
   `OpenOptions`. Snippets are read through `crate::library::load_library()`,
   which parses and returns; it never writes.
 - **No recovery / no migration.** The read path uses the **side-effect-free**
-  resolver: `resolve_selector_readonly()` (`src/selector.rs:645`) and
-  `library::readonly_library_sources()` (`src/library/manager.rs:815`), never
-  `resolve_selector()` (`src/selector.rs:703`), which calls
+  resolver: `resolve_selector_readonly()` (`src/selector.rs:678`) and
+  `library::readonly_library_sources()` (`src/library/manager.rs:879`), never
+  `resolve_selector()` (`src/selector.rs:736`), which calls
   `LibraryManager::ensure_library_mode()` and can migrate a legacy
   single-file checkout, create `libraries/`, copy the legacy file, write
   `libraries.toml`, and bump the generation. MCP never calls the mutating
   resolver, so an agent's read cannot trigger that recovery path.
   Concretely: `snippet_get` resolves through `resolve_selector_readonly()`
-  (`src/mcp/tools.rs:160`), while `snippets_list` and `snippets_search` load
-  through `load_snippets()` (`src/mcp/tools.rs:234`) → `library_sources()`
-  (`src/mcp/tools.rs:253`) → `library::readonly_library_sources()`. Neither
+  (`src/mcp/tools.rs:150`), while `snippets_list` and `snippets_search` load
+  through `load_snippets()` (`src/mcp/tools.rs:224`) → `library_sources()`
+  (`src/mcp/tools.rs:243`) → `library::readonly_library_sources()`. Neither
   path reaches `resolve_selector()`.
 - **No prompting.** `ResolutionPolicy::All` + `resolve_selector_readonly`
   returns `NotFound` / `One` / `Many` / `Ambiguous` as data; there is no TUI,
   no stdin prompt, and no auto-expand of variables.
 - **No background work.** `snp mcp …` is classified `SuppressReadOnly` +
-  `Minimal` (`src/main.rs:932`), so no auto-sync worker is spawned, no network
+  `Minimal` (`src/main.rs:949`), so no auto-sync worker is spawned, no network
   connection is opened, and no recovery runs at startup.
 
 ## Search Parity
 
 All three search surfaces share `selector::searchable_text()`
-(`src/selector.rs:142`) and the `SearchFields` flags (`src/selector.rs:91`):
+(`src/selector.rs:142`) for *which fields participate* and the shared match
+primitive `selector::score_fuzzy_matches` (`src/selector.rs:209`) for *which
+snippets a query selects*. MCP cannot drift from the CLI on either axis.
 
 | Surface | Entry point | Fields |
 |---------|-------------|--------|
-| `snp get --query` | `SnippetSelector::resolve` → `score_fuzzy_matches(..., SearchFields::fuzzy_default())` (`src/selector.rs:441`) | description + command + tags |
-| `snp list --filter` | `src/commands/list_cmd.rs:93` with `SearchFields { include_tags: true, include_output: search_output }` (`src/commands/list_cmd.rs:80`) | description + command + tags (+ output/notes with `--search-output`) |
-| MCP `snippets_search` | `src/mcp/tools.rs:99` with the same two flags | description + command + tags (+ output/notes with `search_output: true`) |
+| `snp get --query` | `SnippetSelector::resolve` → `score_fuzzy_matches(..., SearchFields::fuzzy_default())` (`src/selector.rs:461-462`) | description + command + tags |
+| `snp list --filter` | `src/commands/list_cmd.rs:107-108` with `SearchFields::with_output()` / `fuzzy_default()` (`src/commands/list_cmd.rs:92-96`) | description + command + tags (+ output/notes with `--search-output`) |
+| MCP `snippets_search` | `src/mcp/tools.rs:91` with the same two constructors | description + command + tags (+ output/notes with `search_output: true`) |
 
 - `description` and `command` always participate.
 - `tags` participate by default (`include_tags: true`); `snippets_search`
-  additionally supports the explicit `tags[]` must-carry-every-tag filter.
+  additionally supports the explicit `tags[]` must-carry-every-tag filter,
+  applied as an **intersection** with the query matches
+  (`src/mcp/tools.rs:98-100`) — an MCP-only narrowing with no CLI equivalent.
 - `output`/notes participate only opt-in (`include_output`), bounded to a
   512-char `OutputPresentation::for_scoring()` summary
   (`src/selector.rs:171`) — the same contract as `snp list --search-output` and
   MCP `search_output: true`.
 - `folders`, `favorite`, sync metadata, credentials, and keychain data are
   **never** searchable.
+- **An empty query is "no filter" on all three surfaces.** `query: ""` matches
+  every non-deleted snippet in scope, with no scores — including snippets
+  whose searchable text is empty. A non-empty query matches the searchable-text
+  projection only, so a snippet with an empty projection never matches.
+
+### Cross-library ordering
+
+MCP has one surface in each order family, and the two differ **by design**
+across more than one library:
+
+| MCP surface | Family | Cross-library order |
+|---|---|---|
+| `snippets_search` | merged-set — the libraries are merged first, then the merged set is scored | global relevance (`rank_snippets` under `SnippetSort::Relevance`, `src/mcp/tools.rs:101-110`) |
+| `snippet_get` | selector family — resolves per library, then aggregates | library name → description → snippet ID (`selector::sort_matches`, `src/selector.rs:574-582`) |
+
+Within a **single** library the two orders coincide. `snp list --filter`
+shares MCP's merged-set family; `snp get --query` shares MCP's selector
+family.
 
 Library source resolution is shared through the canonical
-`library::readonly_library_sources()` resolver (`src/mcp/tools.rs:253`):
+`library::readonly_library_sources()` resolver (`src/mcp/tools.rs:243`):
 legacy single-file mode reads as the implicit `snippets` library without
 triggering the CLI migration write path, and malformed TOML fails closed
 through the normal library loader (`tests/mcp_integration.rs:309-331`).
@@ -333,18 +362,20 @@ through the normal library loader (`tests/mcp_integration.rs:309-331`).
 > searchable field must go through `SearchFields`, and its default must move
 > the CLI flag and the MCP `search_output` parameter together — see
 > [.skills/selector-and-search-parity.md](../.skills/selector-and-search-parity.md).
+> The parity suite (`tests/selector_search_parity.rs`) now covers all three
+> surfaces and runs in `scripts/check.sh`, so it gates the build.
 
 ## `snippet_get` Identity Contract
 
-Mirrors `snp get` exactly (`src/mcp/tools.rs:129-206`; matching rules at
-`src/selector.rs:376-436`):
+Mirrors `snp get` exactly (`src/mcp/tools.rs:119-196`; matching rules at
+`src/selector.rs:397-493`):
 
 - `id` — exact match, **case-sensitive** (`s.id == id.as_str()`,
-  `src/selector.rs:391`).
+  `src/selector.rs:412`).
 - `description` — exact match, case-insensitive
-  (`eq_ignore_ascii_case`, `src/selector.rs:422`), must be unique in scope.
+  (`eq_ignore_ascii_case`, `src/selector.rs:443`), must be unique in scope.
 - `command` — exact match, case-insensitive (`eq_ignore_ascii_case`,
-  `src/selector.rs:432`), must be unique in scope.
+  `src/selector.rs:452`), must be unique in scope.
 - Exactly one of the three must be supplied (`oneOf` in the input schema,
   `src/mcp/protocol.rs:292-296`, enforced again in `tools::get`).
 - Zero matches → `not_found`; multiple → `ambiguous` with identities.
@@ -387,17 +418,17 @@ Mirrors `snp get` exactly (`src/mcp/tools.rs:129-206`; matching rules at
 
 ## CLI Surface
 
-`McpCommands` (`src/main.rs:265`) exposes three subcommands, all classified
-`SuppressReadOnly` + `Minimal` (`src/main.rs:932`) so agent reads never spawn
+`McpCommands` (`src/main.rs:267`) exposes three subcommands, all classified
+`SuppressReadOnly` + `Minimal` (`src/main.rs:949`) so agent reads never spawn
 workers, open network connections, or create log/config state:
 
 - `snp mcp serve` — run the stdio server until EOF (`mcp::serve()`,
-  `src/mcp/mod.rs:14`, `src/main.rs:858`).
+  `src/mcp/mod.rs:14`, `src/main.rs:868`).
 - `snp mcp instructions <client>` — print the absolute-path setup block for one
-  of the six supported clients (`src/main.rs:859`).
+  of the six supported clients (`src/main.rs:869`).
 - `snp mcp install <client>` — invoke the official noninteractive registration
   when one exists, else print manual setup without changing anything
-  (`src/main.rs:860`).
+  (`src/main.rs:870`).
 
 ## Tests
 
@@ -411,7 +442,7 @@ process over pipes:
 | `malformed_and_oversized_messages_return_errors_without_crashing` (`:267`) | `-32700` / `-32602` / `-32600` error codes, oversized-line recovery |
 | `malformed_library_fails_closed_as_tool_error` (`:310`) | malformed library TOML surfaces as a tool error, not a crash |
 
-Unit tests live next to the code: `src/mcp/tools.rs:296` (limit bounds,
+Unit tests live next to the code: `src/mcp/tools.rs:281` (limit bounds,
 object-only arguments), `src/mcp/client_install.rs:243` (official invocations
 use exact server arguments), and `src/mcp/protocol.rs:472` (bounded reader
 discards oversized lines).
@@ -423,30 +454,35 @@ discards oversized lines).
 - `src/mcp/tools.rs` — the three read-only tools and their argument schemas
 - `src/mcp/client_install.rs` — `McpClient`, official-CLI gate, manual setup blocks
 - `src/selector.rs:142` — `searchable_text`, the shared search contract
-- `src/selector.rs:645` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
-- `src/library/manager.rs:815` — `readonly_library_sources`, the read-only library resolver
-- `src/main.rs:265` — `McpCommands`; `src/main.rs:932` — read-only service classification
+- `src/selector.rs:209` — `score_fuzzy_matches`, the shared match primitive
+- `src/selector.rs:678` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
+- `src/library/manager.rs:879` — `readonly_library_sources`, the read-only library resolver
+- `src/main.rs:267` — `McpCommands`; `src/main.rs:949` — read-only service classification
 - `tests/mcp_integration.rs` — end-to-end protocol contract
 
 ## Invariants
 
 - Read-only: no execution, no mutation, no prompting, no auto-sync trigger.
 - Stdio-only: stdout carries only JSON-RPC; diagnostics go to stderr.
-- Search parity via `selector::searchable_text` — adding a searchable field
-  must go through `SearchFields`, never a tool-local copy.
+- Search parity via `selector::searchable_text` **and**
+  `selector::score_fuzzy_matches` — adding a searchable field must go through
+  `SearchFields`, never a tool-local copy, and the match must never be
+  re-implemented in a tool.
+- An empty `query` is "no filter": it matches every non-deleted snippet in
+  scope, on every surface.
 - Results never include output/notes text, sync metadata, or credentials.
 - `deny_unknown_fields` on all tool argument structs
-  (`src/mcp/tools.rs:31-59`); `limit` is bounded to 1–1000
-  (`src/mcp/tools.rs:224`).
+  (`src/mcp/tools.rs:29-56`); `limit` is bounded to 1–1000
+  (`src/mcp/tools.rs:215`).
 - Exactly three tools. Adding a fourth must keep the read-only /
   non-executing contract.
 
 ## Gotchas
 
 - **The read-only resolver is a hard requirement, not a preference.**
-  `resolve_selector()` (`src/selector.rs:703`) calls `ensure_library_mode()`,
+  `resolve_selector()` (`src/selector.rs:736`) calls `ensure_library_mode()`,
   which migrates a legacy single-file checkout and rewrites metadata. MCP uses
-  `resolve_selector_readonly()` (`src/selector.rs:645`) instead. Swapping them
+  `resolve_selector_readonly()` (`src/selector.rs:678`) instead. Swapping them
   reintroduces recovery side effects into an agent-facing read path.
 - **`readonly_library_sources` avoids *library* migration, not *every* write.**
   `LibraryManager::new()` (`src/library/manager.rs:43`) can still move a legacy
@@ -454,7 +490,7 @@ discards oversized lines).
   backup when the index is malformed. Neither migrates or rewrites library
   metadata; the point is that no `ensure_library_mode()` runs.
 - **The advertised `oneOf` is not the enforcement.** `snippet_get` re-checks
-  exactly-one-of in Rust (`src/mcp/tools.rs:131-143`); the schema alone would
+  exactly-one-of in Rust (`src/mcp/tools.rs:121-134`); the schema alone would
   let a client bypass it.
 - **Tool errors are results, not JSON-RPC errors.** A malformed library or an
   unknown library name comes back as `isError: true` with a `data_error`
@@ -467,7 +503,7 @@ discards oversized lines).
   see [Search Parity](#search-parity).
 - **`snp search --library all` errors by design** while `snp get --library all`,
   `snp list --library all`, and MCP's `library: "all"` work; `all` is a
-  reserved library name (`src/library/model.rs:218`).
+  reserved library name (`src/library/model.rs:247`).
 
 ---
 

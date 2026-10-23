@@ -1,9 +1,47 @@
 # ADR-0001: Monotonic per-library sequence as the sync delta cursor
 
-Status: amended — the defect is closed by the implemented cursor column;
-Option A remains the proposed protocol-level follow-up
+Status: accepted
 
-Date: 2026-10-21 (amended 2026-10-22)
+Status history:
+
+- 2026-10-21 — accepted. Option A (a monotonic per-library sequence) was
+  selected as the fix for the cursor defect.
+- 2026-10-22 — amended. The defect was closed without the protocol change
+  by splitting the cursor's two roles across `updated_at` and `visible_at`.
+  The amendment is recorded in the "Amendment — the cursor column
+  (implemented)" section below. Option A remained selected but unimplemented,
+  and the record carried the status word `amended`, which is not a state in
+  the ADR status lifecycle defined in `plans/adrs/README.md`.
+- 2026-10-22 — status normalized to `accepted`. The decision was already
+  settled and its design fully specified, so `accepted` is the lifecycle
+  state it had reached; `amended` was never a lifecycle state. The
+  Decision, the Considered options, the Amendment section, the
+  Consequences, the Compatibility and migration section, the Security and
+  reliability implications, and the Verification section are unchanged
+  except that the Decision section's wording — "Option A ... is proposed" —
+  was changed to "Option A ... is selected" so that the body agrees with
+  the status. No design, cost, or consequence was altered by this
+  normalization. The implementation of Option A is tracked by
+  `plans/subsystems/sync-cursor-protocol-roadmap.md` M001 and
+  `plans/implementation/sync-cursor-protocol/001-monotonic-per-library-sequence-cursor.md`.
+- 2026-10-22 — implemented. The bootstrap handshake that makes the exact
+  cursor reachable was implemented in the sync cursor protocol's M002
+  milestone, which completes the Option A path this ADR selected: a client
+  now learns the server's write-sequence watermark from a cursorless full
+  sync and sends that cursor on every subsequent request. The protocol needed
+  **no new field** — the three request shapes are distinguished from the two
+  existing cursor fields — so `snip-proto` stays at 0.1.4 and is not
+  republished; `snip-sync` moves to 0.1.8 (the answer rule changed) and
+  `snip-it` to 1.4.1 (the client state machine and the new metadata field
+  changed), and the publish order stays `snip-proto` → `snip-sync` →
+  `snip-it`. The Decision, the Considered options, the Amendment section, the
+  Consequences, the Compatibility and migration section, the Security and
+  reliability implications, and the Verification section are unchanged.
+  Tracked by
+  `plans/subsystems/sync-cursor-protocol-roadmap.md` M002 and
+  `plans/implementation/sync-cursor-protocol/002-cursor-bootstrap-and-precision-convergence.md`.
+
+Date: 2026-10-21 (amended 2026-10-22, status normalized 2026-10-22)
 
 Decision owners: project maintainers
 
@@ -15,7 +53,14 @@ Related specification sections:
 
 Affected subsystem roadmaps:
 
-- `plans/subsystems/cli-library-sync-consolidation-roadmap.md` (closed; this decision reopens the sync-cursor contract only)
+- `plans/subsystems/sync-cursor-protocol-roadmap.md` (active; owns the
+  Option A implementation)
+- `plans/subsystems/cli-library-sync-consolidation-roadmap.md` (closed; this
+  decision reopens the sync-cursor contract only. The Option A
+  implementation was moved to the sync cursor protocol roadmap because a
+  coordinated three-crate protocol change with a version bump in each crate
+  is an independently releasable boundary, and the consolidation roadmap's
+  M001–M005 closure history is preserved intact.)
 
 ## Context
 
@@ -133,7 +178,7 @@ Filter `updated_at >= since OR updated_at >= library_max - WINDOW`.
 
 ## Decision
 
-**Option A — a monotonic per-library sequence — is proposed.** It is the only
+**Option A — a monotonic per-library sequence — is selected.** It is the only
 option that closes the defect without changing the client's merge order or
 the server's last-write-wins rule, and it removes the second-granularity
 workaround from the delta filter.

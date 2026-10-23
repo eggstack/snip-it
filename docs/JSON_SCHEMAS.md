@@ -114,6 +114,26 @@ sync state, local output/notes, and execution are out of scope.
 
 ---
 
+## `delete --json`
+
+```json
+{
+  "schema": 1,
+  "status": "deleted",
+  "id": "string",
+  "description": "string",
+  "library": "string"
+}
+```
+
+- `status` is `deleted` when this run tombstoned the snippet and
+  `already_deleted` when the target already carried a tombstone (the command
+  then exits 9 and changes nothing).
+- `library` is the library filename stem.
+- The document is written to stdout only when a target was identified. A
+  not-found target (exit 3) and an ambiguous selector (exit 5) produce no
+  stdout document; the diagnostics go to stderr.
+
 ## `status --json`
 
 ```json

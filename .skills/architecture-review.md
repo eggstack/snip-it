@@ -46,7 +46,7 @@ source files, grouped by the skill that covers them.
 |------|---------------------|-------------|
 | CLI entry + dispatch | `src/main.rs`, `src/outcome.rs`, `src/usage.rs` | `architecture/cli.md`, `outcome.md` |
 | Commands | `src/commands/` (one module per command) | `architecture/commands/*.md` |
-| Data model + persistence | `src/library/{model,persistence,manager}.rs`, `src/migration.rs` | `.skills/persistence-and-toml-fidelity.md` |
+| Data model + persistence | `src/library/{model,persistence,manager}.rs` | `.skills/persistence-and-toml-fidelity.md` |
 | Config + credentials | `src/config/{mod,sync_settings,toml_cache}.rs`, `src/utils/config.rs` | `.skills/keychain-integration.md` |
 | Selector + search parity | `src/selector.rs` | `.skills/selector-and-search-parity.md` |
 | Sync client + merge | `src/sync.rs`, `src/sync_commands.rs`, `src/sync_failure.rs` | `.skills/sync-module.md` |

@@ -1,6 +1,5 @@
 use crate::error::SnipResult;
 use crossterm::style::{Color, Stylize, style};
-use fuzzy_matcher::FuzzyMatcher;
 use std::path::PathBuf;
 
 /// Canonical Clap arguments for `snp list`.
@@ -87,43 +86,41 @@ pub fn run(
         merged
     };
 
-    let matcher = crate::selector::shared_fuzzy_matcher();
-    let fields = crate::selector::SearchFields {
-        include_tags: true,
-        include_output: search_output,
+    // One named-constructor convention across every search surface: the
+    // opt-in path adds output/notes, the default path is description +
+    // command + tags.
+    let fields = if search_output {
+        crate::selector::SearchFields::with_output()
+    } else {
+        crate::selector::SearchFields::fuzzy_default()
     };
 
+    // The shared match primitive, the same one `snp get --query` and MCP
+    // `snippets_search` use. Calling it here — instead of repeating the
+    // deleted filter and the fuzzy match inline — is what keeps the three
+    // surfaces from drifting on *which* snippets a query selects. The one
+    // consequence of routing through it is the canonical empty-query rule:
+    // an empty filter is "no filter", so `--filter ""` now returns exactly
+    // what `snp list` with no filter returns.
     let mut fuzzy_scores = std::collections::HashMap::new();
-    let mut filtered: Vec<_> = if let Some(ref filter_str) = filter {
-        snippets
-            .snippets
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !s.deleted)
-            .filter(|(idx, s)| {
-                let display = crate::selector::searchable_text(s, fields);
-                if display.is_empty() {
-                    // Snippets with no searchable text (empty description,
-                    // command, tags, and — when enabled — output) can never
-                    // fuzzy-match a non-empty filter.
-                    return false;
-                }
-                if let Some(score) = matcher.fuzzy_match(&display, filter_str) {
-                    fuzzy_scores.insert(*idx, score);
-                    true
-                } else {
-                    false
-                }
-            })
-            .collect()
+    let matched: Vec<usize> = if let Some(ref filter_str) = filter {
+        let (indices, scores) =
+            crate::selector::score_fuzzy_matches(&snippets.snippets, filter_str, fields);
+        fuzzy_scores = scores;
+        indices
     } else {
         snippets
             .snippets
             .iter()
             .enumerate()
             .filter(|(_, s)| !s.deleted)
+            .map(|(index, _)| index)
             .collect()
     };
+    let mut filtered: Vec<(usize, &crate::library::Snippet)> = matched
+        .iter()
+        .map(|index| (*index, &snippets.snippets[*index]))
+        .collect();
 
     // Apply sort if specified
     if let Some(ref opts) = sort_opts {

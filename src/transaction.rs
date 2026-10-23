@@ -26,7 +26,10 @@
 //! `CommittedLocal` journals (from older versions) are handled during recovery.
 
 use crate::error::{SnipError, SnipResult};
-use crate::utils::process::is_process_alive;
+use crate::record_lock::{
+    OwnedLockGuard, OwnedLockNaming, OwnedLockOwner, OwnedLockRequest, OwnedLockWaitPolicy,
+    acquire_owned_lock,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::fs;
@@ -34,132 +37,9 @@ use std::path::{Component, Path, PathBuf};
 
 /// Process identity for lock ownership verification.
 ///
-/// Contains the PID and a start-time token that uniquely identifies a
-/// process incarnation. This prevents PID-reuse attacks where a new
-/// process inherits the same PID as a dead lock owner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProcessIdentity {
-    /// Process ID.
-    pub pid: u32,
-    /// Start-time token identifying this process incarnation.
-    /// `None` when the platform does not support start-time detection.
-    pub start_token: Option<String>,
-}
-
-impl ProcessIdentity {
-    /// Get the current process identity with start-time token.
-    pub fn current() -> ProcessIdentity {
-        current_process_identity()
-    }
-
-    /// Observe the identity of the process identified by `pid`.
-    ///
-    /// Returns `Some(identity)` if the process is alive (with start token
-    /// when observable), or `None` if the process is dead or cannot be
-    /// queried. A live PID whose start identity cannot be observed still
-    /// returns `Some` with `start_token: None` — callers must treat this
-    /// conservatively as a live owner.
-    pub fn observe(pid: u32) -> Option<ProcessIdentity> {
-        if !is_process_alive(pid) {
-            return None;
-        }
-        Some(ProcessIdentity {
-            pid,
-            start_token: get_process_start_token(pid),
-        })
-    }
-}
-
-/// Get the current process identity with start-time token.
-pub fn current_process_identity() -> ProcessIdentity {
-    let pid = std::process::id();
-    ProcessIdentity {
-        pid,
-        start_token: get_process_start_token(pid),
-    }
-}
-
-/// Get a start-time token for the given PID.
-///
-/// On Linux, reads the process start time from `/proc/<pid>/stat` (field 22,
-/// in clock ticks since boot). On macOS, uses `sysctl` with `KERN_PROC_PID`.
-/// On Windows, uses `GetProcessTimes`. Returns `None` if the start identity
-/// cannot be determined.
-#[cfg(target_os = "linux")]
-fn get_process_start_token(pid: u32) -> Option<String> {
-    let stat_path = format!("/proc/{pid}/stat");
-    let content = fs::read_to_string(&stat_path).ok()?;
-    // Field 22 (1-indexed) is `starttime`. The comm field (field 2) may
-    // contain spaces or parens, so find the last `)` and count from there.
-    parse_linux_proc_start_token(&content)
-}
-
-#[cfg(target_os = "linux")]
-fn parse_linux_proc_start_token(stat: &str) -> Option<String> {
-    let after_comm = stat.rfind(')')?;
-    let fields: Vec<&str> = stat.get(after_comm + 2..)?.split_whitespace().collect();
-    fields.get(19).map(|value| (*value).to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn get_process_start_token(pid: u32) -> Option<String> {
-    use libc::{PROC_PIDTBSDINFO, c_int, proc_bsdinfo, proc_pidinfo};
-
-    let mut info: proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let ret = unsafe {
-        proc_pidinfo(
-            pid as c_int,
-            PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut _,
-            std::mem::size_of::<proc_bsdinfo>() as i32,
-        )
-    };
-
-    if ret <= 0 {
-        return None;
-    }
-
-    // pbi_start_tvsec and pbi_start_tvusec give the process start time
-    Some(format!(
-        "{}.{:06}",
-        info.pbi_start_tvsec, info.pbi_start_tvusec
-    ))
-}
-
-#[cfg(windows)]
-fn get_process_start_token(pid: u32) -> Option<String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
-    use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let handle: HANDLE = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return None;
-        }
-        let mut creation_time: FILETIME = std::mem::zeroed();
-        let mut exit_time: FILETIME = std::mem::zeroed();
-        let mut kernel_time: FILETIME = std::mem::zeroed();
-        let mut user_time: FILETIME = std::mem::zeroed();
-        let success = GetProcessTimes(
-            handle,
-            &mut creation_time,
-            &mut exit_time,
-            &mut kernel_time,
-            &mut user_time,
-        );
-        CloseHandle(handle);
-        if success == 0 {
-            return None;
-        }
-        // FILETIME is in 100-nanosecond intervals since January 1, 1601 (UTC)
-        let creation =
-            ((creation_time.dwHighDateTime as u64) << 32) | (creation_time.dwLowDateTime as u64);
-        Some(creation.to_string())
-    }
-}
+/// The owned-record lock protocol owns the identity it verifies; it is
+/// re-exported here because the transaction lock is its first consumer.
+pub use crate::record_lock::{ProcessIdentity, current_process_identity};
 
 /// Action intended for a staged file within a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,6 +239,8 @@ impl TransactionState {
     /// Interruptible states are `Prepared`, `BackupsDurable`, `Committing`,
     /// `CommittedLocal`, `RollingBack`, and `CleaningUp`. Terminal states
     /// (`Committed`, `RolledBack`, `Failed`) are not interruptible.
+    // Retained: documented state-machine predicate
+    // (`architecture/persistence.md` lists the interruptible states).
     #[allow(dead_code)]
     pub fn is_interruptible(&self) -> bool {
         matches!(
@@ -877,6 +759,9 @@ fn remove_terminal_journal(transaction_dir: &Path, transaction_id: &str) -> Snip
 /// Completes the pending sync intent and runs canonical cleanup.
 /// Both startup recovery and repair call this API. It affects no
 /// other journal. Acquires the transaction lock internally.
+// Retained: public transaction API — finalizes a committed-local journal.
+// The module is `pub` under `test-support`, so the item stays reachable even
+// though no in-crate caller sits outside this module.
 #[allow(dead_code)]
 pub fn finalize_committed_local_transaction(
     sync_state_dir: &Path,
@@ -998,27 +883,10 @@ pub struct TransactionLockInfo {
 /// Holds an exclusive lock on the transaction directory. Automatically
 /// releases the lock when dropped. The lock record contains PID and nonce
 /// for ownership verification and stale-lock detection.
-#[derive(Debug)]
-pub struct TransactionLock {
-    lock_path: PathBuf,
-    info: TransactionLockInfo,
-}
-
-impl Drop for TransactionLock {
-    fn drop(&mut self) {
-        // Only remove if we still own the lock. Verify nonce, PID, and
-        // start token (when present) through an opened handle, and confirm
-        // via handle metadata (dev/ino) that the verified file is still the
-        // one at the path before unlinking — a concurrent quarantine +
-        // re-acquire must not lose its lock file to our Drop.
-        crate::utils::process::remove_owned_lock_file(
-            &self.lock_path,
-            &self.info.nonce,
-            self.info.pid,
-            self.info.start_token.as_deref(),
-        );
-    }
-}
+///
+/// The guard is the shared owned-record guard; the transaction record type
+/// is what makes the lock record distinguishable.
+pub type TransactionLock = OwnedLockGuard<TransactionLockInfo>;
 
 /// Upper bound on how long [`acquire_transaction_lock`] may spin on a lock
 /// file it cannot read, reclaim, or observe. Defense in depth: every arm of
@@ -1026,24 +894,57 @@ impl Drop for TransactionLock {
 /// cannot hang without an error or a timeout even if a new arm is added.
 const LOCK_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Whether a lock-file I/O error kind should be treated as transient lock
-/// contention (retry) rather than a hard failure.
+/// Filename prefix shared by transaction-lock quarantine files.
+const TRANSACTION_QUARANTINE_PREFIX: &str = "transaction.lock.quarantine.";
+
+/// Diagnostic labels of the transaction lock file.
 ///
-/// On Windows a just-deleted file can briefly surface `PermissionDenied`
-/// while in a pending-delete state, so it retries like `AlreadyExists`.
-/// On Unix a `PermissionDenied` here is a genuine misconfiguration (a lock
-/// file owned by another UID, or a `.transaction` directory that is not
-/// traversable) and is stable, not transient: retrying it spins forever
-/// without an error or a timeout.
-#[cfg(windows)]
-fn is_transient_lock_contention(kind: std::io::ErrorKind) -> bool {
-    kind == std::io::ErrorKind::PermissionDenied
+/// The shared protocol keeps the caller's exact diagnostic text so the two
+/// owned-record locks stay distinguishable ("Transaction lock held" vs
+/// "Local data lock held").
+const TRANSACTION_LOCK_NAMING: OwnedLockNaming = OwnedLockNaming {
+    label: "transaction lock",
+    quarantine_prefix: TRANSACTION_QUARANTINE_PREFIX,
+    write_operation: "write lock record",
+    read_operation: "read existing lock",
+    acquire_operation: "acquire transaction lock",
+    quarantine_read_operation: "read transaction lock before quarantine",
+    quarantine_operation: "quarantine stale lock",
+    pid_reuse_message: "Transaction lock owner PID reused (start token mismatch), reclaiming",
+};
+
+/// The error reported when the transaction lock is held by a live owner.
+///
+/// The transaction lock fails fast: it never waits for the owner.
+fn transaction_lock_held_error(existing: &TransactionLockInfo, _lock_path: &Path) -> SnipError {
+    SnipError::runtime_error(
+        "Transaction lock held",
+        Some(&format!(
+            "Another transaction ({}) is in progress (PID {}). Wait for it to complete.",
+            existing.operation, existing.pid
+        )),
+    )
 }
 
-/// Unix has no pending-delete aliasing: permission errors fail fast.
-#[cfg(not(windows))]
-fn is_transient_lock_contention(_kind: std::io::ErrorKind) -> bool {
-    false
+/// The error reported when the flat acquisition deadline elapses.
+fn transaction_lock_read_timeout_error(lock_path: &Path) -> SnipError {
+    SnipError::runtime_error(
+        "Transaction lock acquisition timed out",
+        Some(&format!(
+            "Gave up waiting for {} after {} seconds.",
+            lock_path.display(),
+            LOCK_ACQUIRE_TIMEOUT.as_secs()
+        )),
+    )
+}
+
+/// Extract the ownership identity from a transaction lock record.
+fn transaction_lock_owner(info: &TransactionLockInfo) -> OwnedLockOwner {
+    OwnedLockOwner {
+        pid: info.pid,
+        nonce: info.nonce.clone(),
+        start_token: info.start_token.clone(),
+    }
 }
 
 /// Acquire a local mutation transaction lock.
@@ -1054,6 +955,10 @@ fn is_transient_lock_contention(_kind: std::io::ErrorKind) -> bool {
 /// the acquisition loop retries with `create_new(true)`. Returns an error
 /// if the lock is held by a live process, or once `LOCK_ACQUIRE_TIMEOUT`
 /// elapses without the lock becoming resolvable.
+///
+/// The protocol itself lives in [`crate::record_lock`]; this function only
+/// builds the transaction lock record and selects the **fail-fast** wait
+/// policy.
 pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult<TransactionLock> {
     create_private_dir(state_dir)?;
 
@@ -1076,315 +981,21 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
     // create_new succeeding and content being written.
     let content = toml::to_string_pretty(&info)
         .map_err(|e| SnipError::toml_error("serialize lock info", e))?;
-    let mut empty_retries = 0u32;
-    let mut malformed_retries = 0u32;
-    let deadline = std::time::Instant::now() + LOCK_ACQUIRE_TIMEOUT;
 
-    // Single acquisition loop: create_new, write immediately, classify existing owner.
-    loop {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(mut file) => {
-                // Write the lock record to the open file handle
-                // immediately, then sync before dropping. This
-                // minimizes the empty-file window. A concurrent
-                // reader that sees empty content will retry instead
-                // of quarantining (see below).
-                use std::io::Write;
-                if let Err(e) = file.write_all(content.as_bytes()) {
-                    // The file was created by this call and is empty. Leaving
-                    // it behind makes every later acquirer spin through the
-                    // empty-content ladder, so drop it before reporting.
-                    drop(file);
-                    let _ = fs::remove_file(&lock_path);
-                    return Err(SnipError::io_error("write lock record", lock_path, e));
-                }
-                if let Err(e) = file.sync_all() {
-                    tracing::warn!(error = %e, "failed to sync transaction lock record");
-                }
-                return Ok(TransactionLock { lock_path, info });
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::AlreadyExists
-                // On Windows, a just-deleted file can briefly return
-                // PermissionDenied when in a pending-delete state.
-                // Treat it the same as AlreadyExists.
-                || is_transient_lock_contention(e.kind()) =>
-            {
-                // Lock exists — read and classify the owner.
-                // Handle TOCTOU: another writer may have removed the lock
-                // between create_new failing and read_to_string.
-                let content = match fs::read_to_string(&lock_path) {
-                    Ok(c) => c,
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::NotFound
-                        // On Windows, a pending-delete file may be unreadable.
-                        || is_transient_lock_contention(e.kind()) =>
-                    {
-                        // Lock was removed or is in a transient state — loop
-                        // back and retry. Bounded by `deadline` so no error
-                        // kind can wedge this loop forever.
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        if std::time::Instant::now() >= deadline {
-                            return Err(SnipError::runtime_error(
-                                "Transaction lock acquisition timed out",
-                                Some(&format!(
-                                    "Gave up waiting for {} after {} seconds.",
-                                    lock_path.display(),
-                                    LOCK_ACQUIRE_TIMEOUT.as_secs()
-                                )),
-                            ));
-                        }
-                        continue;
-                    }
-                    Err(e) => {
-                        return Err(SnipError::io_error(
-                            "read existing lock",
-                            lock_path.clone(),
-                            e,
-                        ));
-                    }
-                };
-                let existing: TransactionLockInfo = match toml::from_str(&content) {
-                    Ok(info) => {
-                        // A readable record resets both ladders: a waiter that
-                        // sees scattered empty or partially-written reads over
-                        // a long legitimate acquisition must not eventually
-                        // quarantine a perfectly good lock.
-                        empty_retries = 0;
-                        malformed_retries = 0;
-                        info
-                    }
-                    Err(_) if content.trim().is_empty() => {
-                        // Empty file — another writer just called
-                        // create_new but hasn't written yet. Retry briefly,
-                        // then reclaim a file left by a crashed writer.
-                        empty_retries += 1;
-                        let is_old = fs::metadata(&lock_path)
-                            .and_then(|m| m.modified())
-                            .ok()
-                            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
-                            .is_some_and(|age| age > std::time::Duration::from_millis(100));
-                        if empty_retries > 200 || (empty_retries > 50 && is_old) {
-                            tracing::warn!(
-                                "Empty transaction lock record did not become valid; quarantining"
-                            );
-                            quarantine_stale_lock(&lock_path, None)?;
-                            empty_retries = 0;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        continue;
-                    }
-                    Err(_) => {
-                        // Malformed *or* partially written. The arm above
-                        // exists precisely because "another writer just called
-                        // create_new but hasn't written yet" is observable, and
-                        // a record that is only partly written looks malformed
-                        // too. Quarantining immediately would rename away a
-                        // live owner's lock and let a second acquirer into the
-                        // critical section, so give it the same bounded ladder
-                        // before reclaiming.
-                        malformed_retries = malformed_retries.saturating_add(1);
-                        if malformed_retries > 200 {
-                            tracing::warn!(
-                                "Malformed transaction lock record did not become valid; quarantining"
-                            );
-                            quarantine_stale_lock(&lock_path, None)?;
-                            malformed_retries = 0;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        continue;
-                    }
-                };
-
-                // Observe the process identified by the existing lock record.
-                // This queries existing.pid — NOT the current process.
-                match ProcessIdentity::observe(existing.pid) {
-                    None => {
-                        // Owner process is dead — reclaim.
-                        tracing::info!(
-                            pid = existing.pid,
-                            operation = %existing.operation,
-                            "Reclaiming stale transaction lock (owner process is dead)"
-                        );
-                        quarantine_stale_lock(&lock_path, Some(&existing))?;
-                        continue;
-                    }
-                    Some(observed) => {
-                        // Owner is alive. Refuse if we cannot verify ownership
-                        // (conservative policy — "identity unavailable" is NOT
-                        // "stale"):
-                        // - existing.start_token is None (old lock without token)
-                        // - observed.start_token is None (can't observe identity)
-                        // - start tokens match (same process)
-                        // Only reclaim when both tokens are present and differ
-                        // (PID reuse).
-                        if existing.start_token.is_none()
-                            || observed.start_token.is_none()
-                            || observed.start_token == existing.start_token
-                        {
-                            return Err(SnipError::runtime_error(
-                                "Transaction lock held",
-                                Some(&format!(
-                                    "Another transaction ({}) is in progress (PID {}). Wait for it to complete.",
-                                    existing.operation, existing.pid
-                                )),
-                            ));
-                        }
-                        // PID reuse detected — observed start token differs
-                        // from recorded start token.
-                        tracing::info!(
-                            pid = existing.pid,
-                            observed_token = ?observed.start_token,
-                            recorded_token = ?existing.start_token,
-                            "Transaction lock owner PID reused (start token mismatch), reclaiming"
-                        );
-                        quarantine_stale_lock(&lock_path, Some(&existing))?;
-                        continue;
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(SnipError::io_error(
-                    "acquire transaction lock",
-                    lock_path,
-                    e,
-                ));
-            }
-        }
-    }
-}
-
-/// Quarantine a stale or malformed lock by renaming it.
-///
-/// When `observed` is supplied, the record currently at `lock_path` must still
-/// match it before the rename happens. Reading the record and checking the
-/// owner's liveness are non-atomic, so without this check a writer that
-/// decided to reclaim could rename away a *live* lock that another writer had
-/// already reclaimed and re-acquired in the meantime — silently putting two
-/// processes inside the critical section. Passing `None` (malformed or empty
-/// record) skips verification because there is no owner identity to compare.
-///
-/// The quarantined file preserves the original content for debugging
-/// and repair inspection. Returns the quarantine path on success.
-///
-/// If the lock file has already been quarantined by a concurrent writer
-/// (race on stale-lock reclaim), the `NotFound` error is treated as success.
-fn quarantine_stale_lock(
-    lock_path: &Path,
-    observed: Option<&TransactionLockInfo>,
-) -> SnipResult<PathBuf> {
-    if let Some(expected) = observed {
-        match fs::read_to_string(lock_path) {
-            Ok(content) => match toml::from_str::<TransactionLockInfo>(&content) {
-                Ok(current) if &current == expected => {}
-                Ok(_) => {
-                    // A different record is in place: the stale observation is
-                    // obsolete and the current owner must not be disturbed.
-                    tracing::debug!(
-                        "transaction lock record changed since it was observed; not quarantining"
-                    );
-                    return Ok(lock_path.to_path_buf());
-                }
-                Err(_) => {
-                    tracing::debug!(
-                        "transaction lock record is no longer parseable; not quarantining"
-                    );
-                    return Ok(lock_path.to_path_buf());
-                }
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(SnipError::io_error(
-                    "read transaction lock before quarantine",
-                    lock_path.to_path_buf(),
-                    e,
-                ));
-            }
-        }
-    }
-
-    let quarantine_name = format!("transaction.lock.quarantine.{}", uuid::Uuid::new_v4());
-    let quarantine_path = lock_path
-        .parent()
-        .unwrap_or(lock_path)
-        .join(&quarantine_name);
-    match fs::rename(lock_path, &quarantine_path) {
-        Ok(()) => {
-            prune_quarantine_files(
-                quarantine_path.parent().unwrap_or(&quarantine_path),
-                TRANSACTION_QUARANTINE_PREFIX,
-                QUARANTINE_RETENTION,
-            );
-            Ok(quarantine_path)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Another writer already quarantined the lock — treat as success.
-            tracing::debug!("transaction lock already quarantined by another writer");
-            Ok(quarantine_path)
-        }
-        Err(e) => Err(SnipError::io_error(
-            "quarantine stale lock",
-            quarantine_path.clone(),
-            e,
-        )),
-    }
-}
-
-/// Filename prefix shared by transaction-lock quarantine files.
-const TRANSACTION_QUARANTINE_PREFIX: &str = "transaction.lock.quarantine.";
-
-/// How long quarantine files are kept for debugging before GC removes them.
-pub(crate) const QUARANTINE_RETENTION: std::time::Duration =
-    std::time::Duration::from_secs(7 * 24 * 60 * 60);
-
-/// Best-effort removal of quarantine files in `dir` older than `max_age`.
-///
-/// Every stale/malformed lock is quarantined under a fresh UUID name; without
-/// GC, pathological spawn/kill churn would grow the state directory without
-/// bound. Pruning runs whenever a new quarantine file is created (rare), so
-/// the directory scan cost is negligible. Individual failures are logged and
-/// ignored — GC must never break the acquisition path it is called from.
-pub(crate) fn prune_quarantine_files(dir: &Path, prefix: &str, max_age: std::time::Duration) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    let request = OwnedLockRequest {
+        lock_path: &lock_path,
+        record: &info,
+        record_content: &content,
+        naming: &TRANSACTION_LOCK_NAMING,
+        // The transaction lock fails fast: a live owner is reported at once.
+        policy: OwnedLockWaitPolicy::FailFast {
+            flat_timeout: LOCK_ACQUIRE_TIMEOUT,
+            live_owner_error: transaction_lock_held_error,
+            read_timeout_error: transaction_lock_read_timeout_error,
+        },
     };
-    let now = std::time::SystemTime::now();
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::debug!(error = %e, "skipping unreadable quarantine entry");
-                continue;
-            }
-        };
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if !name_str.starts_with(prefix) {
-            continue;
-        }
-        let age = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok());
-        match age {
-            Some(age) if age >= max_age => match fs::remove_file(entry.path()) {
-                Ok(()) => tracing::debug!(file = %name_str, "removed expired quarantine file"),
-                Err(e) => tracing::debug!(
-                    error = %e,
-                    file = %name_str,
-                    "could not remove expired quarantine file"
-                ),
-            },
-            _ => {}
-        }
-    }
+
+    acquire_owned_lock(&request, transaction_lock_owner)
 }
 
 /// Begin a new transaction.
@@ -1489,6 +1100,9 @@ pub fn advance_to_committing(
 ///
 /// `next_rollback_position` represents completed rollback actions in
 /// rollback order: positions `0..N` have been restored and verified.
+// Retained: public transaction API — advances a journal into the rolling-back
+// state. The module is `pub` under `test-support`, so the item stays
+// reachable even though no in-crate caller sits outside this module.
 #[allow(dead_code)]
 pub fn advance_to_rolling_back(
     state_dir: &Path,
@@ -2661,6 +2275,8 @@ pub fn gate_mutation_on_interrupted_transactions(
 /// compatibility wrapper over the complete scanner and classifier. New code
 /// should use `scan_transaction_journals` + `classify_journal_recovery`
 /// directly.
+// Retained: documented scan helper (`architecture/persistence.md`) and the
+// compatibility wrapper the restore-path unit tests exercise.
 #[allow(dead_code)]
 pub fn check_interrupted_transactions(state_dir: &Path) -> SnipResult<Vec<TransactionJournal>> {
     let inventory = scan_transaction_journals(state_dir)?;
@@ -2679,15 +2295,6 @@ fn journal_path(state_dir: &Path, txn_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_start_token_parser_reads_field_22() {
-        let stat = "42 (name with ) parens) S f4 f5 f6 f7 f8 f9 f10 f11 f12 f13 f14 f15 f16 f17 f18 f19 f20 FIELD21 START22";
-        assert_eq!(parse_linux_proc_start_token(stat), Some("START22".into()));
-        assert_ne!(parse_linux_proc_start_token(stat), Some("FIELD21".into()));
-        assert_eq!(parse_linux_proc_start_token("1 (short) S f3"), None);
-    }
 
     #[cfg(unix)]
     #[test]
@@ -2727,6 +2334,38 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("lock"), "Expected lock error, got: {msg}");
+        // The transaction lock fails fast: the caller reports the live
+        // owner with the operation and PID, verbatim.
+        assert_eq!(
+            msg,
+            format!(
+                "Runtime error: Transaction lock held: Another transaction (op1) is in progress \
+                 (PID {}). Wait for it to complete.",
+                std::process::id()
+            )
+        );
+    }
+
+    /// A transaction lock record written by the pre-unification build.
+    ///
+    /// The record format is part of the on-disk contract: a lock taken by an
+    /// older build must stay recognizable to this build.
+    const BASELINE_TRANSACTION_LOCK_RECORD: &str = "schema_version = 1\npid = 4242\nnonce = \"baseline-nonce\"\ncreated_at_unix_ms = 1700000000000\noperation = \"baseline-op\"\nstart_token = \"12345\"\n";
+
+    #[test]
+    fn test_baseline_transaction_lock_record_parses_and_serializes_identically() {
+        let info: TransactionLockInfo = toml::from_str(BASELINE_TRANSACTION_LOCK_RECORD).unwrap();
+        assert_eq!(info.schema_version, 1);
+        assert_eq!(info.pid, 4242);
+        assert_eq!(info.nonce, "baseline-nonce");
+        assert_eq!(info.created_at_unix_ms, 1_700_000_000_000);
+        assert_eq!(info.operation, "baseline-op");
+        assert_eq!(info.start_token.as_deref(), Some("12345"));
+        assert_eq!(
+            toml::to_string_pretty(&info).unwrap(),
+            BASELINE_TRANSACTION_LOCK_RECORD,
+            "the lock record serialization must stay byte-identical"
+        );
     }
 
     #[test]
@@ -2784,7 +2423,7 @@ mod tests {
         fs::write(path.join("transaction.lock"), "canonical").unwrap();
 
         // A long retention keeps everything (files are brand new).
-        prune_quarantine_files(
+        crate::record_lock::prune_quarantine_files(
             path,
             TRANSACTION_QUARANTINE_PREFIX,
             std::time::Duration::from_secs(3600),
@@ -2796,7 +2435,7 @@ mod tests {
 
         // Zero max-age expires every matching file; the canonical lock and
         // other prefixes must survive.
-        prune_quarantine_files(
+        crate::record_lock::prune_quarantine_files(
             path,
             TRANSACTION_QUARANTINE_PREFIX,
             std::time::Duration::ZERO,

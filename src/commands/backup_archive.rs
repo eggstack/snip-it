@@ -10,12 +10,6 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Backup format (currently only directory layout is supported).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum BackupFormat {
-    Directory,
-}
-
 /// Known kinds of entries in a backup manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -445,11 +439,6 @@ server_url = "https://sync.example.com"
         assert!(!redacted.contains("sk-secret-indented"));
         assert!(redacted.contains("device_id"));
         assert!(redacted.contains("<redacted>"));
-    }
-
-    #[test]
-    fn test_backup_format_is_directory() {
-        assert_eq!(BackupFormat::Directory, BackupFormat::Directory);
     }
 
     #[test]

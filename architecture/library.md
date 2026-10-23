@@ -239,11 +239,9 @@ see restore's *own* journal as interrupted and roll it back mid-flight.
 
 ### Schema-version write path
 
-`write_schema_version(path, version)` (`src/migration.rs:153-180`) parses the
-file as a `toml::Table`, inserts the `schema_version` key, and serializes
-back. **It must use `toml::Table`, not `toml::Value`** — `toml::Value`
-collapses array-of-tables, destroying the `[[snippets]]` structure the
-library format depends on.
+The persisted library format carries **no schema version**. The dead
+versioning framework (`src/migration.rs`) was removed; introducing a schema
+version is a schema change that requires a migration and a version bump.
 
 ---
 
@@ -499,7 +497,6 @@ cross-library scope keyword in
 | `src/library/persistence.rs` | `load_library`, `save_library`, `save_library_internal`, `backup_library`, `normalize_snippet_ids`, `deterministic_legacy_id`, `deterministic_duplicate_id` |
 | `src/library/manager.rs` | `LibraryManager` registry/primary behavior, `ensure_library_mode`, and the canonical read-only resolver `resolve_readonly_sources` / `readonly_library_sources` |
 | `src/library/tests.rs` | 97 in-crate unit tests: round-trip, `pet` compatibility, ID normalization, name validation |
-| `src/migration.rs` | `SchemaVersion`, `get_schema_version`, `write_schema_version` (must use `toml::Table`) |
 | `src/utils/atomic.rs` | `write_private_atomic` / `atomic_replace` — the write primitives the save path uses |
 | `src/utils/config.rs` | `get_config_dir`, `derive_sync_state_dir`, and the `#[cfg(test)]` `ScopedConfigDir` override |
 | `src/utils/toml_helpers.rs` | Escape helpers — for hand-written TOML only, never for serialized output |

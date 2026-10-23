@@ -9,6 +9,7 @@ pub mod backup_archive;
 pub mod backup_cmd;
 pub mod clip_cmd;
 pub mod cron_cmd;
+pub mod delete_cmd;
 pub mod doctor_cmd;
 pub mod doctor_report;
 pub mod edit_cmd;
@@ -549,6 +550,15 @@ where
         None
     };
 
+    // The sync trigger the shared delete primitive performs once its
+    // mutation is durable: an explicit sync when the caller asked for one,
+    // otherwise the auto-sync notification. `runtime.is_some()` holds
+    // exactly when `do_sync` is true.
+    let delete_trigger = match runtime {
+        Some(rt) => DeleteSyncTrigger::ExplicitSync(rt),
+        None => DeleteSyncTrigger::AutoNotify,
+    };
+
     let lib_path = match resolve_selection_library_path(library.as_deref(), resolution)? {
         Some(p) => p,
         None => {
@@ -615,65 +625,9 @@ where
                             Some("The selected snippet is no longer available"),
                         )
                     })?;
-                    let target_id = snippets
-                        .snippets
-                        .get(original_idx)
-                        .map(|s| s.id.clone())
-                        .ok_or_else(|| {
-                            SnipError::runtime_error(
-                                "Snippet not found",
-                                Some("The selected snippet is no longer available"),
-                            )
-                        })?;
-                    // Delete under the local-data lock: the library is re-read
-                    // inside the critical section, so a snippet created
-                    // elsewhere while the picker was open is not overwritten by
-                    // the in-memory copy of the library.
-                    let mut deleted_snippet: Option<crate::library::Snippet> = None;
-                    crate::library::update_library(&lib_path, |current| {
-                        let target = current
-                            .snippets
-                            .iter_mut()
-                            .find(|s| s.id == target_id && !s.deleted)
-                            .ok_or_else(|| {
-                                SnipError::runtime_error(
-                                    "Snippet not found",
-                                    Some("The selected snippet is no longer available"),
-                                )
-                            })?;
-                        target.deleted = true;
-                        let now = chrono::Utc::now().timestamp();
-                        target.updated_at = target.updated_at.max(now).saturating_add(1);
-                        deleted_snippet = Some(target.clone());
-                        Ok(())
-                    })?;
-                    let deleted_snippet = deleted_snippet.ok_or_else(|| {
-                        SnipError::runtime_error(
-                            "Snippet not found",
-                            Some("The selected snippet is no longer available"),
-                        )
-                    })?;
-                    // Mirror the tombstone into the in-memory copy the picker
-                    // renders from.
-                    mark_snippet_deleted(&mut snippets, original_idx)?;
-                    if let Err(e) = crate::logging::audit_log("delete", &deleted_snippet, None) {
-                        tracing::debug!("Audit log write failed: {}", e);
-                    }
-                    if do_sync {
-                        if let Some(rt) = runtime
-                            && let Err(e) = run_explicit_sync(rt)
-                        {
-                            tracing::warn!(error = %e, "post-delete explicit sync failed");
-                        }
-                    } else {
-                        // Auto-sync trigger: notify after successful delete commit (Workstream B3).
-                        crate::auto_sync::report_notification_result(
-                            crate::auto_sync::notify_mutation(
-                                crate::auto_sync::MutationKind::SnippetDelete,
-                                crate::auto_sync::MutationOrigin::User,
-                            ),
-                        );
-                    }
+                    // The delete itself is the shared primitive; only the
+                    // picker's in-memory mirror stays in this loop.
+                    apply_snippet_delete(&mut snippets, &lib_path, original_idx, delete_trigger)?;
                     continue;
                 }
                 crate::ui::SnippetSelection::Delete(_) => continue,
@@ -722,6 +676,193 @@ where
     }
 }
 
+/// The sync trigger a snippet delete performs once its mutation is durable.
+///
+/// The interactive path asks for an explicit sync when the caller passed
+/// `--sync`; every other caller gets the auto-sync notification.
+#[derive(Debug, Clone, Copy)]
+pub enum DeleteSyncTrigger<'a> {
+    /// Notify the auto-sync subsystem after the mutation commits.
+    AutoNotify,
+    /// Run an explicit sync with the caller's runtime after the mutation commits.
+    ExplicitSync(&'a tokio::runtime::Runtime),
+}
+
+/// The outcome of [`delete_snippet`].
+///
+/// `AlreadyDeleted` and `NotFound` are distinct: the first means the
+/// identifier exists but already carries a tombstone, the second means no
+/// snippet with that identifier exists at all.
+#[derive(Debug, Clone)]
+pub enum SnippetDeleteOutcome {
+    /// The snippet was tombstoned and persisted.
+    Deleted(crate::library::Snippet),
+    /// The target exists but was already tombstoned; nothing was changed.
+    AlreadyDeleted(crate::library::Snippet),
+    /// No snippet with that identifier exists; nothing was changed.
+    NotFound,
+}
+
+/// Why the shared delete primitive could not tombstone the target.
+///
+/// The lookup happens inside `library::update_library`, so the distinction
+/// has to travel out of the mutation closure.
+enum DeleteProbe {
+    /// The identifier matches a snippet that already carries a tombstone.
+    Tombstoned(crate::library::Snippet),
+    /// The identifier matches nothing in the library.
+    Missing,
+}
+
+/// Tombstone a snippet by identifier — the one shared snippet-delete primitive.
+///
+/// This is the single implementation of the delete sequence. It performs, in
+/// one place:
+///
+/// 1. the mutation gate and the local-data lock, through
+///    [`crate::library::update_library`];
+/// 2. the re-read of the library inside the critical section, so a snippet
+///    created elsewhere while the caller was resolving its target is not
+///    overwritten by a stale in-memory copy;
+/// 3. the lookup of the target **by identifier** with `!deleted`, so a
+///    concurrent insertion cannot shift the target;
+/// 4. the tombstone itself: `deleted = true` and
+///    `updated_at = updated_at.max(now).saturating_add(1)`, which makes the
+///    tombstone timestamp strictly greater than the live version's — the
+///    property that lets a deletion beat live content in the client merge;
+/// 5. the durable save through the atomic write path;
+/// 6. the `delete` audit entry — best effort, a failed audit write is logged
+///    at debug level and does not fail the delete;
+/// 7. the sync trigger, after the commit succeeded.
+///
+/// The primitive contains no picker-specific logic: no display index and no
+/// in-memory mirror. The interactive path mirrors the tombstone into the
+/// picker's in-memory copy itself (see [`apply_snippet_delete`]).
+///
+/// When the target cannot be tombstoned the library is left untouched: the
+/// mutation closure fails, so `update_library` never reaches its save.
+pub fn delete_snippet(
+    library_path: &std::path::Path,
+    target_id: &str,
+    trigger: DeleteSyncTrigger<'_>,
+) -> SnipResult<SnippetDeleteOutcome> {
+    let mut probe: Option<DeleteProbe> = None;
+    let mut deleted: Option<crate::library::Snippet> = None;
+
+    let mutation = crate::library::update_library(library_path, |current| {
+        let index = current
+            .snippets
+            .iter()
+            .position(|s| s.id == target_id && !s.deleted);
+        let Some(index) = index else {
+            // The target is gone (deleted by somebody else, or never
+            // existed). Record which of the two it was, then fail the
+            // mutation so the library is not rewritten.
+            let tombstoned = current
+                .snippets
+                .iter()
+                .find(|s| s.id == target_id && s.deleted)
+                .cloned();
+            probe = Some(match tombstoned {
+                Some(snippet) => DeleteProbe::Tombstoned(snippet),
+                None => DeleteProbe::Missing,
+            });
+            return Err(SnipError::runtime_error(
+                "Snippet not found",
+                Some("The selected snippet is no longer available"),
+            ));
+        };
+        let target = &mut current.snippets[index];
+        target.deleted = true;
+        let now = chrono::Utc::now().timestamp();
+        target.updated_at = target.updated_at.max(now).saturating_add(1);
+        deleted = Some(target.clone());
+        Ok(())
+    });
+
+    match mutation {
+        Ok(_) => {}
+        Err(e) => {
+            return match probe {
+                Some(DeleteProbe::Tombstoned(snippet)) => {
+                    Ok(SnippetDeleteOutcome::AlreadyDeleted(snippet))
+                }
+                Some(DeleteProbe::Missing) => Ok(SnippetDeleteOutcome::NotFound),
+                // The gate, the lock, the load, or the save failed: report
+                // the real error instead of a lookup verdict.
+                None => Err(e),
+            };
+        }
+    }
+
+    let deleted = deleted.ok_or_else(|| {
+        SnipError::runtime_error(
+            "Snippet not found",
+            Some("The selected snippet is no longer available"),
+        )
+    })?;
+
+    // Audit is best effort: the tombstone is already durable.
+    if let Err(e) = crate::logging::audit_log("delete", &deleted, None) {
+        tracing::debug!("Audit log write failed: {}", e);
+    }
+
+    // Sync trigger: only after the mutation is durable.
+    match trigger {
+        DeleteSyncTrigger::ExplicitSync(rt) => {
+            if let Err(e) = run_explicit_sync(rt) {
+                tracing::warn!(error = %e, "post-delete explicit sync failed");
+            }
+        }
+        DeleteSyncTrigger::AutoNotify => {
+            crate::auto_sync::report_notification_result(crate::auto_sync::notify_mutation(
+                crate::auto_sync::MutationKind::SnippetDelete,
+                crate::auto_sync::MutationOrigin::User,
+            ));
+        }
+    }
+
+    Ok(SnippetDeleteOutcome::Deleted(deleted))
+}
+
+/// Apply a TUI delete selection: the shared primitive plus the picker's
+/// in-memory mirror.
+///
+/// The mirror is picker-specific — it updates the copy the picker renders
+/// from and never touches the file — so it stays in the selection loop's
+/// helper rather than in [`delete_snippet`]. The persisted state comes from
+/// the primitive alone, which is what makes the interactive and the
+/// non-interactive delete produce identical files.
+pub(crate) fn apply_snippet_delete(
+    snippets: &mut crate::library::Snippets,
+    library_path: &std::path::Path,
+    original_idx: usize,
+    trigger: DeleteSyncTrigger<'_>,
+) -> SnipResult<crate::library::Snippet> {
+    let target_id = snippets
+        .snippets
+        .get(original_idx)
+        .map(|s| s.id.clone())
+        .ok_or_else(|| {
+            SnipError::runtime_error(
+                "Snippet not found",
+                Some("The selected snippet is no longer available"),
+            )
+        })?;
+    let deleted = match delete_snippet(library_path, &target_id, trigger)? {
+        SnippetDeleteOutcome::Deleted(snippet) => snippet,
+        SnippetDeleteOutcome::AlreadyDeleted(_) | SnippetDeleteOutcome::NotFound => {
+            return Err(SnipError::runtime_error(
+                "Snippet not found",
+                Some("The selected snippet is no longer available"),
+            ));
+        }
+    };
+    // Mirror the tombstone into the in-memory copy the picker renders from.
+    mark_snippet_deleted(snippets, original_idx)?;
+    Ok(deleted)
+}
+
 /// Marks a selected snippet as deleted while preserving its tombstone for sync.
 fn mark_snippet_deleted(
     snippets: &mut crate::library::Snippets,
@@ -744,6 +885,165 @@ fn mark_snippet_deleted(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A far-future `updated_at` so a tombstone's timestamp is
+    /// deterministic: `updated_at.max(now).saturating_add(1)` keeps the
+    /// fixture's value instead of the wall clock, so two runs against the
+    /// same fixture produce byte-identical library files.
+    const FUTURE_UPDATED_AT: i64 = 4_000_000_000;
+
+    /// An isolated config dir with one primary library holding `snippets`.
+    ///
+    /// The gate, the local-data lock, and the audit log are all derived from
+    /// the config directory, so the override keeps the test hermetic.
+    struct DeleteFixture {
+        _tmp: TempDir,
+        _config_dir: crate::utils::config::ScopedConfigDir,
+        config_dir: std::path::PathBuf,
+        library_path: std::path::PathBuf,
+    }
+
+    impl DeleteFixture {
+        fn new(snippets: Vec<crate::library::Snippet>) -> Self {
+            let tmp = TempDir::new().expect("test helper: temp dir");
+            let config_dir = tmp.path().join(".config").join("snp");
+            let guard = crate::utils::config::ScopedConfigDir::new(config_dir.clone());
+            let mut manager = crate::library::LibraryManager::new().expect("test helper: manager");
+            let library_path = manager
+                .create_library("mylib")
+                .expect("test helper: create library");
+            let collection = crate::library::Snippets {
+                snippets,
+                folders: vec![],
+            };
+            std::fs::write(
+                &library_path,
+                toml::to_string_pretty(&collection).expect("test helper: serialize library"),
+            )
+            .expect("test helper: write library");
+            Self {
+                _tmp: tmp,
+                _config_dir: guard,
+                config_dir,
+                library_path,
+            }
+        }
+
+        fn snippet(id: &str, description: &str, command: &str) -> crate::library::Snippet {
+            crate::library::Snippet {
+                id: id.to_string(),
+                description: description.to_string(),
+                command: command.to_string(),
+                updated_at: FUTURE_UPDATED_AT,
+                ..Default::default()
+            }
+        }
+
+        fn library_bytes(&self) -> String {
+            std::fs::read_to_string(&self.library_path).expect("test helper: read library")
+        }
+    }
+
+    #[test]
+    fn delete_snippet_tombstones_with_a_strictly_advancing_timestamp() {
+        let fixture = DeleteFixture::new(vec![DeleteFixture::snippet(
+            "id-1",
+            "git push",
+            "git push origin main",
+        )]);
+        let live = crate::library::load_library(&fixture.library_path)
+            .expect("load fixture")
+            .snippets[0]
+            .updated_at;
+
+        let outcome = delete_snippet(&fixture.library_path, "id-1", DeleteSyncTrigger::AutoNotify)
+            .expect("delete succeeds");
+
+        match outcome {
+            SnippetDeleteOutcome::Deleted(snippet) => {
+                // The identifier is deterministic and is not reassigned.
+                assert_eq!(snippet.id, "id-1");
+                assert!(snippet.deleted);
+                // The tombstone timestamp is strictly greater than the live
+                // version's, which is what lets a deletion beat live content
+                // in the client merge.
+                assert!(
+                    snippet.updated_at > live,
+                    "tombstone timestamp {} must exceed the live timestamp {live}",
+                    snippet.updated_at
+                );
+                assert_eq!(snippet.updated_at, live + 1);
+            }
+            other => panic!("expected a tombstone, got {other:?}"),
+        }
+
+        // The persisted file carries the same tombstone.
+        let persisted = crate::library::load_library(&fixture.library_path).expect("reload");
+        let target = &persisted.snippets[0];
+        assert_eq!(target.id, "id-1");
+        assert!(target.deleted);
+        assert_eq!(target.updated_at, live + 1);
+    }
+
+    #[test]
+    fn delete_snippet_reports_an_already_deleted_target_distinctly() {
+        let mut snippet = DeleteFixture::snippet("id-1", "git push", "git push");
+        snippet.deleted = true;
+        let fixture = DeleteFixture::new(vec![snippet]);
+        let before = fixture.library_bytes();
+
+        let outcome = delete_snippet(&fixture.library_path, "id-1", DeleteSyncTrigger::AutoNotify)
+            .expect("delete reports a verdict");
+
+        match outcome {
+            SnippetDeleteOutcome::AlreadyDeleted(snippet) => {
+                assert_eq!(snippet.id, "id-1");
+            }
+            other => panic!("expected an already-deleted verdict, got {other:?}"),
+        }
+        // The already-deleted target is not modified.
+        assert_eq!(fixture.library_bytes(), before);
+    }
+
+    #[test]
+    fn delete_snippet_reports_a_missing_target_distinctly() {
+        let fixture =
+            DeleteFixture::new(vec![DeleteFixture::snippet("id-1", "git push", "git push")]);
+        let before = fixture.library_bytes();
+
+        let outcome = delete_snippet(
+            &fixture.library_path,
+            "does-not-exist",
+            DeleteSyncTrigger::AutoNotify,
+        )
+        .expect("delete reports a verdict");
+
+        assert!(
+            matches!(outcome, SnippetDeleteOutcome::NotFound),
+            "expected a not-found verdict, got {outcome:?}"
+        );
+        assert_eq!(fixture.library_bytes(), before);
+    }
+
+    #[test]
+    fn delete_snippet_writes_the_delete_audit_entry() {
+        let fixture =
+            DeleteFixture::new(vec![DeleteFixture::snippet("id-1", "git push", "git push")]);
+
+        delete_snippet(&fixture.library_path, "id-1", DeleteSyncTrigger::AutoNotify)
+            .expect("delete succeeds");
+
+        let audit = std::fs::read_to_string(fixture.config_dir.join("audit.log"))
+            .expect("audit log written");
+        let entry = audit
+            .lines()
+            .find(|line| line.contains("|delete|"))
+            .expect("audit log names the delete action");
+        assert!(
+            entry.contains("id-1"),
+            "audit entry must name the target: {entry}"
+        );
+    }
 
     #[test]
     fn test_load_snippets_missing_file() {

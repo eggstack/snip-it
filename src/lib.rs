@@ -56,8 +56,12 @@ pub(crate) mod diagnostics;
 pub(crate) mod encryption;
 pub(crate) mod library;
 pub(crate) mod local_data;
-pub(crate) mod migration;
 pub(crate) mod output;
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod record_lock;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod record_lock;
 pub(crate) mod status_snapshot;
 pub(crate) mod sync_commands;
 pub(crate) mod sync_failure;
@@ -74,7 +78,9 @@ pub use error::{SnipError, SnipResult};
 // Re-export domain types for integration tests and binary access.
 // The library data types and atomic write utilities are the supported
 // public surface; the rest is exposed for crate-boundary reasons.
-pub use library::{LibraryConfig, LibraryMeta, Snippet, Snippets, load_library, save_library};
+pub use library::{
+    LibraryConfig, LibraryMeta, Snippet, Snippets, SyncCursorKind, load_library, save_library,
+};
 pub use utils::atomic::{
     AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic,
 };

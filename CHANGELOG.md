@@ -7,8 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`snp delete` — a non-interactive snippet delete.** The delete sequence that
+  was embedded in the TUI selection loop is now one shared primitive
+  (`commands::delete_snippet`), used by both the interactive delete and the new
+  command, so the persisted state is identical: the same tombstone, the same
+  strictly-advancing `updated_at`, the same `delete` audit entry, and the same
+  auto-sync notification. `snp delete --id <ID>` (also `--description-exact`,
+  `--command-exact`, `--query`, `--library`) resolves its target through the
+  existing selector contract and exits 0 on success, 5 when the selector is
+  ambiguous, 3 when the target does not exist, and 9 when the target is already
+  deleted. There is no confirmation prompt — the selector's ambiguity rules are
+  what protect against deleting the wrong target. `snp data delete` mirrors the
+  command exactly.
+- **The sync delta cursor can now be exact.** `snip-sync` assigns every write a
+  strictly increasing **per-library write sequence** (`snippets.sequence`),
+  kept in a new `library_sequences` counter table. The counter bump shares the
+  transaction with the row write — a rolled-back write consumes no sequence
+  value — and a unique index on `(library_id, sequence)` turns a counter race
+  into a loud failure instead of a silently invisible row. `SyncRequest` gains
+  `last_sync_sequence` (field 7) and `SyncResponse` gains `server_sequence`
+  (field 9); both are **additive**, so a client that sends no sequence keeps
+  the existing second-granular `visible_at` filter, and the server returns a
+  sequence only when the request carried one. The client stores the sequence
+  cursor alongside `last_sync`, sends both cursors on every request, and
+  advances the sequence cursor only when the response carries a non-zero one.
+  Existing databases are migrated in place; the backfill preserves the
+  pre-migration `updated_at` ordering, so a migrated server selects the same
+  rows as an unmigrated one for the first sync.
+  (`snip-proto` 0.1.4, `snip-sync` 0.1.7, `snip-it` 1.4.0)
+
+### Changed
+
+- **The sync write-sequence cursor is now reachable.** The server assigned a
+  strictly increasing per-library write sequence and used it as the delta
+  filter, but the path was closed: the server answered `server_sequence` only
+  when the request carried a non-zero `last_sync_sequence`, and the client
+  stored a sequence only when the response carried one. A client therefore
+  sent zero forever and never entered the exact path. The server now answers
+  the sequence watermark for a request that carries **no cursor at all** — the
+  bootstrap full sync, the only request shape that delivers the complete
+  library, and therefore the only one whose watermark a client may adopt —
+  and the client adopts it and sends it from then on. A timestamp-only delta
+  is still answered with zero, because a delta does not deliver the library's
+  whole history, so its watermark is not adoptable by that client.
+- **The client now records which sync cursor the server is serving.** A new
+  additive `sync_cursor_kind` field in the library metadata records
+  `unknown`, `timestamp`, or `sequence`, so the client can tell "the server
+  sent no sequence" apart from "the sequence did not advance" instead of
+  drifting back onto the imprecise timestamp path. A library file written
+  before this field loads as `unknown`: no migration runs and no file is
+  rewritten on load. A push-only sync never adopts or advances a sequence
+  cursor, because it discards the rows the server returns. `snip-sync` is now
+  0.1.8 and `snip-it` is now 1.4.1; `snip-proto` is unchanged at 0.1.4
+  because no protocol field was added, removed, or retyped.
+- **The three search surfaces now share one match primitive.** `snp get --query`,
+  `snp list --filter`, and MCP `snippets_search` each carried their own copy of
+  the deleted filter and the fuzzy match, so they could select different
+  snippets for the same query without any compiler error. They now call one
+  shared primitive, `selector::score_fuzzy_matches`, which decides *which*
+  snippets a query selects; only the ranking is left to each caller. The field
+  projection (`selector::searchable_text`) and its field set are unchanged.
+- **`snp list --filter ""` is now "no filter".** An empty filter previously
+  dropped every snippet whose description, command, and tags were all empty,
+  while `snp get --query ""` and MCP `snippets_search` with an empty `query`
+  returned all of them — the same empty argument behaved differently on
+  different surfaces. An empty query is now "no filter" on all three, so
+  `snp list --filter ""` returns exactly what `snp list` with no filter
+  returns.
+- **The owned-record lock protocol is implemented once.** The transaction lock
+  (`transaction.lock`) and the local-data lock (`local-data.lock`) each carried
+  their own copy of the same `create_new` + ownership-record protocol —
+  including a duplicated `is_transient_lock_contention` helper — and the copies
+  had already drifted: they disagreed about when a wait ends. The protocol now
+  lives in `src/record_lock.rs`, and the difference between the two locks is an
+  explicit **wait policy** parameter — the transaction lock fails fast on a live
+  owner ("Transaction lock held"), the local-data lock waits for the lock to
+  change hands ("Local data lock held"). The lock file names, the on-disk record
+  format (including `schema_version` and the transaction record's `operation`
+  field), the conservative ownership rule (reclaim only when the recorded and
+  observed start tokens are both present and differ), the ownership-verified
+  quarantine, and every user-visible error message are unchanged; a static guard
+  in `tests/architecture.rs` now fails if a second copy of the protocol appears.
+- **Dead-code suppressions are now individually justified.** Every remaining
+  `#[allow(dead_code)]` outside the test-only failpoint seam carries an
+  adjacent comment saying why the item is retained, and a new architecture
+  guard fails if a module-level `#![allow(dead_code)]` is introduced.
+
+### Removed
+
+- **`snp backup --format` was removed.** The flag had exactly one legal value
+  (`directory`), which was already the default, and `run()` discarded the
+  parsed value — it never selected a different behavior. The `BackupFormat`
+  enum is gone with it; `snp backup` and `snp data backup` still produce a
+  directory snapshot.
+- **The dead schema-version framework was removed.** `src/migration.rs`
+  (`SchemaVersion`, `get_schema_version`, `needs_migration`,
+  `write_schema_version`, `run_migrations`) had no production call site. The
+  persisted library format still carries **no schema version**; introducing
+  one is a schema change that requires a migration and a version bump.
+- **The unreferenced `Durability::EphemeralCoordination` class was removed.**
+  No production path selected it, and `src/utils/atomic.rs` holds no lock
+  code, so the class claimed a behavior the library never had.
+
 ### Fixed
 
+- **The search-parity contract was verified against only two of its three
+  surfaces.** The parity suite compared `snp list --filter` against MCP
+  `snippets_search` and never invoked `snp get --query` — the surface the
+  contract names first — and the suite was not listed in `scripts/check.sh`, so
+  nothing in the build required it to pass. The suite now exercises all three
+  surfaces against the same fixture, and it gates the build. It also pins two
+  behaviors the contract had left open: an empty query is "no filter" on all
+  three surfaces, and the cross-library order differs by surface family on
+  purpose (`snp get` orders by library → description → id; `snp list` and MCP
+  `snippets_search` order by global relevance), the two coinciding within a
+  single library. A comparison that claimed to assert order while sorting both
+  sides before comparing now asserts order.
+- **The checked-in protobuf stubs were out of date with the schema.** The
+  doc comments for `GetSnippets.since` and `SyncRequest.local_snippets` still
+  carried the pre-fix wording ("strictly greater than `since`", "the server
+  uses each record's own timestamp for conflict resolution"). The stub was
+  regenerated, so both now describe the implemented behaviour: an inclusive
+  `>=` filter on the server-assigned cursor, and every local record merged.
 - **Snippet files could be silently corrupted on load.** The TOML escape repair
   in `src/utils/toml_helpers.rs` rebuilt a repaired string from raw bytes, so
   (a) every valid TOML escape other than `\\` and `\"` (`\t`, `\r`, `\n`,

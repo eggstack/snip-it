@@ -105,7 +105,8 @@ Pre-convention `Status: complete` in promoted flat plans maps to `closed`.
 
 Stable subsystem names: `distribution-release`, `server-lifecycle-http`,
 `updater-transport`, `cli-library-sync-consolidation`, `mcp-integration`,
-`eggstack-dependency-refresh`.
+`eggstack-dependency-refresh`, `maintenance-consolidation`,
+`locking-convergence`, `snippet-crud-surface`, `sync-cursor-protocol`.
 
 ## Work classification
 

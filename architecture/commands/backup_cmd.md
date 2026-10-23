@@ -24,9 +24,6 @@ pub struct BackupArgs {
     /// Include sync.toml in backup (API key redacted)
     #[arg(long)]
     pub include_sync_state: bool,
-    /// Backup format
-    #[arg(long, value_enum, default_value = "directory")]
-    pub format: BackupFormat,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -38,7 +35,6 @@ pub struct BackupArgs {
 | `-o`, `--output <PATH>` | `Option<PathBuf>` | `None` | Destination backup directory. When `None`, the command writes to `<config>/backups/<YYYYMMDD_HHMMSS>/` (`src/commands/backup_cmd.rs:61-64`). |
 | `--include-usage` | flag | off | Also snapshot `usage.toml` (usage/frequency metadata) into the backup. |
 | `--include-sync-state` | flag | off | Also snapshot `sync.toml`. The API key is **redacted before hashing and writing** (`src/commands/backup_cmd.rs:208-219`, `backup_archive.rs:358-374`). |
-| `--format <FORMAT>` | `BackupFormat` | `directory` | Currently the only variant is `Directory` (`backup_archive.rs:15-17`). **The argument is accepted but ignored** — `run()` discards it with `let _ = format;` (`src/commands/backup_cmd.rs:49`). |
 | `--json` | flag | off | Emit a machine-readable JSON summary on **stdout**. The human summary always goes to **stderr**. |
 
 The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:286-287` dispatches to the same `handle_backup` (`src/main.rs:437-446`, `src/main.rs:866-868`).
@@ -142,7 +138,7 @@ Paths inside the manifest are validated against absolute paths, `..` traversal, 
 
 ### Archive destinations
 
-The destination is always a **directory**. `--output` names the final directory; the intermediate `<dest>.staging.<uuid>` directory is created and removed by `atomic_write_backup`. There is currently **no single-file tarball/zip archive format** — `BackupFormat` has exactly one variant (`Directory`) and the `--format` argument is discarded by `run()`.
+The destination is always a **directory**. `--output` names the final directory; the intermediate `<dest>.staging.<uuid>` directory is created and removed by `atomic_write_backup`. There is currently **no single-file tarball/zip archive format**. The `--format` flag was removed: it had exactly one legal value (`directory`), which was already the default.
 
 ## Output and exit codes
 
@@ -183,7 +179,7 @@ The destination is always a **directory**. `--output` names the final directory;
 
 ## Gotchas
 
-- `--format` is a **no-op**. Only `directory` exists, and `run()` discards the parsed value (`src/commands/backup_cmd.rs:49`). Do not document it as selecting a layout.
+- There is **no `--format` flag** any more. The backup snapshot is always a directory layout; do not reintroduce a single-variant format flag.
 - `usage.toml` and `sync.toml` are **opt-in**. A backup without those flags will restore without them.
 - `sync.toml` in a backup is **redacted**; restoring it over a live `sync.toml` replaces the real API key with `<redacted>`.
 - The backup includes the `libraries.toml` index, so restoring into a directory with a different index can rewrite library registration — see `restore_cmd.md` for the merge/replace semantics.

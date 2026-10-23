@@ -42,7 +42,7 @@ library — it is a standalone binary.  The public surface exists because:
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub use error::{SnipError, SnipResult}` | **stable-public** | Core error types |
-| `pub use library::{LibraryConfig, LibraryMeta, Snippet, Snippets, load_library, save_library}` | **stable-public** | Domain data model and persistence |
+| `pub use library::{LibraryConfig, LibraryMeta, Snippet, Snippets, SyncCursorKind, load_library, save_library}` | **stable-public** | Domain data model and persistence |
 | `pub use utils::atomic::{AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic}` | **stable-public** | Atomic file writes |
 
 ### Implementation-only (#[doc(hidden)])
@@ -103,7 +103,7 @@ exactly:
 | `snip_it::error` | `SnipError`, `SyncFailureKind` |
 | `snip_it::outcome` | `CliOutcome`, `OutputContext`, `exit_code` |
 | `snip_it::sort` | `SnippetSort`, `SortOptions`, `rank_snippets` |
-| `snip_it` (root) | `AtomicWriteOptions`, `Durability`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `load_library` |
+| `snip_it` (root) | `AtomicWriteOptions`, `Durability`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `SyncCursorKind`, `load_library` |
 
 Anything not listed above is public but unpinned by that test.
 
@@ -434,6 +434,7 @@ only a `pub(crate) use snip_proto as proto;` alias).
 | `pub struct Snippet` | **application-internal** | Individual snippet |
 | `pub struct LibraryConfig` | **application-internal** | Libraries config |
 | `pub struct LibraryMeta` | **application-internal** | Library metadata |
+| `pub enum SyncCursorKind` | **application-internal** | Which delta cursor the server is serving for a library |
 | `pub struct LibraryManager` | **application-internal** | Library management |
 | `pub fn load_library()` | **application-internal** | Load from file |
 | `pub fn save_library()` | **application-internal** | Save to file |
@@ -552,7 +553,7 @@ otherwise a new broken link reaches `main` unnoticed.
 |---------------|-------|
 | **stable-public** | ~25 items (error, sort, re-exports) |
 | **provisional-public** | ~30 items (config, some config types) |
-| **pub(crate)** | 12 modules (clipboard, diagnostics, encryption, library, local_data, migration, output, status_snapshot, sync_commands, sync_failure, test_failpoints, utils) — plus `transaction` in a default build |
+| **pub(crate)** | 11 modules (clipboard, diagnostics, encryption, library, local_data, output, status_snapshot, sync_commands, sync_failure, test_failpoints, utils) — plus `transaction` in a default build |
 | **application-internal** | ~200+ items (commands, auto_sync, logging, ui, usage) |
 | **integration-test-only** | ~40 items (sync, proto) |
 | **removed** | 0 items |

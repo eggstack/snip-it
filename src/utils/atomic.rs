@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 /// behavior, not in permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(dead_code)]
 pub enum Durability {
     /// User-visible data that must survive power loss (snippets, libraries).
     /// Calls `sync_all` on the file before rename.
@@ -33,15 +32,10 @@ pub enum Durability {
     /// Metadata that can be reconstructed (usage counters, cache).
     /// No fsync.
     RecoverableMetadata,
-
-    /// Lock files, coordination artifacts that are not persisted.
-    /// No fsync, cleanup expected.
-    EphemeralCoordination,
 }
 
 /// Options controlling atomic write behavior.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AtomicWriteOptions {
     /// Durability class governing fsync and permissions.
     pub durability: Durability,
@@ -55,7 +49,6 @@ pub struct AtomicWriteOptions {
     pub reject_symlink: bool,
 }
 
-#[allow(dead_code)]
 impl AtomicWriteOptions {
     /// Create options with defaults for the given durability class.
     pub fn for_durability(durability: Durability) -> Self {
@@ -82,19 +75,17 @@ impl AtomicWriteOptions {
 
 /// Report returned by [`atomic_replace`] describing what happened.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AtomicWriteReport {
     /// Whether the target file existed before the write.
     pub target_existed: bool,
     /// Number of bytes written to the temp file.
     pub bytes_written: u64,
     /// Whether the parent directory supports `fsync` on dirfd.
-    /// `None` if not probed (e.g. ephemeral durability).
+    /// `None` if not probed.
     pub parent_sync_supported: Option<bool>,
 }
 
 /// Resolve the parent directory of `path`, creating it if necessary.
-#[allow(dead_code)]
 fn ensure_parent(path: &Path) -> SnipResult<PathBuf> {
     let parent = path
         .parent()
@@ -108,7 +99,6 @@ fn ensure_parent(path: &Path) -> SnipResult<PathBuf> {
 ///
 /// Rejects directories, FIFOs, sockets, and block/character devices.
 /// Optionally rejects symlinks when `reject_symlink` is set.
-#[allow(dead_code)]
 fn validate_target(path: &Path, reject_symlink: bool) -> SnipResult<()> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -191,24 +181,19 @@ fn parent_dir_sync_durable(
 
 /// Attempt to sync the parent directory to ensure the rename is durable.
 ///
-/// Returns `Some(true)` if dirfsync succeeded, `Some(false)` if it failed
-/// or is unsupported (logged but not fatal), and `None` for ephemeral
-/// durability. Callers that must guarantee durability should use
-/// [`parent_dir_sync_durable`] directly to surface the error.
-fn parent_dir_sync(parent: &Path, durability: Durability) -> Option<bool> {
-    match durability {
-        Durability::EphemeralCoordination => None,
-        _ => {
-            #[cfg(unix)]
-            {
-                Some(parent_dir_sync_durable(parent).is_ok())
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = parent;
-                Some(false)
-            }
-        }
+/// Returns `Some(true)` if dirfsync succeeded and `Some(false)` if it failed
+/// or is unsupported (logged but not fatal). Callers that must guarantee
+/// durability should use [`parent_dir_sync_durable`] directly to surface the
+/// error.
+fn parent_dir_sync(parent: &Path) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        Some(parent_dir_sync_durable(parent).is_ok())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Some(false)
     }
 }
 
@@ -270,7 +255,7 @@ fn sync_parent_dir(
         }
     }
 
-    let supported = parent_dir_sync(parent, durability);
+    let supported = parent_dir_sync(parent);
     if supported == Some(false) {
         tracing::warn!(
             path = %target.display(),
@@ -388,7 +373,6 @@ pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> Sn
 /// 9. When `preserve_permissions` is set and the target existed, restores
 ///    the original permissions on the renamed file.
 /// 10. On any failure the temp file is cleaned up via `TempFileGuard`.
-#[allow(dead_code)]
 pub fn atomic_replace(
     target: &Path,
     bytes: &[u8],
@@ -660,15 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn test_atomic_replace_ephemeral_no_dir_sync() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("lock");
-        let opts = AtomicWriteOptions::for_durability(Durability::EphemeralCoordination);
-        let report = atomic_replace(&path, b"", &opts).unwrap();
-        assert_eq!(report.parent_sync_supported, None);
-    }
-
-    #[test]
     fn test_atomic_replace_preserves_permissions() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("perms.txt");
@@ -728,11 +703,9 @@ mod tests {
         let d1 = Durability::DurableUserData;
         let d2 = Durability::SensitiveConfig;
         let d3 = Durability::RecoverableMetadata;
-        let d4 = Durability::EphemeralCoordination;
         assert_ne!(d1, d2);
         assert_ne!(d2, d3);
-        assert_ne!(d3, d4);
-        assert_ne!(d1, d4);
+        assert_ne!(d1, d3);
     }
 
     #[test]

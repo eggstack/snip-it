@@ -85,6 +85,15 @@ message SyncRequest {
     int32 limit = 5;
     // Number of records to skip for pagination.
     int32 offset = 6;
+    // Server-assigned per-library write sequence returned by the previous
+    // completed sync. Zero means "no sequence cursor": the server then
+    // selects with the timestamp cursor (`last_sync_timestamp` / the
+    // server-assigned `visible_at` position) exactly as it does today. A
+    // non-zero value puts the request on the sequence path, where the server
+    // selects the rows whose write sequence is greater than or equal to this
+    // value. The sequence is assigned by the server and is never
+    // client-supplied.
+    int64 last_sync_sequence = 7;
 }
 
 message SyncResponse {
@@ -96,6 +105,12 @@ message SyncResponse {
     repeated string skipped_ids = 6;
     bool has_more = 7;
     int32 total_count = 8;
+    // The library's write-sequence watermark. Non-zero only when the request
+    // carried a non-zero `last_sync_sequence`; zero otherwise. A client that
+    // receives a non-zero value advances its sequence cursor; a client that
+    // receives zero keeps using the timestamp cursor, which is the path taken
+    // against a server that does not serve the sequence cursor.
+    int64 server_sequence = 9;
 }
 
 message Snippet {

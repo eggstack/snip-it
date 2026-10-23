@@ -38,6 +38,7 @@ snippet can exit with a code other than 8 — see
 | `snp new` | `n` | Create a snippet. Takes the command as a positional argument, or `--command-stdin` to read it from a pipe. |
 | `snp list` | `l` | List snippets. Never executes anything. `--json` / `--csv` for machine output. |
 | `snp get` | — | Retrieve one snippet deterministically. No TUI, no execution. The scripting entry point. |
+| `snp delete` | — | Tombstone one snippet deterministically. No TUI, no prompt. |
 | `snp run` | `r` | Pick a snippet in the TUI and execute it through your shell. |
 | `snp clip` | `c` | Pick a snippet in the TUI and copy it to the clipboard. |
 | `snp search` | `s` | Fuzzy-search snippets in the TUI. |
@@ -67,6 +68,56 @@ than one snippet.
 command, and tags, plus `--library`, `--json`, `--csv`, `--search-output`,
 `--sort`, and `--favorites-first`. It has no `--field`; use `snp get --field`
 to pull a single field out of one snippet.
+
+### The search contract
+
+`snp get --query`, `snp list --filter`, and MCP `snippets_search` share one
+definition of which snippet fields participate in a search, and one match
+primitive (`selector::score_fuzzy_matches`). Two rules follow from that.
+
+**An empty query is "no filter".** `snp get --query ""`, `snp list --filter ""`,
+and MCP `snippets_search` with an empty `query` all return every non-deleted
+snippet in scope, including snippets whose description, command, and tags are
+all empty. An empty argument filters nothing.
+
+**The order differs across libraries, by design.** `snp get --query` resolves
+one library at a time and then aggregates, so across `--library all` its order
+is library name, then description, then snippet id. `snp list --filter` and MCP
+`snippets_search` merge the libraries first and then score the merged set, so
+their order is global relevance. Within a single library the two orders are
+the same.
+
+`snp list --search-output` and MCP `search_output` opt the output/notes field
+into the search. `snp get --query` has no such opt-in, so output and notes
+never participate in a `get` match.
+
+## Deleting a snippet
+
+`snp delete` tombstones one snippet without a TUI and without a confirmation
+prompt. It is the scripting counterpart of the TUI's `d` key and produces the
+same persisted state.
+
+| Flag | Matches |
+|------|---------|
+| `--id <ID>` | Exact snippet ID (case-sensitive). |
+| `--description-exact <TEXT>` | Exact description (case-insensitive). |
+| `--command-exact <TEXT>` | Exact command text (case-insensitive). |
+| `--query <TEXT>` | Fuzzy match across description, command, and tags. |
+
+Exactly one selector is required. `--library <NAME>` scopes the delete to one
+library; `--library all` is refused, because a delete tombstones one snippet in
+one library file. `--json` emits the machine-readable result.
+
+| Outcome | Exit |
+|---------|------|
+| The snippet was deleted | 0 |
+| The selector matched more than one snippet (nothing was deleted) | 5 |
+| No snippet matched | 3 |
+| The snippet was already deleted (nothing was changed) | 9 |
+
+The delete is a tombstone, not a removal: the snippet keeps its identifier and
+its `updated_at` advances past the live version, so the tombstone still syncs
+and still wins over live content in a merge.
 
 ## Libraries
 
@@ -119,7 +170,7 @@ never executes anything. See [`MCP.md`](MCP.md).
 | `snp doctor --check-shell <SHELL>` | Check the generated shell integration for syntax errors. |
 | `snp validate` | Validate snippet data. Read-only. |
 | `snp status` | Show library and auto-sync status. Read-only. |
-| `snp backup` | Create a secret-free backup snapshot. |
+| `snp backup` | Create a secret-free backup snapshot. The snapshot is always a directory layout; the `--format` flag was removed. |
 | `snp restore <BACKUP_DIR>` | Restore from a backup snapshot. |
 | `snp repair` | Repair configuration and library files. |
 
@@ -164,6 +215,7 @@ spellings stay equivalent.
 | `snp data restore <BACKUP_DIR>` | `snp restore <BACKUP_DIR>` |
 | `snp data repair` | `snp repair` |
 | `snp data status` | `snp status` |
+| `snp data delete` | `snp delete` |
 
 ## Self-update
 

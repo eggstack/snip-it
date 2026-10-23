@@ -3,7 +3,8 @@
 //! Verifies identity behavior across the full lifecycle.
 
 use snip_it::{
-    LibraryConfig, LibraryMeta, ScopedConfigDir, Snippet, Snippets, load_library, save_library,
+    LibraryConfig, LibraryMeta, ScopedConfigDir, Snippet, Snippets, SyncCursorKind, load_library,
+    save_library,
 };
 use tempfile::TempDir;
 
@@ -418,6 +419,8 @@ fn test_library_meta_roundtrip() {
                 library_id: "lib-id-work".to_string(),
                 is_primary: true,
                 last_sync: Some(1000),
+                last_sync_sequence: None,
+                sync_cursor_kind: SyncCursorKind::Unknown,
                 server_id: Some("server-work".to_string()),
             },
             LibraryMeta {
@@ -425,6 +428,8 @@ fn test_library_meta_roundtrip() {
                 library_id: "lib-id-personal".to_string(),
                 is_primary: false,
                 last_sync: None,
+                last_sync_sequence: None,
+                sync_cursor_kind: SyncCursorKind::Unknown,
                 server_id: None,
             },
         ],

@@ -176,6 +176,9 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> Result<(), String> {
 
 /// Try to acquire an advisory lock for a short-lived maintenance command.
 pub struct LockGuard {
+    // Retained: the advisory lock lives on this descriptor, so it must stay
+    // open for the whole guard. The handle is only *read* on Windows
+    // (`UnlockFileEx` in `Drop`), hence the suppression.
     #[allow(dead_code)]
     file: fs::File,
     path: PathBuf,

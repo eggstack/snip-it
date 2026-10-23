@@ -520,6 +520,8 @@ fn test_delete_library_restores_config_when_file_deletion_fails() {
                 library_id: String::new(),
                 is_primary: true,
                 last_sync: None,
+                last_sync_sequence: None,
+                sync_cursor_kind: SyncCursorKind::Unknown,
                 server_id: None,
             }],
             generation: 0,
@@ -593,6 +595,8 @@ is_primary = true
                 library_id: String::new(),
                 is_primary: true,
                 last_sync: None,
+                last_sync_sequence: None,
+                sync_cursor_kind: SyncCursorKind::Unknown,
                 server_id: None,
             }],
             generation: 0,
@@ -1961,7 +1965,7 @@ fn test_find_orphaned_ids_shared_classifier() {
     );
 }
 
-// ─── Manager mutation contracts (bugs.md #11) ───
+// ─── Manager mutation contracts ───
 
 #[test]
 fn test_mutators_report_unknown_library() {
@@ -2018,7 +2022,7 @@ fn test_mutators_update_known_library() {
     );
 }
 
-// ─── Backup rotation is per library (bugs.md #12) ───
+// ─── Backup rotation is per library ───
 
 #[test]
 fn test_backup_name_matcher_only_accepts_own_library() {
@@ -2109,7 +2113,7 @@ fn test_backup_rotation_caps_backups_per_library() {
     }
 }
 
-// ─── Premade libraries honour the mutation gate (bugs.md #13) ───
+// ─── Premade libraries honour the mutation gate ───
 
 #[test]
 fn test_save_premade_library_refuses_while_journal_is_corrupt() {
@@ -2143,7 +2147,7 @@ fn test_save_premade_library_refuses_while_journal_is_corrupt() {
     );
 }
 
-// ─── Legacy single-file migration writes atomically (bugs.md #18) ───
+// ─── Legacy single-file migration writes atomically ───
 
 #[test]
 fn test_migrate_from_single_file_writes_library_atomically() {

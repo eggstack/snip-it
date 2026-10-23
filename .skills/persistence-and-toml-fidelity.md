@@ -2,9 +2,8 @@
 
 ## Purpose
 Guide agents through local data persistence: atomic writes and durability
-classes (`src/utils/atomic.rs`), library save/load and schema versioning
-(`src/library/`, `src/migration.rs`), and backup/restore/validate/repair
-(`src/commands/`).
+classes (`src/utils/atomic.rs`), library save/load (`src/library/`), and
+backup/restore/validate/repair (`src/commands/`).
 
 The critical rule in this file is the one that produces **silent data loss**,
 not a crash. Read it before touching the save path.
@@ -35,8 +34,6 @@ two-character pair. The helper still exists for callers that hand-write TOML —
 - Never insert a transform between `toml::to_string_pretty` and the write.
 - The serializer already chooses correct quoting and escaping for every
   character, including tabs, trailing spaces, and CRLF. Trust it.
-- `write_schema_version` must use `toml::Table`, **not** `toml::Value`
-  (`src/migration.rs:165`) — `toml::Value` collapses array-of-tables.
 - New fields need `#[serde(default)]` so old files still parse.
 
 ### The golden command corpus
@@ -93,7 +90,6 @@ class to how much the data matters:
 | `DurableUserData` | pending markers, auto-sync status, restore installs, transaction rollback, sync recovery markers | yes | **required** — hard error on failure |
 | `SensitiveConfig` | credentials, sync settings | yes | **required** — hard error on failure |
 | `RecoverableMetadata` | caches, usage counters | no | best-effort — logs a warning and continues |
-| `EphemeralCoordination` | locks, temp state | no | none |
 
 Notes that the shorthand table tends to get wrong:
 
@@ -106,8 +102,6 @@ Notes that the shorthand table tends to get wrong:
   `DurableUserData`.
 - `RecoverableMetadata`'s parent-dir sync is **not** a guarantee: it degrades to
   a warning and returns `Ok(Some(false))` (`src/utils/atomic.rs:247-264`).
-- `EphemeralCoordination` currently has **no production caller** — it appears
-  only inside `src/utils/atomic.rs`'s own tests.
 
 **Snippets and libraries are not written through `atomic_replace`.** They go
 through `write_private_atomic` (`src/utils/atomic.rs:278`), which takes no
@@ -154,7 +148,6 @@ backup automatically. Do not remove that.
 | `src/library/model.rs` | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta` |
 | `src/library/persistence.rs` | `load_library`, `save_library`, `save_library_internal`, ID normalization |
 | `src/library/manager.rs` | `libraries.toml` registry, primary selection, server linkage, `resolve_readonly_sources` |
-| `src/migration.rs` | `SchemaVersion` (`LEGACY(0)`/`CURRENT(1)`), `get_schema_version`, `write_schema_version` |
 | `src/utils/atomic.rs` | `atomic_replace`, `AtomicWriteOptions`, durability classes |
 | `src/utils/toml_helpers.rs` | Escape helpers for hand-written TOML only |
 | `src/commands/backup_cmd.rs` / `backup_archive.rs` | Secret-free snapshot + SHA-256 manifest |
@@ -207,7 +200,6 @@ ordinary CI.
 ## Common mistakes
 
 - Adding a "cleanup" or "normalization" pass after `toml::to_string_pretty`.
-- Using `toml::Value` in `write_schema_version` — destroys array-of-tables.
 - Treating a malformed library as an empty one and then saving over it.
 - Writing user data with `fs::write` instead of an `atomic_replace` durability class.
 - Using `check_interrupted_transactions` as if it were the gate.

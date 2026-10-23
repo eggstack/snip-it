@@ -58,7 +58,7 @@ Two deliberate gaps, both annotated in the test source:
    sync/keychain parts of `config` are not imported by core.
 
 Modules not named in either list (`selector.rs`, `process_file_lock.rs`,
-`utils/*`, `migration.rs`, `transaction.rs`, `local_data.rs`, `error.rs`,
+`utils/*`, `record_lock.rs`, `transaction.rs`, `local_data.rs`, `error.rs`,
 `outcome.rs`, `sync_failure.rs`) are governed by convention, not by the
 scanner. Keep them conservative anyway.
 
@@ -80,7 +80,7 @@ No platform dependencies (no keyring, no tonic, no clipboard, no process spawnin
 | `src/outcome.rs` | CliOutcome enum, exit-code mapping, machine-output guard |
 | `src/selector.rs` | SnippetSelector, ResolutionPolicy — deterministic non-TUI snippet resolution |
 | `src/process_file_lock.rs` | Kernel-backed cross-process file lock (`flock`/`LockFileEx`) |
-| `src/migration.rs` | SchemaVersion, `write_schema_version` (TOML array-of-tables preservation) |
+| `src/record_lock.rs` | Owned-record lock protocol (`create_new` + ownership record + conservative PID-reuse reclaim), with the wait policy as a parameter |
 | `src/utils/variables.rs` | Variable parsing, expansion, `<name=default>` syntax |
 | `src/utils/shell_keywords.rs` | Shell keyword detection for syntax highlighting |
 | `src/utils/atomic.rs` | Atomic file writes with durability classes |
@@ -146,13 +146,13 @@ Everything that touches the terminal, spawns processes, or orchestrates user wor
 |--------|---------------|
 | `src/main.rs` | CLI entry point, clap dispatch, `command_behavior()` policy table |
 | `src/lib.rs` | Library crate exports (stable public surface) |
-| `src/commands/` | 26 modules: `mod`, `new`, `list`, `run`, `clip`, `select`, `search`, `edit`, `get`, `sync`, `register`, `library`, `premade`, `import`, `doctor`, `doctor_report`, `cron`, `shell`, `keybindings`, `status`, `validate`, `backup`, `backup_archive`, `restore`, `repair`, `pet_analysis` |
+| `src/commands/` | 27 modules: `mod`, `new`, `list`, `run`, `clip`, `select`, `search`, `edit`, `get`, `delete`, `sync`, `register`, `library`, `premade`, `import`, `doctor`, `doctor_report`, `cron`, `shell`, `keybindings`, `status`, `validate`, `backup`, `backup_archive`, `restore`, `repair`, `pet_analysis` |
 | `src/clipboard.rs` | Cross-platform clipboard access (arboard/clipboard-win) |
 | `src/logging.rs` | Structured logging with file rotation, audit log |
 | `src/update.rs` | Self-update via lean in-process `eggfetch-core` |
 | `src/status_snapshot.rs` | Read-only status projection for `snp status` and doctor |
-| `src/transaction.rs` | Transaction boundary with journal, lock, begin/commit/rollback |
-| `src/local_data.rs` | Local data lock coordination, `transaction_dir()` |
+| `src/transaction.rs` | Transaction boundary with journal, begin/commit/rollback; delegates the lock protocol to `src/record_lock.rs` |
+| `src/local_data.rs` | Local data lock coordination, `transaction_dir()`; delegates the lock protocol to `src/record_lock.rs` |
 | `src/mcp/` | Read-only stdio MCP server (`mod`, `protocol`, `tools`, `client_install`) |
 | `src/ui/` | TUI (ratatui + crossterm), themes, syntax highlighting, variable prompts |
 | `src/auto_sync/` | Auto-sync subsystem (`execution_lock`, `lock`, `notification`, `pending`, `pending_lock`, `policy`, `schedule`, `status`, `test_events`, `worker`) |
@@ -216,6 +216,8 @@ a dependency, not a specific import form. External crates and `std` items are
 - [x] `clipboard`, `diagnostics`, `encryption`, `library`, `output`,
   `status_snapshot`, `sync_commands`, and `utils` are `pub(crate)` (not `pub`)
   in `src/lib.rs`
+- [x] The owned-record lock acquisition protocol exists in exactly one module in `src/`
+- [x] `is_transient_lock_contention` is defined in exactly one module in `src/`
 - [x] `src/update.rs` does not shell out to `curl`
 - [x] `Cargo.toml` pins `eggfetch-core = "=0.2.2"` with the
   `standard-http1` + `redirects` features

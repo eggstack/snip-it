@@ -8,17 +8,6 @@ It is a **pure library module**: no CLI surface, no state directory, no locks, n
 
 ## Format types
 
-### `BackupFormat`
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum BackupFormat {
-    Directory,
-}
-```
-
-(`backup_archive.rs:13-17`.) There is exactly one variant. The enum exists so the CLI can accept `--format` without a breaking change; `backup_cmd::run()` discards the parsed value (`src/commands/backup_cmd.rs:49`).
-
 ### `BackupEntryKind`
 
 ```rust
@@ -215,7 +204,7 @@ The **10 MiB per-file ceiling** (`MAX_RESTORE_SOURCE_SIZE`, `restore_cmd.rs:189`
 
 ## Gotchas
 
-- `BackupFormat` has a single variant and the `--format` CLI value is discarded — there is no tarball or zip archive today.
+- There is no tarball or zip archive today: the snapshot is always a directory layout, and the single-variant `--format` CLI flag was removed.
 - The manifest is written with `toml::to_string_pretty`; the save path for *snippet libraries* likewise does not post-process TOML (see `.skills/persistence-and-toml-fidelity.md`), but the manifest is machine-generated rather than user-authored, so golden-corpus fidelity does not apply to it.
 - `redact_sync_config` is line-based. It is not a guarantee that *no* secret is present — only that `api_key`/`apikey`/`api-key` tokens are masked.
 - `read_library_generation` returns `0` for a missing index. Two snapshots of a config with no index therefore compare equal by generation alone; the local-data lock is what actually guarantees consistency.

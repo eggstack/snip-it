@@ -180,3 +180,10 @@ The long-term roadmap defines the following workstreams:
 
 Create only roadmaps that are ready to be reasoned about. Do not generate
 additional candidate files merely to populate the directory.
+
+The list above is the long-term roadmap's initial set, not an exhaustive
+index of the directory. Additional subsystem roadmaps may be added when
+repository evidence warrants a new workstream — a distinct ownership
+boundary, a distinct work classification, or a decision recorded in
+`plans/adrs/`. `plans/registry.md` is the authoritative index of which
+roadmaps exist and what state they are in.

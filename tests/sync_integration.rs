@@ -336,3 +336,176 @@ async fn test_create_library_adopts_the_existing_server_library() {
 
     captured.2.abort();
 }
+
+// --- The sequence-cursor bootstrap -------------------------------------
+//
+// The write-sequence cursor is the server's exact delta cursor: the server
+// assigns a strictly increasing value per library, and the delta filter
+// selects on it. A client can only enter that path through a bootstrap, and
+// the bootstrap is a request that carries no cursor at all — the only
+// request shape that delivers the complete library, and therefore the only
+// one whose watermark the client may adopt.
+
+/// The bootstrap: a request with no cursors delivers the complete library
+/// and reports the server's sequence watermark.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_cursorless_request_bootstraps_the_sequence_watermark() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let library = client
+        .create_library("bootstrap")
+        .await
+        .expect("library creation must succeed");
+    let now = chrono::Utc::now().timestamp();
+    let make = |id: &str| Snippet {
+        id: id.to_string(),
+        description: format!("bootstrap {id}"),
+        command: format!("echo {id}"),
+        tags: vec![],
+        created_at: now,
+        updated_at: now,
+        device_id: device_id.clone(),
+        deleted: false,
+        encrypted: false,
+    };
+
+    // Two rows, so the watermark is above the first one.
+    let response = client
+        .sync_encrypted_with_cursors(vec![make("boot-1"), make("boot-2")], 0, 0, &library.id)
+        .await
+        .expect("the bootstrap sync must succeed");
+
+    assert!(
+        response.success,
+        "the bootstrap must be successful, got: {}",
+        response.message
+    );
+    assert!(
+        response.server_sequence >= 2,
+        "the bootstrap must report the library's sequence watermark, got {}",
+        response.server_sequence
+    );
+    let delivered: Vec<&str> = response.snippets.iter().map(|s| s.id.as_str()).collect();
+    assert!(
+        delivered.contains(&"boot-1") && delivered.contains(&"boot-2"),
+        "the bootstrap must deliver every row of the library, got {delivered:?}"
+    );
+
+    captured.2.abort();
+}
+
+/// The closing evidence for the sequence-cursor milestone: a client that
+/// synced against a sequence-capable server sends a non-zero
+/// `last_sync_sequence` on its next sync, and the server answers with a
+/// non-zero `server_sequence`.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_bootstrapped_client_sends_a_non_zero_sequence_cursor() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let library = client
+        .create_library("cursor-path")
+        .await
+        .expect("library creation must succeed");
+    let now = chrono::Utc::now().timestamp();
+    let snippet = Snippet {
+        id: "cursor-1".to_string(),
+        description: "cursor snippet".to_string(),
+        command: "echo cursor".to_string(),
+        tags: vec![],
+        created_at: now,
+        updated_at: now,
+        device_id: device_id.clone(),
+        deleted: false,
+        encrypted: false,
+    };
+
+    // The bootstrap: no cursors at all.
+    let bootstrap = client
+        .sync_encrypted_with_cursors(vec![snippet.clone()], 0, 0, &library.id)
+        .await
+        .expect("the bootstrap sync must succeed");
+    assert!(
+        bootstrap.server_sequence > 0,
+        "the server must report a sequence for a cursorless request"
+    );
+
+    // The next sync carries the adopted cursor.
+    let follow_up = client
+        .sync_encrypted_with_cursors(
+            vec![],
+            bootstrap.server_timestamp,
+            bootstrap.server_sequence,
+            &library.id,
+        )
+        .await
+        .expect("the follow-up sync must succeed");
+    assert!(
+        follow_up.server_sequence > 0,
+        "the server must answer a sequence request with a sequence"
+    );
+    assert!(
+        follow_up.server_sequence >= bootstrap.server_sequence,
+        "the reported watermark must not go backwards"
+    );
+
+    // The follow-up is a sequence delta, so it delivers only the rows after
+    // the cursor — the boundary row is re-delivered because the filter is
+    // inclusive.
+    assert!(
+        follow_up.snippets.iter().all(|s| s.id == "cursor-1"),
+        "a sequence delta must not deliver rows the client already has"
+    );
+
+    captured.2.abort();
+}
+
+/// A timestamp-only request is answered with no sequence: a delta does not
+/// deliver the library's whole history, so its watermark is not adoptable
+/// by that client. Answering it anyway would let the client skip rows it
+/// never received.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_timestamp_only_request_is_answered_with_no_sequence() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let library = client
+        .create_library("timestamp-only")
+        .await
+        .expect("library creation must succeed");
+    let now = chrono::Utc::now().timestamp();
+    let snippet = Snippet {
+        id: "ts-1".to_string(),
+        description: "timestamp snippet".to_string(),
+        command: "echo ts".to_string(),
+        tags: vec![],
+        created_at: now,
+        updated_at: now,
+        device_id: device_id.clone(),
+        deleted: false,
+        encrypted: false,
+    };
+
+    let response = client
+        .sync_encrypted_with_cursors(vec![snippet], 0, 0, &library.id)
+        .await
+        .expect("the first sync must succeed");
+    assert!(response.server_sequence > 0);
+
+    // A timestamp-only request: a non-zero timestamp cursor and no
+    // sequence cursor.
+    let delta = client
+        .sync_encrypted_with_cursors(vec![], response.server_timestamp, 0, &library.id)
+        .await
+        .expect("the timestamp delta must succeed");
+    assert_eq!(
+        delta.server_sequence, 0,
+        "a timestamp-only request must be answered with no sequence"
+    );
+
+    captured.2.abort();
+}

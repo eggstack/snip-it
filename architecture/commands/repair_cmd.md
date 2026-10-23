@@ -208,7 +208,7 @@ pub enum RepairExitStatus {
 ## Interaction with the transaction journal and locks
 
 - The command **reads** the journal directory via `scan_transaction_journals` (`repair_cmd.rs:463`) and the artifact root for orphans (`:585`).
-- It **mutates** journals through `recover_transaction_by_id`, which takes the **transaction lock** with the same ownership record, PID-reuse detection, and quarantine ladder as any other transaction operation.
+- It **mutates** journals through `recover_transaction_by_id`, which takes the **transaction lock** with the same ownership record, PID-reuse detection, and quarantine ladder as any other transaction operation. The lock is taken through the shared owned-record protocol (`src/record_lock.rs`), whose wait policy for the transaction lock is fail-fast.
 - It does **not** create a new journal: repair is the recovery path for existing journals, not a new mutation with rollback.
 - It does **not** call the mutation gate.
 

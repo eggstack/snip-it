@@ -1597,20 +1597,24 @@ impl SnippetSync for SnipSyncService {
 
         let offset = if req.offset > 0 { req.offset } else { 0 };
 
+        // The sequence cursor is the exact delta cursor; the timestamp cursor
+        // stays the filter for clients that send no sequence cursor. A
+        // non-zero sequence in the request is the whole negotiation: there is
+        // no separate round trip.
+        let sequence_cursor = req.last_sync_sequence;
+        let cursor = if sequence_cursor != 0 {
+            db::DeltaCursor::Sequence(sequence_cursor)
+        } else {
+            db::DeltaCursor::Timestamp(req.last_sync_timestamp)
+        };
+
         // One page plus a `LIMIT limit + 1` probe row: `has_more` is derived
         // from the rows themselves, so the common single-page sync no longer
         // pays for a second `COUNT(*)` scan over the same range. `total`
         // keeps its exact meaning (see `Database::get_snippets_page`).
         let page = self
             .db
-            .get_snippets_page(
-                &user_id,
-                &library_id,
-                req.last_sync_timestamp,
-                limit,
-                offset,
-                true,
-            )
+            .get_snippets_page(&user_id, &library_id, cursor, limit, offset, true)
             .await
             .map_err(|e| {
                 self.record_request_duration("sync", start);
@@ -1663,6 +1667,42 @@ impl SnippetSync for SnipSyncService {
                 })?
         };
 
+        // The sequence watermark is the server's answer to "which cursor am I
+        // serving?". It is answered in exactly two cases:
+        //
+        // - the request carried a sequence cursor (the exact path), and
+        // - the request carried no cursor at all (the bootstrap full sync),
+        //   because that request delivers the complete library, so its
+        //   watermark is adoptable by the client.
+        //
+        // A timestamp-only delta is answered with zero: a delta does not
+        // deliver the library's whole history, so the client cannot adopt the
+        // watermark without skipping rows it never received. Like the
+        // timestamp, the sequence does not advance while paginating.
+        //
+        // A zero watermark is not reported as zero: in the protocol zero
+        // means "no sequence", which a client cannot tell apart from a
+        // server that does not serve one. The inclusive `sequence >=` filter
+        // makes the reported position safe — a library that has issued
+        // nothing yet reports the position before its first row, so that row
+        // is still delivered when it appears.
+        let sequence = if has_more {
+            sequence_cursor
+        } else if sequence_cursor != 0 || req.last_sync_timestamp == 0 {
+            self.db
+                .get_latest_sequence(&user_id, &library_id)
+                .await
+                .map_err(|e| {
+                    self.record_request_duration("sync", start);
+                    self.record_request_finished("sync", false);
+                    tracing::error!("Internal error: {}", e);
+                    Status::internal("Internal error")
+                })?
+                .max(1)
+        } else {
+            0
+        };
+
         let skipped_count = skipped_ids.len() as i32;
 
         tracing::info!(
@@ -1684,6 +1724,7 @@ impl SnippetSync for SnipSyncService {
             },
             snippets: proto_snippets,
             server_timestamp: timestamp,
+            server_sequence: sequence,
             skipped_count,
             skipped_ids,
             has_more,
@@ -2586,6 +2627,7 @@ mod tests {
                     encrypted: false,
                 }],
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: personal,
                 limit: 100,
                 offset: 0,
@@ -2902,6 +2944,7 @@ mod tests {
             api_key: api_key.clone(),
             local_snippets: vec![],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id,
             limit: 1000,
             offset: 0,
@@ -2909,6 +2952,246 @@ mod tests {
         let resp = service.sync(req).await.unwrap();
         let sync = resp.into_inner();
         assert_eq!(sync.snippets.len(), 0);
+    }
+
+    fn proto_snippet(id: &str, updated_at: i64) -> ProtoSnippet {
+        ProtoSnippet {
+            id: id.to_string(),
+            description: "Test snippet".to_string(),
+            command: "echo hello".to_string(),
+            tags: vec![],
+            created_at: updated_at,
+            updated_at,
+            device_id: "device-1".to_string(),
+            deleted: false,
+            encrypted: false,
+        }
+    }
+
+    /// A client that sends no sequence cursor is served by the timestamp
+    /// filter, exactly as before, and the response carries no sequence.
+    #[tokio::test]
+    async fn test_sync_without_a_sequence_cursor_serves_the_timestamp_rows() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "cursor-lib".to_string(),
+        });
+        let library_id = service
+            .create_library(req)
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        for (id, updated_at) in [("a", 100_i64), ("b", 200)] {
+            let req = Request::new(PushSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: library_id.clone(),
+                snippets: vec![proto_snippet(id, updated_at)],
+            });
+            service.push_snippets(req).await.unwrap();
+        }
+
+        // A timestamp-only request: a non-zero timestamp cursor and no
+        // sequence cursor. This is the shape an old client sends.
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 1,
+            last_sync_sequence: 0,
+            library_id: library_id.clone(),
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+
+        assert_eq!(sync.snippets.len(), 2);
+        // A delta does not deliver the library's whole history, so its
+        // watermark is not adoptable by this client and none is returned:
+        // an old client never receives a value it cannot interpret.
+        assert_eq!(sync.server_sequence, 0);
+        assert!(sync.server_timestamp > 0);
+    }
+
+    /// A request with no cursor at all is the bootstrap: it delivers the
+    /// complete library, so the client may adopt the sequence watermark.
+    #[tokio::test]
+    async fn test_sync_without_any_cursor_bootstraps_the_sequence_watermark() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "cursor-lib".to_string(),
+        });
+        let library_id = service
+            .create_library(req)
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        for (id, updated_at) in [("a", 100_i64), ("b", 200)] {
+            let req = Request::new(PushSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: library_id.clone(),
+                snippets: vec![proto_snippet(id, updated_at)],
+            });
+            service.push_snippets(req).await.unwrap();
+        }
+
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            last_sync_sequence: 0,
+            library_id: library_id.clone(),
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+
+        assert_eq!(sync.snippets.len(), 2);
+        assert_eq!(
+            sync.server_sequence, 2,
+            "a cursorless request is the bootstrap and reports the watermark"
+        );
+    }
+
+    /// An empty library still reports a sequence, so a client can tell a
+    /// server that serves the sequence from one that does not. Zero means
+    /// "no sequence" in the protocol, so the reported position is the one
+    /// before the library's first row; the inclusive `sequence >=` filter
+    /// keeps that first row deliverable.
+    #[tokio::test]
+    async fn test_sync_bootstrap_on_an_empty_library_reports_a_sequence() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "empty-lib".to_string(),
+        });
+        let library_id = service
+            .create_library(req)
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            last_sync_sequence: 0,
+            library_id: library_id.clone(),
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+
+        assert!(sync.snippets.is_empty());
+        assert_eq!(
+            sync.server_sequence, 1,
+            "an empty library must still report a sequence, so the client can \
+             tell a sequence-capable server from one that does not serve it"
+        );
+
+        // The first row written to the library is still delivered to a client
+        // that adopted the reported position.
+        let req = Request::new(PushSnippetsRequest {
+            api_key: api_key.clone(),
+            library_id: library_id.clone(),
+            snippets: vec![proto_snippet("first", 100)],
+        });
+        service.push_snippets(req).await.unwrap();
+
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            last_sync_sequence: 1,
+            library_id,
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+        assert_eq!(sync.snippets.len(), 1);
+        assert_eq!(sync.snippets[0].id, "first");
+    }
+
+    /// A client that holds a sequence cursor is served by the sequence
+    /// filter and receives the sequence watermark back.
+    #[tokio::test]
+    async fn test_sync_with_a_sequence_cursor_serves_the_rows_after_it() {
+        let service = setup_test_service().await;
+        let api_key = register_test_user(&service).await;
+
+        let req = Request::new(CreateLibraryRequest {
+            api_key: api_key.clone(),
+            name: "cursor-lib".to_string(),
+        });
+        let library_id = service
+            .create_library(req)
+            .await
+            .unwrap()
+            .into_inner()
+            .library_id;
+
+        for (id, updated_at) in [("a", 100_i64), ("b", 200), ("c", 300)] {
+            let req = Request::new(PushSnippetsRequest {
+                api_key: api_key.clone(),
+                library_id: library_id.clone(),
+                snippets: vec![proto_snippet(id, updated_at)],
+            });
+            service.push_snippets(req).await.unwrap();
+        }
+
+        // The bootstrap request returns everything and the watermark.
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            last_sync_sequence: 0,
+            library_id: library_id.clone(),
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+        assert_eq!(sync.snippets.len(), 3);
+        assert_eq!(sync.server_sequence, 3);
+
+        // A client that knows the watermark asks with it and receives only
+        // the rows written after it.
+        let user_id = service
+            .db
+            .get_user_by_api_key(&api_key)
+            .await
+            .unwrap()
+            .unwrap();
+        let watermark = service
+            .db
+            .get_latest_sequence(&user_id, &library_id)
+            .await
+            .unwrap();
+        assert_eq!(watermark, 3);
+
+        let req = Request::new(SyncRequest {
+            api_key: api_key.clone(),
+            local_snippets: vec![],
+            last_sync_timestamp: 0,
+            last_sync_sequence: watermark,
+            library_id: library_id.clone(),
+            limit: 1000,
+            offset: 0,
+        });
+        let sync = service.sync(req).await.unwrap().into_inner();
+        assert_eq!(sync.snippets.len(), 1);
+        assert_eq!(sync.snippets[0].id, "c");
+        assert_eq!(sync.server_sequence, watermark);
     }
 
     #[tokio::test]
@@ -2941,6 +3224,7 @@ mod tests {
                 encrypted: false,
             }],
             last_sync_timestamp: 1_000,
+            last_sync_sequence: 0,
             library_id: library_id.clone(),
             limit: 100,
             offset: 0,
@@ -3281,6 +3565,7 @@ mod tests {
             api_key: api_key.clone(),
             local_snippets: vec![snippet("ok-1", 100), snippet("boom", 101)],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: String::new(),
             limit: 100,
             offset: 0,
@@ -3324,6 +3609,7 @@ mod tests {
             api_key: api_key.clone(),
             local_snippets: vec![snippet("only", 100)],
             last_sync_timestamp: 0,
+            last_sync_sequence: 0,
             library_id: String::new(),
             limit: 100,
             offset: 0,
@@ -3364,6 +3650,7 @@ mod tests {
                 api_key: api_key.clone(),
                 local_snippets,
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: library_id.clone(),
                 limit: 2,
                 offset: 0,
@@ -3381,6 +3668,7 @@ mod tests {
                 api_key: api_key.clone(),
                 local_snippets: vec![],
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: library_id.clone(),
                 limit: 2,
                 offset: 4,
@@ -3398,6 +3686,7 @@ mod tests {
                 api_key: api_key.clone(),
                 local_snippets: vec![],
                 last_sync_timestamp: 0,
+                last_sync_sequence: 0,
                 library_id: library_id.clone(),
                 limit: 100,
                 offset: 0,

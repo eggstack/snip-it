@@ -97,9 +97,9 @@ pub fn sanitize_for_terminal(input: &str) -> String
 | `display_bounded(max_lines)` | `:73-89` | First `max_lines` lines, each sanitized, joined with `\n`; when truncated, appends `"\n... (N lines total)"`. |
 | `for_scoring()` | `:93-110` | Sanitized content capped at `OUTPUT_SEARCH_BUDGET` (512) **bytes**, backing up to the last UTF-8 char boundary so multi-byte input is never split mid-character. |
 
-`is_present()`, `raw()`, `line_count()`, and `display_bounded()` are all
-marked `#[allow(dead_code)]` — they are part of the API but currently have
-no production caller (`src/output.rs:26,32,38,72`).
+`is_present()`, `raw()`, `line_count()`, and `display_bounded()` are part of
+the API but currently have no production caller. Each carries an item-level
+`#[allow(dead_code)]` with an adjacent comment saying so (`src/output.rs`).
 
 ### `sanitize_for_terminal` — the safe-rendering rules
 
@@ -285,7 +285,8 @@ Consequences:
 - `summary()` truncates by **characters**, but `for_scoring()` truncates by
   **bytes** with a char-boundary backup — the two bounds are not the same
   unit.
-- `display_bounded()`, `is_present()`, `raw()`, and `line_count()` are
-  `#[allow(dead_code)]` — changing them has no runtime effect today.
+- `display_bounded()`, `is_present()`, `raw()`, and `line_count()` are retained
+  with a justified item-level `#[allow(dead_code)]` — changing them has no
+  runtime effect today.
 - `summary()` keeps only the **first line**; a multi-line note is invisible
   in `snp list` even though it is fully visible in the TUI preview.

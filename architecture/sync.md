@@ -191,15 +191,20 @@ impl SyncRunLimits {
 ### Byte-Bounded Batching
 
 ```rust
-// src/sync.rs:1544-1550
+// src/sync.rs
 pub(crate) fn build_upload_batches(
     mut encrypted_snippets: Vec<crate::proto::Snippet>,
     library_id: &str,
     last_sync: i64,
+    last_sync_sequence: i64,
     sync_limit: i32,
     byte_ceiling: usize,
 ) -> SnipResult<Vec<Vec<crate::proto::Snippet>>>
 ```
+
+The sequence cursor is part of every `SyncRequest`, so it is part of the
+measured envelope: a non-zero cursor costs a few more bytes on the wire and
+the ceiling must account for it.
 
 The client ceiling is **3.5 MiB** (`DEFAULT_CLIENT_REQUEST_CEILING =
 3_584 * 1024`, `src/sync.rs:46`), deliberately below the server's 4 MiB gRPC
@@ -273,6 +278,174 @@ total_skipped = all_skipped_ids.len() + push_rejected_count
 skip keeps `success == true` and is surfaced through `skipped_count`.
 
 ## Download Path
+
+### Two Cursors — Timestamp and Write Sequence
+
+The client keeps **both** cursors per library and sends **both** on every
+sync request:
+
+| Cursor | Stored as | Sent as | Meaning |
+|--------|-----------|---------|---------|
+| Timestamp | `LibraryMeta.last_sync` | `SyncRequest.last_sync_timestamp` | The second-granular cursor position (`visible_at`) |
+| Write sequence | `LibraryMeta.last_sync_sequence` | `SyncRequest.last_sync_sequence` | The server-assigned exact cursor position (`sequence`) |
+
+- The server picks the filter from the request: a **non-zero** sequence
+  selects the sequence form, anything else falls back to the timestamp form
+  (`snip-sync/src/lib.rs:1604-1609`). The cursor in the request *is* the
+  negotiation — there is no extra round trip.
+- The server answers `server_sequence` in **two** cases: the request carried a
+  non-zero sequence, or the request carried **no cursor at all** (the
+  bootstrap full sync). A **timestamp-only delta** is answered with **zero**:
+  a delta does not deliver the library's whole history, so the client cannot
+  adopt the watermark without skipping rows it never received
+  (`snip-sync/src/lib.rs:1670-1704`).
+- Which cursor the server is serving is **recorded** on the library as
+  `LibraryMeta.sync_cursor_kind` (`src/library/model.rs:96-102`), so the
+  client can tell "the server sent no sequence" apart from "the sequence did
+  not advance" without probing.
+- The timestamp cursor keeps advancing exactly as before, so a client that
+  holds no sequence cursor behaves exactly as it did before the sequence
+  cursor existed.
+- A **re-created** server library starts its sequence space from scratch, so
+  the recovery path **clears** the stored sequence cursor
+  (`SequenceCursor::Reset`) instead of advancing it. Keeping the old value
+  would make the next sync ask for a sequence the new library never
+  reached and skip its rows.
+
+`SequenceCursor` (`src/library/model.rs:154-174`) is the three-way decision:
+`Keep`, `Advance(value)`, `Reset`.
+
+### The Bootstrap Handshake — Three Request Shapes
+
+The server distinguishes three request shapes from the two **existing**
+protocol fields. No field was added, removed, or retyped.
+
+| `last_sync_sequence` | `last_sync_timestamp` | Shape | Server filter | Server answer |
+|---|---|---|---|---|
+| non-zero | any | sequence delta | `sequence >= cursor` | the library's sequence watermark |
+| zero | non-zero | timestamp delta | `visible_at >= timestamp` | **zero** |
+| zero | zero | **full sync** (the bootstrap) | `visible_at >= 0` (every row) | the library's sequence watermark |
+
+The only change to the server's answer rule is the third row: a request that
+carries no cursor at all is the bootstrap and is answered with the watermark
+(`snip-sync/src/lib.rs:1689-1704`). The bootstrap is the only shape that
+delivers the library's **complete** history, so it is the only shape whose
+watermark a client may adopt.
+
+While the response is paginated the server echoes the request's own sequence
+cursor and does not advance the watermark (`snip-sync/src/lib.rs:1689-1690`),
+the same way the timestamp watermark is withheld while rows remain
+(`snip-sync/src/lib.rs:1655-1668`).
+
+### The Client Cursor State Machine
+
+`LibraryMeta.sync_cursor_kind` (`src/library/model.rs:122-152`) records which
+cursor the server is serving. The client turns that state into the request it
+sends (`request_cursors`, `src/sync_commands.rs:539-565`) and interprets the
+server's answer (`apply_server_sequence`, `src/sync_commands.rs:567-622`).
+
+| Recorded state | Request | Complete response, `server_sequence == 0` | Complete response, `server_sequence != 0` |
+|---|---|---|---|
+| `unknown` | full sync (both cursors zero) | record `timestamp` (the server does not serve a sequence) | adopt the watermark → record `sequence`, store the cursor |
+| `timestamp` | timestamp delta | stays `timestamp` | stays `timestamp` (the server answers zero here by rule) |
+| `sequence` | sequence delta (send the stored cursor) | the server stopped serving sequences → record `timestamp` and drop the stored cursor | advance the stored cursor to the returned value |
+
+Two consequences are worth stating explicitly:
+
+- **"the server sent no sequence" and "the sequence did not advance" are now
+  distinguishable.** The first moves the client off the sequence path and
+  drops the stored cursor; the second leaves the stored cursor where it is
+  (the server answered the same value it was given). Before this milestone
+  both looked like "no sequence".
+- **A push-only sync never adopts or advances a sequence cursor.** Such a sync
+  discards the rows the server returns, so the watermark covers rows the
+  client never received. It also never bootstraps — a bootstrap would download
+  the whole library for rows the client discards
+  (`src/sync_commands.rs:1064-1069`, `:1089-1120`).
+
+The client's stored cursor is written only after a **complete** response: the
+merge must have succeeded and the run must be free of skipped rows
+(`src/sync_commands.rs:1125-1141`). An interrupted sync therefore leaves the
+previous cursor in place, and the next sync re-requests the same range.
+
+### The Zero-Watermark Rule
+
+In the protocol, zero means "no sequence". An **empty** library therefore
+cannot report a zero watermark without being indistinguishable from a server
+that does not serve the sequence at all. The server reports the position
+**before the library's first row** — a minimum of 1 — instead
+(`snip-sync/src/lib.rs:1701`; `get_latest_sequence` returns
+`COALESCE(MAX(sequence), 0)`, `snip-sync/src/db.rs:919-929`).
+
+This is safe because the delta filter is **inclusive** (`sequence >= value`,
+`snip-sync/src/db.rs:109-114`). The library's first row is issued with
+sequence 1 — the counter row starts at 0 and the first bump returns 1
+(`snip-sync/src/db.rs:294-314`) — so a client that adopted the reported
+position of 1 still receives that row.
+
+The inclusive filter is also what makes the bootstrap safe without a
+cross-statement snapshot: a row written between the bootstrap's page read and
+its watermark read carries the counter value the watermark reports, so the
+inclusive filter re-delivers it on the next sync.
+
+### The Boundary Row
+
+The row **at** the cursor is re-delivered on every sync, because the filter is
+inclusive. That is the price of the filter: a cursor may re-deliver, never
+skip. It is the property that makes the bootstrap safe — the boundary row is
+the one a client that adopted the watermark has certainly seen, and the one
+that must not be lost.
+
+### The Remaining Limitation of the Timestamp Path
+
+The timestamp cursor is `visible_at`: the row's client-supplied logical time,
+clamped up to the library's watermark when the row is written
+(`snip-sync/src/db.rs:813-828`). The clamp is what keeps a row written by a
+device whose clock lags reachable — the server raises it to the watermark as
+of that write, so the row is delivered at a position the client has not
+passed (`snip-sync/src/db.rs:1302-1353` pins that behaviour).
+
+What the clamp does not fix is the shape of the cursor itself: `visible_at` is
+a **position in time, not a receipt**. The client's stored timestamp cursor is
+the library's `MAX(visible_at)` — it says where the client has read to, not
+which rows the client holds.
+
+- A client that advances its cursor over rows it never received loses them. A
+  push-only sync does exactly that: it discards the rows the server returns
+  but still stores the response's `server_timestamp`
+  (`src/sync_commands.rs:1089-1108`). The filter `visible_at >= T` only ever
+  looks forward, and the stored cursor never moves back, so those rows are
+  unreachable on the timestamp path.
+- A row written by a device whose clock lags carries the watermark as of its
+  write, not the device's own clock. A client whose cursor already sits above
+  that position is not served the row again, and the row stays below the
+  client's cursor.
+
+The sequence cursor closes both: the server assigns it per write
+(`snip-sync/src/db.rs:294-314`), so a row written by a lagging device still
+carries a sequence above every cursor the client can hold, and a client only
+adopts a sequence watermark after a **complete** response it merged
+(`src/sync_commands.rs:1125-1141`).
+
+A client that stays on the timestamp path — because its server is too old to
+serve a sequence, or because it only ever syncs in the push direction — keeps
+the limitation. The sequence path removes it for clients that bootstrap.
+
+### The Reset Paths
+
+Every path that breaks the library's link to a server-side library also
+clears the stored sequence cursor and returns the recorded cursor kind to
+`unknown`, so the next pulling sync bootstraps against the new library.
+
+| Path | Source |
+|------|--------|
+| `LibraryManager::relink_server_library` | `src/library/manager.rs:605-625` |
+| `LibraryManager::unlink_server_library` | `src/library/manager.rs:632-646` |
+| Server-library re-created recovery | `src/sync_commands.rs:328-345` (`SequenceCursor::Reset`) |
+
+`update_sync_cursors` (`src/library/manager.rs:696-719`) is the single write
+path for all three cursors: the timestamp cursor, the recorded cursor kind,
+and the stored sequence cursor.
 
 ### Client Pagination
 
@@ -697,6 +870,15 @@ downloaded again.
   increments `failed`, never `conflicts`, and blocks the `last_sync` advance.
 - **The watermark only advances on a clean run.** `last_sync` moves only when
   `skipped_count == 0` and the library's merge and save succeeded.
+- **A zero `server_sequence` means one of two things.** The recorded cursor
+  kind tells them apart: "the server served no sequence" (the client drops the
+  stored cursor and stays on the timestamp path) and "the sequence did not
+  advance" (the server answered the value it was given, so the stored cursor
+  stays where it is).
+- **The bootstrap is the only adoptable watermark.** A request that carries no
+  cursor at all is answered with the library's sequence watermark; a
+  timestamp-only delta is answered with zero, because a delta does not deliver
+  the library's whole history.
 - **Never trust `response.success` alone** — the server reports refused rows
   in `skipped_ids` without flipping `success`.
 - **The retry macro is the only retry policy.** Do not reintroduce a

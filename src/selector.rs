@@ -183,8 +183,29 @@ pub fn searchable_text(snippet: &crate::library::Snippet, fields: SearchFields) 
 /// searchable text and `SkimMatcherV2`.
 ///
 /// Returns `(matched_indices, scores)` where indices refer to positions in
-/// `snippets`. An empty query matches every non-deleted snippet with no
-/// scores (callers rank those by index order under `Relevance`).
+/// `snippets`.
+///
+/// This is the **single match primitive** for the three search surfaces
+/// (`snp get --query`, `snp list --filter`, and MCP `snippets_search`). The
+/// field projection lives in [`searchable_text`]; the match semantics live
+/// here, so the three surfaces cannot disagree about *which* snippets a query
+/// selects. Only the ranking of the returned indices is left to the callers
+/// (see [`crate::sort::rank_snippets`]).
+///
+/// Canonical semantics, decided by the M006 search-parity corrective:
+///
+/// - **An empty query is "no filter".** Every non-deleted snippet matches,
+///   with no scores. This includes snippets whose searchable text is empty
+///   (no description, command, tags, or output): an empty query filters
+///   nothing, so dropping them would make `list --filter ""` differ from
+///   `list` with no filter at all.
+/// - **A non-empty query matches the searchable-text projection only.** A
+///   snippet with an empty projection never matches a non-empty query, and
+///   deleted snippets never match any query.
+///
+/// Callers rank the returned indices themselves. Under `Relevance` the
+/// ranking is "higher score first, then original index", so an empty query
+/// preserves the caller's input order.
 pub fn score_fuzzy_matches(
     snippets: &[crate::library::Snippet],
     query: &str,
@@ -535,6 +556,18 @@ impl SnippetSelector {
 }
 
 /// Sort snippet matches deterministically: library name → description → snippet ID.
+///
+/// This is the **cross-library order contract** for the selector family
+/// (`snp get --query --library all`, `snp run/clip/edit --library all`, and
+/// MCP `snippet_get`). Those surfaces resolve per library and then aggregate,
+/// so their order is *library-then-description-then-identifier* — a stable,
+/// scope-independent order rather than a relevance order.
+///
+/// The merged-set surfaces (`snp list --filter`, MCP `snippets_search`) score
+/// the merged set globally and therefore order by **global relevance** under
+/// [`crate::sort::rank_snippets`]. The two orders differ across more than one
+/// library, by design: the selector family resolves per library, the merged
+/// family merges first. Within a single library the two orders coincide.
 ///
 /// `sort_by_cached_key` evaluates each lowercase key once (O(n) allocations)
 /// instead of re-lowercasing both sides on every comparison.
@@ -1235,6 +1268,59 @@ mod tests {
             score_fuzzy_matches(&snippets.snippets, "", SearchFields::fuzzy_default());
         assert_eq!(indices, vec![1, 2]);
         assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_score_fuzzy_matches_empty_query_is_no_filter_including_empty_text() {
+        let mut snippets = make_snippets();
+        snippets.snippets[0].deleted = true;
+        // A snippet with no description, command, tags, or output has an
+        // empty searchable text. An empty query filters nothing, so it must
+        // still match: dropping it is exactly what made `list --filter ""`
+        // differ from `list` with no filter at all.
+        snippets.snippets.push(make_snippet("ddd-444", "", ""));
+        let (indices, scores) =
+            score_fuzzy_matches(&snippets.snippets, "", SearchFields::fuzzy_default());
+        assert_eq!(indices, vec![1, 2, 3]);
+        assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_score_fuzzy_matches_non_empty_query_skips_empty_text() {
+        let mut snippets = make_snippets();
+        // The empty-text snippet sits at index 3; "git" matches snippets 0
+        // and 1 but can never match the one with no searchable text.
+        snippets.snippets.push(make_snippet("ddd-444", "", ""));
+        let (indices, scores) =
+            score_fuzzy_matches(&snippets.snippets, "git", SearchFields::fuzzy_default());
+        assert_eq!(indices, vec![0, 1]);
+        assert!(scores.contains_key(&0));
+        assert!(scores.contains_key(&1));
+        assert!(!scores.contains_key(&3));
+    }
+
+    #[test]
+    fn test_searchable_text_excludes_folders_favorite_and_sync_metadata() {
+        let mut snippet = make_snippet("legacy-abc123", "Deploy service", "kubectl apply");
+        snippet.folders = vec!["needlefolder".to_string()];
+        snippet.favorite = true;
+        snippet.output = "sample output note".to_string();
+
+        // The default projection: description + command + tags.
+        let default_text = searchable_text(&snippet, SearchFields::fuzzy_default());
+        assert_eq!(default_text, "Deploy service kubectl apply");
+        // The opt-in projection adds the bounded output/notes summary only.
+        let full_text = searchable_text(&snippet, SearchFields::with_output());
+        assert!(full_text.starts_with("Deploy service kubectl apply"));
+        assert!(full_text.contains("sample output note"));
+
+        // Never-searchable fields never reach the projection, so a query for
+        // any of their values matches nothing on any surface.
+        for text in [&default_text, &full_text] {
+            assert!(!text.contains("needlefolder"), "folders are not searchable");
+            assert!(!text.contains("legacy-abc123"), "the id is not searchable");
+            assert!(!text.contains("true"), "favorite is not searchable");
+        }
     }
 
     #[test]

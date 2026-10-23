@@ -200,6 +200,8 @@ enum Commands {
     },
     /// Retrieve a snippet deterministically (no TUI, no execution)
     Get(commands::get_cmd::GetArgs),
+    /// Tombstone a snippet deterministically (no TUI, no prompt)
+    Delete(commands::delete_cmd::DeleteArgs),
     /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
     #[command(name = "auto-sync-worker", hide = true)]
     AutoSyncWorker {
@@ -292,6 +294,8 @@ enum DataCommands {
     /// Show auto-sync status (read-only)
     #[command(alias = "s")]
     Status(commands::status_cmd::StatusArgs),
+    /// Tombstone a snippet deterministically (no TUI, no prompt)
+    Delete(commands::delete_cmd::DeleteArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -439,7 +443,6 @@ fn handle_backup(args: commands::backup_cmd::BackupArgs) -> SnipResult<CliOutcom
         args.output,
         args.include_usage,
         args.include_sync_state,
-        args.format,
         args.json,
     )?;
     Ok(CliOutcome::Success)
@@ -465,6 +468,14 @@ fn handle_repair(args: commands::repair_cmd::RepairArgs) -> SnipResult<CliOutcom
 fn handle_status(args: commands::status_cmd::StatusArgs) -> SnipResult<CliOutcome> {
     commands::status_cmd::run(args.json, args.sync_only)?;
     Ok(CliOutcome::Success)
+}
+
+/// Single-path handler for `delete` (top-level and `data` spellings).
+///
+/// Both spellings share `DeleteArgs`, so this is the only delete sequence,
+/// report format, and exit-code mapping for the operation.
+fn handle_delete(args: commands::delete_cmd::DeleteArgs) -> SnipResult<CliOutcome> {
+    commands::delete_cmd::run(args)
 }
 
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
@@ -875,6 +886,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
             DataCommands::Status(args) => {
                 return handle_status(args);
             }
+            DataCommands::Delete(args) => {
+                return handle_delete(args);
+            }
         },
         Some(Commands::Get(args)) => {
             let outcome = commands::get_cmd::run(
@@ -891,6 +905,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
                 args.vars,
             )?;
             return Ok(outcome);
+        }
+        Some(Commands::Delete(args)) => {
+            return handle_delete(args);
         }
         Some(Commands::AutoSyncWorker { state_dir }) => {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
@@ -979,7 +996,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
                 StartupRecoveryPolicy::SuppressReadOnly,
                 StartupServices::Minimal,
             ),
-            DataCommands::Repair(_) | DataCommands::Restore(_) => {
+            DataCommands::Repair(_) | DataCommands::Restore(_) | DataCommands::Delete(_) => {
                 (StartupRecoveryPolicy::Allow, StartupServices::Logging)
             }
         },
@@ -994,6 +1011,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             | Commands::Import { .. }
             | Commands::Repair(_)
             | Commands::Restore(_)
+            | Commands::Delete(_)
             | Commands::Premade { .. }
             | Commands::Library {
                 command:
@@ -1219,7 +1237,6 @@ mod tests {
             output: None,
             include_usage: false,
             include_sync_state: false,
-            format: commands::backup_cmd::BackupFormat::Directory,
             json: false,
         })));
         assert_eq!(b.recovery, StartupRecoveryPolicy::SuppressReadOnly);
@@ -1323,7 +1340,6 @@ mod tests {
                 output: None,
                 include_usage: false,
                 include_sync_state: false,
-                format: commands::backup_cmd::BackupFormat::Directory,
                 json: false,
             }),
         }));

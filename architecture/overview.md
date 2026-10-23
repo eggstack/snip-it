@@ -147,7 +147,7 @@ Three layers with a strict dependency direction, specified in
 ┌──────────────────────────────────────────────────────────────┐
 │                    Application / CLI Layer                   │
 │  main.rs, commands/*, ui/*, auto_sync/*, mcp/*, clipboard,    │
-│  logging, update, transaction, local_data, migration,        │
+│  logging, update, transaction, local_data,                   │
 │  status_snapshot, diagnostics                                │
 ├──────────────────────────────────────────────────────────────┤
 │                      Sync-Client Layer                       │
@@ -197,6 +197,7 @@ Every source module, what it owns, and where it is documented in depth.
 | Diagnostics | `src/diagnostics.rs` | shared diagnostic/report types | [diagnostics.md](diagnostics.md) |
 | Status snapshot | `src/status_snapshot.rs` | `StatusSnapshot`, `TopLevelSyncState`, diagnostic codes | [status.md](status.md) |
 | Process file lock | `src/process_file_lock.rs` | kernel-backed cross-process lock (`flock`/`LockFileEx`) | [process_file_lock.md](process_file_lock.md) |
+| Owned-record lock | `src/record_lock.rs` | the shared owned-record lock protocol (`create_new` + ownership record + wait policy) | [process_file_lock.md](process_file_lock.md) |
 
 ### 5.3 Persistence & durability
 
@@ -204,7 +205,6 @@ Every source module, what it owns, and where it is documented in depth.
 |--------|--------|------|-----------|
 | Transaction journal | `src/transaction.rs` | journal, transaction lock, `Prepared→Committing→CleaningUp` state machine | [persistence.md](persistence.md) |
 | Local data lock | `src/local_data.rs` | exclusive lock serializing TOML mutations vs backup capture | [persistence.md](persistence.md) |
-| Migration | `src/migration.rs` | `SchemaVersion`, forward-only migrations | [persistence.md](persistence.md) |
 | Atomic writes | `src/utils/atomic.rs` | durability-aware atomic write primitives | [utils/atomic.md](utils/atomic.md) |
 
 ### 5.4 Sync client
@@ -251,6 +251,7 @@ functions in `main.rs` keep both spellings identical.
 | Edit | `src/commands/edit_cmd.rs` | `$EDITOR` editing, `output` field management | [commands/edit_cmd.md](commands/edit_cmd.md) |
 | Select | `src/commands/select_cmd.rs` | non-executing selection for shell integration | [commands/select_cmd.md](commands/select_cmd.md) |
 | Get | `src/commands/get_cmd.rs` | deterministic non-TUI retrieval | [commands/get_cmd.md](commands/get_cmd.md) |
+| Delete | `src/commands/delete_cmd.rs` | deterministic non-TUI snippet delete | [commands/delete_cmd.md](commands/delete_cmd.md) |
 | Validate | `src/commands/validate_cmd.rs` | read-only data validation | [commands/validate_cmd.md](commands/validate_cmd.md) |
 | Repair | `src/commands/repair_cmd.rs` | conservative, backed-up, idempotent repair | [commands/repair_cmd.md](commands/repair_cmd.md) |
 | Restore | `src/commands/restore_cmd.rs` | restore from a backup snapshot | [commands/restore_cmd.md](commands/restore_cmd.md) |
@@ -463,7 +464,6 @@ the temp file; they differ in **fsync** behavior:
 | `DurableUserData` | yes | required (hard error) |
 | `SensitiveConfig` | yes (+ symlink rejection) | required (hard error) |
 | `RecoverableMetadata` | no | best-effort (warns, continues) |
-| `EphemeralCoordination` | no | none |
 
 > **Windows hazard.** `parent_dir_sync_durable` returns `Err` on non-Unix
 > (`src/utils/atomic.rs:180-186`), and `atomic_replace` calls
@@ -478,18 +478,22 @@ the temp file; they differ in **fsync** behavior:
 `flock` (Unix) / `LockFileEx` (Windows) via `process_file_lock.rs` — server
 singleton, auto-sync execution/worker/pending locks. Owned-record +
 PID-reclaim (`create_new` + `ProcessIdentity::observe` + quarantine) for the
-transaction and local-data locks. The **kernel-backed** family releases on
-`Drop` **without unlinking**, so lock files may hold stale metadata; the
+transaction and local-data locks; that protocol is implemented **once**, in
+`src/record_lock.rs`, and the two callers differ only by their **wait
+policy** — the transaction lock fails fast on a live owner, the local-data
+lock waits for the lock to change hands. The **kernel-backed** family releases
+on `Drop` **without unlinking**, so lock files may hold stale metadata; the
 **owned-record** family unlinks only when nonce, PID, **and** start token all
 match. `kill(pid,0)`: only `ESRCH` proves absence — `EPERM`/unknown means
 live. Linux start tokens use `/proc/<pid>/stat` field 22.
 
-> **Known asymmetry.** The local-data lock's reclaim path re-reads and verifies
-> ownership before quarantining; the **transaction lock's does not** — it
-> renames by path alone (`src/transaction.rs:1268`). A reclaimer that judged an
-> owner dead and then renamed can rename away a lock that was reclaimed and
-> re-acquired in the interim, putting two processes inside the transaction
-> critical section. See [process_file_lock.md](process_file_lock.md).
+> **One protocol, one ownership rule.** The owned-record reclaim path is
+> ownership-verified for **both** locks: the record at the lock path is
+> re-read and compared with the observed record before the quarantine rename,
+> so a reclaimer that judged an owner dead cannot rename away a lock that was
+> reclaimed and re-acquired in the interim. An unverifiable owner — no
+> recorded token, no observed token, or matching tokens — is a **live** owner
+> and is never reclaimed. See [process_file_lock.md](process_file_lock.md).
 
 ### Client conflicts are never role-dependent
 
@@ -524,6 +528,17 @@ cursor from `updated_at` let a device with a clock behind (or restored from
 an old backup) push a row that no other device ever received, because the
 row landed below the watermark that every delta pull filters on.
 
+`snippets.sequence` is a second, **exact** server-assigned cursor: a strictly
+increasing per-library write sequence, assigned by the server inside the write
+transaction and never by a client. A request carrying a non-zero
+`last_sync_sequence` is filtered on `sequence >= ?` instead of
+`visible_at >= ?`, and the server answers `MAX(sequence)` in
+`SyncResponse.server_sequence`. The counter lives in the database
+(`library_sequences`), a unique index on `(library_id, sequence)` makes a
+counter race a loud failure, and the migration backfills it preserving the
+pre-migration `updated_at` ordering, so a migrated server selects the same
+rows as an unmigrated one for the first sync.
+
 Existing databases are migrated in place (`migrate_snippet_visible_at`), and
 the protocol is unchanged, so old and new clients interoperate in both
 directions. See
@@ -555,8 +570,9 @@ Folders, favorite, sync metadata, and credentials are never searchable.
 ### The save path does not post-process TOML
 
 `toml::to_string_pretty` output is written as-is. The golden corpus (tabs,
-trailing spaces, CRLF) must survive save/load. `write_schema_version` uses
-`toml::Table`, not `toml::Value`, to preserve array-of-tables.
+trailing spaces, CRLF) must survive save/load. The persisted library format
+carries no schema version; introducing one is a schema change that requires a
+migration and a version bump.
 
 ### Snippet IDs are deterministic
 
@@ -820,7 +836,7 @@ touching, then the "Gotchas" section at its end — that is where the traps live
 
 | File | Subject |
 |------|---------|
-| [persistence.md](persistence.md) | Atomic writes, transactions, validation, backup/restore/repair, migration, identity |
+| [persistence.md](persistence.md) | Atomic writes, transactions, validation, backup/restore/repair, identity |
 | [process_file_lock.md](process_file_lock.md) | Kernel-backed cross-process file lock |
 
 ### Sync
@@ -856,6 +872,7 @@ touching, then the "Gotchas" section at its end — that is where the traps live
 | [commands/new_cmd.md](commands/new_cmd.md) | Snippet creation |
 | [commands/list_cmd.md](commands/list_cmd.md) | Text-based snippet listing |
 | [commands/get_cmd.md](commands/get_cmd.md) | Deterministic non-TUI retrieval |
+| [commands/delete_cmd.md](commands/delete_cmd.md) | Deterministic non-TUI snippet delete |
 | [commands/search_cmd.md](commands/search_cmd.md) | Fuzzy search with detail display |
 | [commands/select_cmd.md](commands/select_cmd.md) | Non-executing selection |
 | [commands/run_cmd.md](commands/run_cmd.md) | TUI selection + shell execution |
