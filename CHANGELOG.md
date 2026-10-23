@@ -113,6 +113,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The macOS build was broken.** The shared owned-record lock protocol
+  introduced in `src/record_lock.rs` read a process start token on macOS by
+  casting a reference straight to `*mut c_void`. That cast is rejected
+  (`E0606` — a reference cannot be cast to a raw pointer whose pointee is
+  `c_void`), so the crate no longer compiled for macOS and the platform-smoke
+  job failed on every push. The cast is now two-step — reference to
+  `*mut proc_bsdinfo` to `*mut c_void` — the form the other two start-token
+  implementations already used. The start-token doc comment also now names
+  `proc_pidinfo`/`PROC_PIDTBSDINFO`, which is what the code actually calls,
+  instead of `sysctl`/`KERN_PROC_PID`.
 - **The search-parity contract was verified against only two of its three
   surfaces.** The parity suite compared `snp list --filter` against MCP
   `snippets_search` and never invoked `snp get --query` — the surface the

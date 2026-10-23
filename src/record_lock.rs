@@ -95,9 +95,9 @@ pub fn current_process_identity() -> ProcessIdentity {
 /// Get a start-time token for the given PID.
 ///
 /// On Linux, reads the process start time from `/proc/<pid>/stat` (field 22,
-/// in clock ticks since boot). On macOS, uses `sysctl` with `KERN_PROC_PID`.
-/// On Windows, uses `GetProcessTimes`. Returns `None` if the start identity
-/// cannot be determined.
+/// in clock ticks since boot). On macOS, uses `proc_pidinfo` with
+/// `PROC_PIDTBSDINFO`. On Windows, uses `GetProcessTimes`. Returns `None` if
+/// the start identity cannot be determined.
 #[cfg(target_os = "linux")]
 fn get_process_start_token(pid: u32) -> Option<String> {
     let stat_path = format!("/proc/{pid}/stat");
@@ -116,7 +116,7 @@ fn parse_linux_proc_start_token(stat: &str) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn get_process_start_token(pid: u32) -> Option<String> {
-    use libc::{PROC_PIDTBSDINFO, c_int, proc_bsdinfo, proc_pidinfo};
+    use libc::{PROC_PIDTBSDINFO, c_int, c_void, proc_bsdinfo, proc_pidinfo};
 
     let mut info: proc_bsdinfo = unsafe { std::mem::zeroed() };
     let ret = unsafe {
@@ -124,7 +124,10 @@ fn get_process_start_token(pid: u32) -> Option<String> {
             pid as c_int,
             PROC_PIDTBSDINFO,
             0,
-            &mut info as *mut _,
+            // Two-step cast: a reference cannot be cast straight to
+            // `*mut c_void` (E0606 — the pointee sizes differ), but a raw
+            // pointer to the struct can.
+            &mut info as *mut proc_bsdinfo as *mut c_void,
             std::mem::size_of::<proc_bsdinfo>() as c_int,
         )
     };
