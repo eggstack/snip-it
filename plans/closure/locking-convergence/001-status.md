@@ -14,7 +14,7 @@ Repository baseline reviewed: `dca5d3136db8a216ba4fcf8bfddac9140d1029ff`
 
 Implementation commits or pull requests:
 
-- Implementation commit `IMPLEMENTATION_COMMIT_SHA`, relative to baseline
+- Implementation commit `d67feeab52fa6f3442cf372dee16ed5f5061c036`, relative to baseline
   `dca5d31`. Change set: 1 new shared module
   (`src/record_lock.rs`), 2 rewired callers, 3 new static guards, 2
   architecture documents updated.
