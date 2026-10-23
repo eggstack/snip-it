@@ -123,6 +123,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementations already used. The start-token doc comment also now names
   `proc_pidinfo`/`PROC_PIDTBSDINFO`, which is what the code actually calls,
   instead of `sysctl`/`KERN_PROC_PID`.
+- **A platform-only compile error could reach `main` unnoticed.** The Linux
+  gate never compiles the macOS- or Windows-only code, so a type error inside
+  a `cfg`-gated block is invisible to it — the macOS build break above was
+  only caught after the commit was pushed. The architecture suite now forbids
+  a reference from being the operand of the final link of a raw-pointer cast,
+  which is the shape that broke the macOS build, and it covers the server
+  crate as well as the client. The suite also runs in `scripts/check.sh`,
+  which it did not before, so its boundary rules gate the build.
 - **The search-parity contract was verified against only two of its three
   surfaces.** The parity suite compared `snp list --filter` against MCP
   `snippets_search` and never invoked `snp get --query` — the surface the

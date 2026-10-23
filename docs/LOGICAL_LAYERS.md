@@ -218,6 +218,9 @@ a dependency, not a specific import form. External crates and `std` items are
   in `src/lib.rs`
 - [x] The owned-record lock acquisition protocol exists in exactly one module in `src/`
 - [x] `is_transient_lock_contention` is defined in exactly one module in `src/`
+- [x] No reference is the operand of the final link of a raw-pointer cast in
+  `src/` or `snip-sync/src/` — a `cfg`-gated platform build cannot see such an
+  error on Linux, and the macOS-only `E0606` it causes reaches `main` unseen
 - [x] `src/update.rs` does not shell out to `curl`
 - [x] `Cargo.toml` pins `eggfetch-core = "=0.2.2"` with the
   `standard-http1` + `redirects` features

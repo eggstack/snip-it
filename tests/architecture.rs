@@ -379,9 +379,9 @@ fn snp_updater_delegates_redirects_and_total_timeout() {
 const OWNED_RECORD_PROTOCOL_MARKERS: &[&str] =
     &["create_new(true)", "write_all(", "sync_all(", "observe("];
 
-/// The source of every Rust file under `src/`, with its module name.
-fn client_crate_sources() -> Vec<(String, String)> {
-    rust_files_under(&src_dir())
+/// The source of every Rust file under `dir`, with its path.
+fn sources_under(dir: &Path) -> Vec<(String, String)> {
+    rust_files_under(dir)
         .into_iter()
         .map(|path| {
             let source = fs::read_to_string(&path)
@@ -389,6 +389,17 @@ fn client_crate_sources() -> Vec<(String, String)> {
             (path.display().to_string(), source)
         })
         .collect()
+}
+
+/// The source of every Rust file under `src/`, with its module name.
+fn client_crate_sources() -> Vec<(String, String)> {
+    sources_under(&src_dir())
+}
+
+/// The source of every Rust file under `snip-sync/src/`, with its path.
+fn server_crate_sources() -> Vec<(String, String)> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    sources_under(&Path::new(&manifest_dir).join("snip-sync").join("src"))
 }
 
 /// The source with comment-only lines removed, so a marker quoted in a doc
@@ -487,5 +498,263 @@ fn transient_lock_contention_helper_is_defined_in_exactly_one_module() {
         definitions.len(),
         1,
         "the transient-contention helper must be defined in exactly one module, found: {definitions:?}"
+    );
+}
+
+/// The source with every run of whitespace collapsed to a single space and
+/// every non-ASCII character replaced by one.
+///
+/// The cast syntax is ASCII and the scanner works on bytes, so dropping the
+/// rest keeps every byte offset a character boundary.
+fn flatten_whitespace(source: &str) -> Vec<u8> {
+    let mut flattened: Vec<u8> = Vec::with_capacity(source.len());
+    let mut pending_space = false;
+    for character in source.chars() {
+        if character.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space {
+            flattened.push(b' ');
+            pending_space = false;
+        }
+        if character.is_ascii() {
+            flattened.push(character as u8);
+        } else {
+            flattened.push(b' ');
+        }
+    }
+    flattened
+}
+
+/// The first index of `needle` in `haystack`.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The last index of `byte` in `haystack`.
+fn rfind_byte(haystack: &[u8], byte: u8) -> Option<usize> {
+    haystack.iter().rposition(|candidate| *candidate == byte)
+}
+
+/// `text` without its leading ASCII whitespace.
+fn trim_ascii_start(text: &[u8]) -> &[u8] {
+    let start = text
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(text.len());
+    &text[start..]
+}
+
+/// `text` without its trailing ASCII whitespace.
+fn trim_ascii_end(text: &[u8]) -> &[u8] {
+    let end = text
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    &text[..end]
+}
+
+/// `text` without a leading `mut` keyword, when it is one.
+fn strip_mut_keyword(text: &[u8]) -> &[u8] {
+    let Some(rest) = text.strip_prefix(b"mut".as_slice()) else {
+        return text;
+    };
+    // `mut` is a keyword only when the next byte cannot continue an identifier.
+    match rest.first() {
+        Some(byte) if byte.is_ascii_alphanumeric() || *byte == b'_' => text,
+        _ => trim_ascii_start(rest),
+    }
+}
+
+/// Whether `segment` is one path segment of an identifier.
+fn is_path_segment(segment: &[u8]) -> bool {
+    !segment.is_empty()
+        && segment
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        && !segment[0].is_ascii_digit()
+}
+
+/// The end of the type expression that starts at `start` in `code`.
+///
+/// A cast target is a type, so it ends at the first token that cannot
+/// continue one. Angle brackets are tracked, so a generic argument list
+/// (`::<A, B>`) does not end the target early, and a space is only part of
+/// the target when it is not the separator of the next link in the chain.
+fn type_expression_end(code: &[u8], start: usize) -> usize {
+    let mut index = start;
+    let mut angle_depth = 0usize;
+    while index < code.len() {
+        match code[index] {
+            b'<' => {
+                angle_depth += 1;
+                index += 1;
+            }
+            b'>' => {
+                if angle_depth == 0 {
+                    break;
+                }
+                angle_depth -= 1;
+                index += 1;
+            }
+            b',' if angle_depth == 0 => break,
+            b')' | b']' | b'}' | b';' | b'=' => break,
+            b' ' | b'\t' if angle_depth == 0 => {
+                let lookahead = trim_ascii_start(&code[index..]);
+                if lookahead.starts_with(b"as ") {
+                    break;
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    index
+}
+
+/// Whether `text` ends with a reference expression: `&value`, `&mut value`,
+/// or a field path rooted at one (`&mut self.value`).
+///
+/// The reference must be the last expression of `text`, so an `&` inside a
+/// call's argument list does not count: `f(&mut value)` ends with `)`, not
+/// with the reference.
+fn ends_with_reference(text: &[u8]) -> bool {
+    let text = trim_ascii_end(text);
+    let Some(index) = rfind_byte(text, b'&') else {
+        return false;
+    };
+    let after = strip_mut_keyword(trim_ascii_start(&text[index + 1..]));
+    let mut segments = after.split(|byte| *byte == b'.');
+    match segments.next() {
+        Some(first) if is_path_segment(first) => segments.all(is_path_segment),
+        _ => false,
+    }
+}
+
+/// The casts in `source` whose final link takes a reference as its operand.
+///
+/// A reference cannot be cast straight to `*mut c_void`: the compiler rejects
+/// it with `E0606`, because the pointee sizes differ. The macOS-only start
+/// token reader in `src/record_lock.rs` shipped exactly that cast, and only
+/// the macOS CI job could see it — the Linux gate never compiles the code
+/// that carries it, so the error reached `main` unnoticed.
+///
+/// The safe form casts the reference to an explicitly typed pointer first
+/// (`&mut value as *mut T as *mut c_void`), so the final link of a chain
+/// takes a pointer, never a reference.
+fn reference_to_raw_pointer_casts(source: &str) -> Vec<String> {
+    let code = flatten_whitespace(&code_without_comments(source));
+    let mut violations = Vec::new();
+    let mut search_from = 0usize;
+    let mut previous_target: Option<&[u8]> = None;
+    while let Some(relative) = find_bytes(&code[search_from..], b" as ") {
+        let cast = search_from + relative;
+        let target_start = cast + " as ".len();
+        let target_end = type_expression_end(&code, target_start);
+        let target = &code[target_start..target_end];
+        // A chain continues when another `as` follows the target.
+        let is_final_link = !trim_ascii_start(&code[target_end..]).starts_with(b"as ");
+        if is_final_link {
+            // The operand of the final link is the previous link's target, or
+            // — for a single-link chain — the expression before the cast.
+            let operand = match previous_target {
+                Some(previous) => previous,
+                None => {
+                    let start = rfind_byte(&code[..cast], b';').map_or(0, |index| index + 1);
+                    &code[start..cast]
+                }
+            };
+            if ends_with_reference(operand) {
+                violations.push(format!(
+                    "`{} as {}`",
+                    String::from_utf8_lossy(trim_ascii_end(operand)),
+                    String::from_utf8_lossy(trim_ascii_end(target))
+                ));
+            }
+        }
+        previous_target = if is_final_link { None } else { Some(target) };
+        search_from = target_end.max(cast + " as ".len());
+    }
+    violations
+}
+
+/// A reference must never be the operand of the final link of a raw-pointer
+/// cast: the compiler rejects that cast when the target is `c_void`, and the
+/// error only surfaces on the platform that compiles the code.
+#[test]
+fn no_reference_is_cast_straight_to_a_raw_pointer() {
+    let mut violations = Vec::new();
+    for (name, source) in client_crate_sources()
+        .into_iter()
+        .chain(server_crate_sources())
+    {
+        for violation in reference_to_raw_pointer_casts(&source) {
+            violations.push(format!("{name}: {violation}"));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "a reference must not be cast straight to a raw pointer:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// A guard that cannot fail proves nothing, so the detector is exercised
+/// against the cast that broke the macOS build: it must be reported, and the
+/// safe two-step form must not be.
+#[test]
+fn reference_to_raw_pointer_cast_detector_reports_the_broken_cast() {
+    let broken = r#"
+fn broken(info: &mut proc_bsdinfo) {
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as c_int,
+            PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _,
+            std::mem::size_of::<proc_bsdinfo>() as c_int,
+        )
+    };
+}
+"#;
+    let violations = reference_to_raw_pointer_casts(broken);
+    assert_eq!(
+        violations.len(),
+        1,
+        "the detector must report the broken cast: {violations:?}"
+    );
+
+    let safe = r#"
+fn safe(info: &mut proc_bsdinfo) {
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as c_int,
+            PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut proc_bsdinfo as *mut c_void,
+            std::mem::size_of::<proc_bsdinfo>() as c_int,
+        )
+    };
+}
+"#;
+    assert!(
+        reference_to_raw_pointer_casts(safe).is_empty(),
+        "the detector must not report the safe two-step cast"
+    );
+
+    // A reference that is not the last expression of the operand is not a
+    // reference operand: the call's result is what gets cast.
+    let call_result = r#"
+fn call_result(info: &mut proc_bsdinfo) {
+    let ret = unsafe { borrow(info) as *mut _ };
+}
+"#;
+    assert!(
+        reference_to_raw_pointer_casts(call_result).is_empty(),
+        "the detector must not report a cast of a call's result"
     );
 }

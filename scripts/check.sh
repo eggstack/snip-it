@@ -27,6 +27,9 @@ cargo test --workspace --lib
 echo "=== Platform smoke ==="
 cargo test --test platform_smoke --features test-support
 
+echo "=== Architecture boundaries ==="
+cargo test --test architecture --features test-support
+
 echo "=== Destination permissions ==="
 cargo test --test destination_permissions --features test-support
 
