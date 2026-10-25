@@ -1,9 +1,9 @@
 //! Plan 008 compatibility: top-level and `snp data ...` spellings share one
 //! canonical argument schema and dispatch to the same implementation.
 //!
-//! Proves equivalent behavior for validate, backup, repair dry-run, and
-//! status JSON. Both spellings must succeed with the same exit codes and
-//! equivalent machine-readable output.
+//! Proves equivalent behavior for validate, backup, repair dry-run, restore
+//! dry-run, status JSON, and delete JSON. Both spellings must succeed with
+//! the same exit codes and equivalent machine-readable output.
 
 mod support;
 
@@ -242,4 +242,57 @@ fn restore_dry_run_top_and_data_are_equivalent() {
         top_json["files_in_backup"], data_json["files_in_backup"],
         "restore dry-run file counts must match"
     );
+}
+
+#[test]
+fn delete_top_and_data_produce_equivalent_json() {
+    // The delete mutates the library, so each spelling needs its own
+    // fixture: running both against one library would make the second
+    // spelling report the snippet as already deleted.
+    let (_tmp_top, config_top) = setup_test_env();
+    setup_basic_library(&config_top);
+    let (_tmp_data, config_data) = setup_test_env();
+    setup_basic_library(&config_data);
+
+    let top = run_args(&config_top, &["delete", "--id", "compat-1", "--json"]);
+    let data = run_args(
+        &config_data,
+        &["data", "delete", "--id", "compat-1", "--json"],
+    );
+    assert_success(&top, "snp delete --id");
+    assert_success(&data, "snp data delete --id");
+
+    let top_json: serde_json::Value = serde_json::from_slice(&top.stdout).unwrap();
+    let data_json: serde_json::Value = serde_json::from_slice(&data.stdout).unwrap();
+    assert_eq!(top_json["status"], data_json["status"]);
+    assert_eq!(top_json["status"], "deleted");
+    assert_eq!(top_json["id"], data_json["id"]);
+    assert_eq!(top_json["id"], "compat-1");
+    assert_eq!(top_json["description"], data_json["description"]);
+    assert_eq!(top_json["library"], data_json["library"]);
+}
+
+#[test]
+fn delete_top_and_data_agree_on_an_already_deleted_target() {
+    // The mirror must agree on the refusal path too, not only on success.
+    let (_tmp_top, config_top) = setup_test_env();
+    setup_basic_library(&config_top);
+    let (_tmp_data, config_data) = setup_test_env();
+    setup_basic_library(&config_data);
+
+    let first = run_args(&config_top, &["delete", "--id", "compat-1"]);
+    let first_data = run_args(&config_data, &["data", "delete", "--id", "compat-1"]);
+    assert_success(&first, "snp delete --id");
+    assert_success(&first_data, "snp data delete --id");
+
+    let second = run_args(&config_top, &["delete", "--id", "compat-1"]);
+    let second_data = run_args(&config_data, &["data", "delete", "--id", "compat-1"]);
+
+    // Both spellings must report the same exit code for the same state.
+    assert_eq!(
+        second.status.code(),
+        second_data.status.code(),
+        "both spellings must refuse an already-deleted target identically"
+    );
+    assert_eq!(second.status.code(), Some(9));
 }

@@ -48,6 +48,9 @@ cargo test --test restore_manifest_gate --features test-support
 echo "=== Search parity (get --query / list --filter / MCP snippets_search) ==="
 cargo test --test selector_search_parity --features test-support
 
+echo "=== CLI surface compatibility (snp data mirror + aliases) ==="
+cargo test --test cli_surface_compat
+
 echo "=== snip-sync HTTP socket contracts ==="
 cargo build -p snip-sync --bin snip-sync
 cargo test --test snip_sync_lifetime -- --test-threads=1
