@@ -35,7 +35,7 @@
   occurrence indices from the same sequence regardless of branch. Inserting or
   reordering identical-content snippets can therefore shift the provisional IDs
   of *other* missing-ID snippets — accepted churn after a sync merge, not a bug.
-- **`Snippet::new()`** leaves `id` empty (`src/library/model.rs:231`); the ID is
+- **`Snippet::new()`** leaves `id` empty (`src/library/model.rs:302`); the ID is
   assigned at the next load.
 
 > Historical note: the load path was UUID v4 before the deterministic-ID change.
@@ -58,8 +58,8 @@
 | Same ID + different content | Both snippets are kept; the second gets a deterministic replacement ID on load (`src/library/persistence.rs:160`) |
 | Different ID + same content | Both kept (no content-based deduplication) |
 | Restore | Retains IDs subject to collision rules (duplicates resolved at load) |
-| Sync push/pull/merge | Uses same ID across devices; the protobuf `Snippet` message carries the `id` field (`snip-proto/src/snip_proto.rs:85-113`) |
-| Delete | Sets `deleted=true`, retains ID as tombstone (`src/commands/mod.rs:602-617`) |
+| Sync push/pull/merge | Uses same ID across devices; the protobuf `Snippet` message carries the `id` field (`snip-proto/src/snip_proto.rs:102-131`) |
+| Delete | Sets `deleted=true`, retains ID as tombstone (`src/commands/mod.rs:776`) |
 | Recreate | New ID (never reuses deleted IDs) |
 
 ### ID Assignment Points
@@ -115,29 +115,29 @@ serving** for that library. It has three values, serialized lowercase:
 | Primary selection | References `filename`; validated canonical name (`src/library/manager.rs`) |
 | Delete | Config entry removed, file deleted after config save for crash safety (`src/library/manager.rs`) |
 | Recreate | New entry (filename is primary key; case-insensitive duplicate check) (`src/library/manager.rs`) |
-| Sync linkage | `link_server_library` sets both `library_id` and `server_id` (`src/library/manager.rs:550`) |
-| Unlink | Clears `library_id` and `server_id` (`src/library/manager.rs:586`) |
-| Server import | `add_server_library` creates or links by normalized filename (`src/library/manager.rs:678`) |
+| Sync linkage | `link_server_library` sets both `library_id` and `server_id` (`src/library/manager.rs:584`) |
+| Unlink | Clears `library_id` and `server_id` (`src/library/manager.rs:632`) |
+| Server import | `add_server_library` creates or links by normalized filename (`src/library/manager.rs:774`) |
 
 ## Migration Rules
 
 - Missing IDs get a deterministic `legacy-<hex>` ID on load
 - Duplicate IDs get a deterministic replacement on load
 - Empty IDs get a deterministic `legacy-<hex>` ID on load
-- No ID reuse from deleted snippets — deleted snippets retain their original ID as a tombstone (`src/commands/mod.rs:602-617`)
-- Deleted snippets are excluded from TUI display but retained for sync (`src/commands/mod.rs:285-292`)
+- No ID reuse from deleted snippets — deleted snippets retain their original ID as a tombstone (`src/commands/mod.rs:776`)
+- Deleted snippets are excluded from TUI display but retained for sync (`src/commands/mod.rs:376`)
 
 ## Sync Identity Semantics
 
-- Snippet IDs are the merge key across devices (`src/sync_commands.rs:1261-1263`)
+- Snippet IDs are the merge key across devices (`src/sync_commands.rs:1482-1483`)
 - Last-write-wins conflict resolution uses `updated_at` timestamp, then
   `device_id`, then a SHA-256 fingerprint of the synced fields
-  (`src/sync_commands.rs:1199-1224`)
+  (`src/sync_commands.rs:1419-1446`)
 - Locally deleted snippets are never resurrected by newer server copies
-  (`src/sync_commands.rs:1307-1319`); a server-only tombstone is dropped because
-  this device never observed the snippet (`src/sync_commands.rs:1325-1332`)
-- Server-deleted snippets are marked `deleted=true` locally (data preserved, not removed) (`src/sync_commands.rs:1273-1293`)
-- `output` is local-only — not synced, and absent from the protobuf `Snippet` message (`snip-proto/src/snip_proto.rs:85-113`); the merge keeps the local copy (`src/sync_commands.rs:1294-1305`)
+  (`src/sync_commands.rs:1422-1425`); a server-only tombstone is dropped because
+  this device never observed the snippet (`src/sync_commands.rs:1544-1551`)
+- Server-deleted snippets are marked `deleted=true` locally (data preserved, not removed) (`src/sync_commands.rs:1493-1513`)
+- `output` is local-only — not synced, and absent from the protobuf `Snippet` message (`snip-proto/src/snip_proto.rs:102-131`); the merge keeps the local copy (`src/sync_commands.rs:1497`)
 - `device_id` and `deleted` fields are sanitized on import (`src/commands/import_cmd.rs:157-158`)
 
 ## The server's delta cursor

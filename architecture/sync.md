@@ -543,8 +543,8 @@ fn choose_version(local: &Snippet, remote: &ProtoSnippet) -> VersionWinner
 
 The remote-tombstone arm of `merge_snippets` uses
 `updated_at: local.updated_at.max(server.updated_at)`
-(`src/sync_commands.rs:1290`), matching the local-tombstone arm
-(`src/sync_commands.rs:1316`). Taking the server timestamp verbatim would
+(`src/sync_commands.rs:1510`), matching the local-tombstone arm
+(`src/sync_commands.rs:1536`). Taking the server timestamp verbatim would
 lower the local timestamp whenever the tombstone is older, regressing the
 record below a watermark other clients already synced past. No resurrection is
 implied — the record is still marked deleted.
@@ -734,7 +734,7 @@ struct SyncStatus {
 
 | Counter | Meaning | Source |
 |---------|---------|--------|
-| `pushed` | libraries whose upload completed (Push mode) | `src/sync_commands.rs:916` |
+| `pushed` | libraries whose upload completed (Push mode) | `src/sync_commands.rs:1099` |
 | `pushed` | **also** incremented in Pull mode for every successfully merged library, even though nothing was uploaded — a log-label quirk; the counter is only consumed by the `tracing::info!("Sync complete")` line (`src/sync_commands.rs:1030-1032`, `:1103-1109`) | |
 | `pulled` | server snippets merged into the local library | `src/sync_commands.rs:603-607`, `:945`, `:1033` |
 | `conflicts` | ids whose **server copy won** the merge | `src/sync_commands.rs:949-955`, `:1037-1043` |

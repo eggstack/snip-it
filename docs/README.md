@@ -18,7 +18,7 @@ A document in `archive/` describes a codebase state that no longer exists.
 | [JSON_SCHEMAS.md](JSON_SCHEMAS.md) | Machine-readable JSON envelopes | `tests/schema.rs` — covers `list --json` and `list --csv` only; `get --json`, `status --json`, `doctor --report json`, and `restore --dry-run --json` are not covered |
 | [LIBRARY_SCOPE.md](LIBRARY_SCOPE.md) | `--library` resolution, single vs selector path | `src/selector.rs` |
 | [IDENTITY_CONTRACT.md](IDENTITY_CONTRACT.md) | Deterministic snippet IDs, library identity | `tests/identity_contract.rs` |
-| [LOGICAL_LAYERS.md](LOGICAL_LAYERS.md) | Three-layer dependency direction and known exceptions | `tests/architecture.rs` — crate-root `crate::` path prefixes only; the external-crate and `std` rules are not test-enforced |
+| [LOGICAL_LAYERS.md](LOGICAL_LAYERS.md) | Three-layer dependency direction and known exceptions | `tests/architecture.rs` — the layer rules match crate-root `crate::` path prefixes only; the external-crate and `std` rules are not test-enforced, and the raw-pointer-cast rule scans source text in both crates |
 | [MCP.md](MCP.md) | Read-only stdio MCP tools and protocol | `src/mcp/`, `tests/mcp_integration.rs` |
 | [PERSISTENCE_INVENTORY.md](PERSISTENCE_INVENTORY.md) | Every persisted artifact, path, durability class | `src/library/`, `src/config/` |
 | [PUBLIC_API.md](PUBLIC_API.md) | Stable public surface of `src/lib.rs` | `tests/public_api_smoke.rs` |
@@ -48,7 +48,7 @@ actually shipped.
 
 ## Related, outside `docs/`
 
-- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 61 deep dives (62 documents including the overview).
+- [`../architecture/overview.md`](../architecture/overview.md) — **start here.** Module map plus the Deep-Dive Index for all 62 deep dives (63 documents including the overview).
 - [`../AGENTS.md`](../AGENTS.md) — verify commands, gotchas, invariants; indexes into the architecture sections.
 - [`../AGENTS.override.md`](../AGENTS.override.md) — session pitfall notes.
 - [`../.skills/`](../.skills) — task-shaped skills (sync, transactions, server, selector parity, testing, documentation, …).

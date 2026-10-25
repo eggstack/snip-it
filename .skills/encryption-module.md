@@ -23,15 +23,15 @@ Memory cost is `1 << 14` (16 MiB), time cost 3, parallelism 4 (`src/encryption.r
 ## Key Derivation
 
 ```rust
-// src/encryption.rs:202-205 — argon2 0.6 inherent `hash_password_into`,
+// src/encryption.rs:270-272 — argon2 0.6 inherent `hash_password_into`,
 // called with the raw salt bytes (not a base64-encoded salt).
 let mut key_bytes = [0u8; 32];
 argon2.hash_password_into(api_key.as_bytes(), salt, &mut key_bytes)?;
 ```
 
-The derived key is wrapped in private `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop` (`src/encryption.rs:102-103`).
-The encrypt path zeroizes via `key.zeroize()` (`src/encryption.rs:243`); the decrypt path
-uses `drop(std::mem::take(&mut key))` (`src/encryption.rs:269`). Never `lock().unwrap()` the
+The derived key is wrapped in private `DerivedKey` which implements `Zeroize` + `ZeroizeOnDrop` (`src/encryption.rs:101-102`).
+The encrypt path zeroizes via `key.zeroize()` (`src/encryption.rs:332`); the decrypt path
+uses `drop(std::mem::take(&mut key))` (`src/encryption.rs:359`). Never `lock().unwrap()` the
 key cache directly — use `lock_key_cache()` (`src/encryption.rs:72-80`) with its poison
 recovery; `ct_eq` is `#[cfg(test)]`-only, do not re-export.
 
@@ -47,7 +47,7 @@ Base64(Salt[16] + Nonce[12] + Ciphertext[...])
 
 ### What sync actually encrypts (do not assume the whole record is covered)
 
-`encrypt_snippet` (`src/sync.rs:1389`) encrypts **only** a 3-field
+`encrypt_snippet` (`src/sync.rs:1516`) encrypts **only** a 3-field
 `EncryptedSnippetData { description, command, tags }`, serialized to JSON. The
 ciphertext is placed in the proto `command` field; `description` is emptied and
 `tags` cleared. The remaining fields travel as **plaintext** proto fields:
@@ -60,7 +60,7 @@ ciphertext is placed in the proto `command` field; `description` is emptied and
 
 Full breakdown: [`architecture/encryption.md`](../architecture/encryption.md#what-sync-actually-encrypts).
 
-`decrypt_snippet` (`src/sync.rs:1463`) is the symmetric inverse and returns
+`decrypt_snippet` (`src/sync.rs:1622`) is the symmetric inverse and returns
 unmodified records unchanged when `encrypted == false`. An agent must not
 assume the full record is confidential — `device_id` and `updated_at` are
 visible to the server and to anyone reading the wire format, which matters
@@ -87,18 +87,18 @@ pub fn decrypt_snippet(api_key: &str, proto: &ProtoSnippet) -> SnipResult<ProtoS
 - `KeyDerivationFailed` — Argon2 error
 - `InvalidData` — corrupted payload, wrong length, or format errors
 
-**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:316`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
+**Note**: `CryptoError` integrates with `SnipError` via `impl From<CryptoError> for SnipError` (`src/error.rs:352`). The conversion produces `SnipError::SyncFailure`: `EncryptionFailed` maps to `SyncFailureKind::EncryptionFailed`; all other variants map to `SyncFailureKind::DecryptionFailed` (both classify as `FailureClass::Internal`, so retry policy is preserved).
 
 ## Security Properties
 
 - **Confidentiality**: AES-256-GCM
 - **Integrity**: GCM auth tag (tested with tampered ciphertext/nonce/salt tests)
 - **Key isolation**: The server stores only an Argon2id hash of the API key
-  (`snip-sync/src/db.rs:92-109`), never the key itself — plus an 8-character
+  (`snip-sync/src/db.rs:124-145`), never the key itself — plus an 8-character
   base64(SHA-256) prefix used for indexed lookup
-  (`snip-sync/src/db.rs:129-135`) — and snippet bodies are stored as
+  (`snip-sync/src/db.rs:159-164`) — and snippet bodies are stored as
   ciphertext. Note the API key
-  **is** transmitted as a `Bearer` token on every request (`src/sync.rs:306-314`),
+  **is** transmitted as a `Bearer` token on every request (`src/sync.rs:323-331`),
   so anything observing that token can re-derive the Argon2id key. The guarantee
   is transport + at-rest protection — not server-blindness.
 - **Nonce uniqueness**: Random per-encryption via OsRng
@@ -111,9 +111,9 @@ Derived keys are cached per-session to avoid re-running Argon2id for the same (a
 - **Cache**: `KEY_CACHE: LazyLock<Mutex<HashMap<(String, String), DerivedKey>>>` — keyed by `(SHA-256(api_key), base64(salt))`
 - **Max size**: `MAX_KEY_CACHE_SIZE = 10_000` entries (~1 MB)
 - **Clear**: sync takes an RAII guard `let _key_cache_guard = encryption::key_cache_guard();`
-  (`src/encryption.rs:90`, acquired at `src/sync.rs:504`); `KeyCacheGuard::drop` calls `clear_key_cache()`.
+  (`src/encryption.rs:90`, acquired at `src/sync.rs:553`); `KeyCacheGuard::drop` calls `clear_key_cache()`.
   `src/sync_commands.rs` wraps the same call in its own guard
-  (`src/sync_commands.rs:43-49`, taken at `src/sync_commands.rs:675`). Neither
+  (`src/sync_commands.rs:43-49`, taken at `src/sync_commands.rs:834`). Neither
   module calls `clear_key_cache()` directly — keep the guard, or an early return
   leaks derived keys for the rest of the process.
 - **Zeroize**: Cache entries are zeroized on drain

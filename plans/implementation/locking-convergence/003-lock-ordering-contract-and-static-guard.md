@@ -70,7 +70,7 @@ one tier is held while a lower tier is acquired.
 
 | Edge | Outer tier | Inner tier | Evidence |
 |------|-------------|------------|----------|
-| Execution → LocalData | `SyncExecutionLock` | `LocalDataLock` | `src/commands/sync_cmd.rs:193` takes the execution lock; the merge calls `library::update_library` at `src/sync_commands.rs:675`, which takes the local-data lock at `src/library/persistence.rs:309` |
+| Execution → LocalData | `SyncExecutionLock` | `LocalDataLock` | `src/commands/sync_cmd.rs:193` takes the execution lock; the merge calls `library::update_library` at `src/sync_commands.rs:781`, which takes the local-data lock at `src/library/persistence.rs:309` |
 | Execution → Pending | `SyncExecutionLock` | `PendingTxnGuard` | `src/commands/mod.rs:432` takes the execution lock and `:442` calls `clear_pending_after_explicit_sync` → `worker::clear_after_explicit_sync` → `pending::clear_if_generation_matches`, which takes the pending lock at `src/auto_sync/pending.rs:241` |
 | LocalData → Transaction | `LocalDataLock` | `TransactionLock` | `src/commands/restore_cmd.rs:1223` takes the local-data lock and `:1224` takes the transaction lock |
 | LocalData → Pending | `LocalDataLock` | `PendingTxnGuard` | `src/commands/edit_cmd.rs:103` takes the local-data lock and `:132` calls `notify_mutation` → `pending::record_pending_mutation`, which takes the pending lock at `src/auto_sync/pending.rs:77` |

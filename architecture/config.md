@@ -75,8 +75,8 @@ or world bits, `src/utils/config.rs:94-105`).
 
 `libraries/`, `premade/`, `libraries.toml` come from
 `src/library/manager.rs:51-53`; `.transaction/` from
-`src/library/manager.rs:658` and `src/local_data.rs:398-400`; `backups/` from
-`src/library/persistence.rs:357` and `src/commands/backup_cmd.rs:63`;
+`src/library/manager.rs:754` and `src/local_data.rs:398-400`; `backups/` from
+`src/library/persistence.rs:394` and `src/commands/backup_cmd.rs:58`;
 `logs/` from `src/logging.rs:72`; `audit.log` from `src/logging.rs:380-384`.
 
 `logs/` and `audit.log` are created lazily; `snp version` and

@@ -190,9 +190,9 @@ All dependencies must come from crates.io (the only allowed registry). Git depen
 
 | Crate | Version | Description |
 |-------|---------|-------------|
-| `snip-it` | 1.3.9 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
-| `snip-proto` | 0.1.3 | Protobuf definitions and tonic-generated gRPC code. |
-| `snip-sync` | 0.1.6 | gRPC sync server (EggServe HTTP leaf + tonic gRPC, SQLite storage). |
+| `snip-it` | 1.4.1 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
+| `snip-proto` | 0.1.4 | Protobuf definitions and tonic-generated gRPC code. |
+| `snip-sync` | 0.1.8 | gRPC sync server (EggServe HTTP leaf + tonic gRPC, SQLite storage). |
 
 All three crates share the same license (MIT), Rust edition (2024), and minimum supported Rust version (1.94).
 

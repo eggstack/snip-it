@@ -211,10 +211,10 @@ let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 - The gate and the local-data lock are derived from the **config directory**, not from the target library path (`:223-224`). This is what makes the gate effective for every library, including ones outside the default config root.
 - Import therefore takes the **local-data lock only** — no transaction lock, no journal. The lock hierarchy position is *below* `snp restore`, which takes both.
 
-`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:666-672`), so two more import paths are covered:
+`LibraryManager` gates its own mutations separately (`LibraryManager::gate_mutation`, `src/library/manager.rs:762-768`), so two more import paths are covered:
 
 - `mgr.ensure_library_mode()` (`import_cmd.rs:192`) reaches the gate only when a single-file migration is actually needed, via `migrate_from_single_file` (`src/library/manager.rs:165-170`, `:181-183`, which takes the gate and the local-data lock).
-- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:602-603`).
+- `mgr.add_existing_library(&dest_name)` (`import_cmd.rs:454-468`) always gates (`src/library/manager.rs:650`).
 
 `backup_library` (used in merge and replace) is a plain copy, not a journaled operation.
 
@@ -243,7 +243,7 @@ let _local_lock = crate::local_data::acquire_local_data_lock(&transaction_dir)?;
 
 ## Gotchas
 
-- `snp import` is `snp import pet <PATH>`; the subcommand alias is `p` (`src/main.rs:366`).
+- `snp import` is `snp import pet <PATH>`; the subcommand alias is `p` (`src/main.rs:370`).
 - The default mode is `Create`, which **fails** if the destination library already exists. This is the most common first-run failure.
 - Import calls `mgr.ensure_library_mode()` (`:192`) — unlike `validate`, it **can migrate** legacy state. It is a mutating command even before it writes a library.
 - The `id` field of an imported snippet is **discarded and regenerated** (`:144-145`). A Pet export that carried snip-it IDs does not preserve them.

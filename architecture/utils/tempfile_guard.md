@@ -135,7 +135,7 @@ the write path panics.
 | Helper | Temp path format | Guard armed | `persist()` called |
 |--------|------------------|-------------|--------------------|
 | `write_private_atomic` | `{temp_prefix}.{uuid}.tmp` (`src/utils/atomic.rs:285`) | `src/utils/atomic.rs:286` | `src/utils/atomic.rs:320` |
-| `atomic_replace` | `{uuid}.tmp` (`src/utils/atomic.rs:375`) | `src/utils/atomic.rs:376` | `src/utils/atomic.rs:414` |
+| `atomic_replace` | `{uuid}.tmp` (`src/utils/atomic.rs:375`) | `src/utils/atomic.rs:376` | `src/utils/atomic.rs:440` |
 
 In both helpers the ordering is the same and is the whole point of the guard:
 
@@ -161,7 +161,7 @@ newly written target file is never deleted.
    (best-effort; a failure is ignored, `src/utils/atomic.rs:417-431`);
 2. sync the parent directory (`src/utils/atomic.rs:434`).
 
-Both run **after** `persist()` (`src/utils/atomic.rs:414`). That matters: if
+Both run **after** `persist()` (`src/utils/atomic.rs:440`). That matters: if
 the parent-directory fsync fails and the call returns an error
 (`src/utils/atomic.rs:434`), the target file has already been written and the
 guard will not delete it. The error means "the rename may not survive power

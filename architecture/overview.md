@@ -102,8 +102,8 @@ so a manual sync and an auto-sync can never overlap.
 
 ```
 snip-it/                 Main crate — binary "snp" (+ a library for binary/test sharing)
-  src/                   Application source (~58k LOC across 87 files)
-  tests/                 51 integration test targets + tests/support/ (4 shared modules)
+  src/                   Application source (~62k lines across 88 files)
+  tests/                 55 integration test targets + tests/support/ (4 shared modules)
   architecture/          This directory — one deep-dive doc per component
   docs/                  Reference contracts (EXIT_CODES, PUBLIC_API, THREAT_MODEL, ...)
   .skills/               Task-shaped agent reference docs (sync, transactions, server, ...)
@@ -739,7 +739,7 @@ give defaults.
 
 ## 10. Testing Surface
 
-51 integration test targets in `tests/`, plus 4 shared modules in
+55 integration test targets in `tests/`, plus 4 shared modules in
 `tests/support/`: `TestEnvironment` (isolated TempDir + `XDG_CONFIG_HOME`
 override), `RecordingServer`, `EventSink`. Tests never touch the real
 config, keychain, or ports. `src/test_failpoints.rs` supplies the

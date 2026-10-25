@@ -38,7 +38,7 @@ Report findings directly (session summary or PR description) with:
 ## Key Files to Check
 
 `architecture/overview.md` § Deep-Dive Index is the authoritative module → doc
-map — 61 deep dives, 62 documents in `architecture/` counting `overview.md`
+map — 62 deep dives, 63 documents in `architecture/` counting `overview.md`
 itself. The table below is the review *shortcut* — the highest-risk
 source files, grouped by the skill that covers them.
 

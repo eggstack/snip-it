@@ -291,7 +291,7 @@ These are enforced by construction, not by convention:
   which parses and returns; it never writes.
 - **No recovery / no migration.** The read path uses the **side-effect-free**
   resolver: `resolve_selector_readonly()` (`src/selector.rs:678`) and
-  `library::readonly_library_sources()` (`src/library/manager.rs:879`), never
+  `library::readonly_library_sources()` (`src/library/manager.rs:911`), never
   `resolve_selector()` (`src/selector.rs:736`), which calls
   `LibraryManager::ensure_library_mode()` and can migrate a legacy
   single-file checkout, create `libraries/`, copy the legacy file, write
@@ -456,7 +456,7 @@ discards oversized lines).
 - `src/selector.rs:142` — `searchable_text`, the shared search contract
 - `src/selector.rs:209` — `score_fuzzy_matches`, the shared match primitive
 - `src/selector.rs:678` — `resolve_selector_readonly`, the side-effect-free resolver MCP must use
-- `src/library/manager.rs:879` — `readonly_library_sources`, the read-only library resolver
+- `src/library/manager.rs:911` — `readonly_library_sources`, the read-only library resolver
 - `src/main.rs:267` — `McpCommands`; `src/main.rs:949` — read-only service classification
 - `tests/mcp_integration.rs` — end-to-end protocol contract
 

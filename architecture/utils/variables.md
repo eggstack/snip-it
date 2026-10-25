@@ -309,7 +309,7 @@ hands a command to the shell or the clipboard therefore strips first:
 | TUI snippet preview panel | `src/ui/mod.rs:505`, `src/ui/mod.rs:513` |
 | TUI **visual-range multi-select copy** | `src/ui/mod.rs:1730` — the selected range is mapped through `strip_escape_sequences` before being joined with newlines and written to the clipboard |
 | `snp get` output (default, `--field command`) | `src/commands/get_cmd.rs:238`, `:251`, `:282`, `:329` |
-| Interactive run path with no variables | `src/commands/mod.rs:322` |
+| Interactive run path with no variables | `src/commands/mod.rs:408` |
 
 The multi-select case is the one that matters most: the user selects a range
 of snippets, presses copy, and the clipboard must contain the *executable*
@@ -356,7 +356,7 @@ An escaped `>` inside the body does not close the variable:
 | Command | Behaviour |
 |---------|-----------|
 | `echo <unclosed` | No variable is produced; the text is echoed literally (`src/utils/variables.rs:1081-1090`) |
-| `<a<b>` | `has_unmatched_angle_bracket` is `true` (`src/utils/variables.rs:1026`) |
+| `<a<b>` | `has_unmatched_angle_bracket` is `true` (`src/utils/variables.rs:1043`) |
 | `<a<b>>` | balanced — `false` (`src/utils/variables.rs:1031`) |
 | `\<literal\>` | fully escaped — `false` (`src/utils/variables.rs:1272`) |
 

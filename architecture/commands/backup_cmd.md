@@ -10,7 +10,7 @@ It does **not** cover: encrypted keychain material, the `snip-sync` server, remo
 
 ## CLI arguments
 
-`snp backup` and `snp data backup` share one argument struct (`src/commands/backup_cmd.rs:22-39`):
+`snp backup` and `snp data backup` share one argument struct (`src/commands/backup_cmd.rs:21-36`):
 
 ```rust
 pub struct BackupArgs {
@@ -32,22 +32,22 @@ pub struct BackupArgs {
 
 | Flag | Type | Default | Effect |
 |---|---|---|---|
-| `-o`, `--output <PATH>` | `Option<PathBuf>` | `None` | Destination backup directory. When `None`, the command writes to `<config>/backups/<YYYYMMDD_HHMMSS>/` (`src/commands/backup_cmd.rs:61-64`). |
+| `-o`, `--output <PATH>` | `Option<PathBuf>` | `None` | Destination backup directory. When `None`, the command writes to `<config>/backups/<YYYYMMDD_HHMMSS>/` (`src/commands/backup_cmd.rs:55-59`). |
 | `--include-usage` | flag | off | Also snapshot `usage.toml` (usage/frequency metadata) into the backup. |
-| `--include-sync-state` | flag | off | Also snapshot `sync.toml`. The API key is **redacted before hashing and writing** (`src/commands/backup_cmd.rs:208-219`, `backup_archive.rs:358-374`). |
+| `--include-sync-state` | flag | off | Also snapshot `sync.toml`. The API key is **redacted before hashing and writing** (`src/commands/backup_cmd.rs:202-217`, `backup_archive.rs:358-374`). |
 | `--json` | flag | off | Emit a machine-readable JSON summary on **stdout**. The human summary always goes to **stderr**. |
 
-The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:286-287` dispatches to the same `handle_backup` (`src/main.rs:437-446`, `src/main.rs:866-868`).
+The `data` spelling is an alias, not a separate command: `DataCommands::Backup(BackupArgs)` in `src/main.rs:287-289` dispatches to the same `handle_backup` (`src/main.rs:441-449`, `src/main.rs:878-880`).
 
 ## Control flow
 
-`run()` (`src/commands/backup_cmd.rs:42-260`) executes in this order:
+`run()` (`src/commands/backup_cmd.rs:39-255`) executes in this order:
 
-1. **Config directory must exist.** A missing config directory is a hard error (`src/commands/backup_cmd.rs:51-56`) — backup does not create the config tree.
-2. **Canonicalize the config directory** (`:57-59`). This becomes the containment root for every source file.
-3. **Compute the timestamp and destination** (`:60-64`): `chrono::Utc::now().format("%Y%m%d_%H%M%S")`.
-4. **Build the staging directory** (`:65-72`): `final_backup_dir.with_extension("<existing-extension>.staging.<uuid>")`. Because `with_extension` *replaces* the last extension, `…/20260101_120000` becomes `…/20260101_120000.staging.<uuid>`, while `…/backup.tar.gz` becomes `…/backup.tar.staging.<uuid>`. The final directory only appears via an atomic rename at the end.
-5. **Acquire the local-data lock** (`:77-78`):
+1. **Config directory must exist.** A missing config directory is a hard error (`src/commands/backup_cmd.rs:45-51`) — backup does not create the config tree.
+2. **Canonicalize the config directory** (`:52-54`). This becomes the containment root for every source file.
+3. **Compute the timestamp and destination** (`:55-59`): `chrono::Utc::now().format("%Y%m%d_%H%M%S")`.
+4. **Build the staging directory** (`:60-67`): `final_backup_dir.with_extension("<existing-extension>.staging.<uuid>")`. Because `with_extension` *replaces* the last extension, `…/20260101_120000` becomes `…/20260101_120000.staging.<uuid>`, while `…/backup.tar.gz` becomes `…/backup.tar.staging.<uuid>`. The final directory only appears via an atomic rename at the end.
+5. **Acquire the local-data lock** (`:72-73`):
 
    ```rust
    let state_dir = crate::local_data::transaction_dir();
@@ -55,16 +55,16 @@ The `data` spelling is an alias, not a separate command: `DataCommands::Backup(B
    ```
 
    The lock is taken for the whole capture so the snapshot is either the complete before-state or the complete after-state, never a mix. `acquire_local_data_lock` takes the **`.transaction` directory** (not the config root), so the lock file is `<config>/.transaction/local-data.lock` (`src/local_data.rs:111-115`).
-6. **Read the library generation** before capture (`:79`) and again after (`:134`). `read_library_generation` parses `libraries.toml` and returns `config.generation`, or `0` when the index does not exist (`backup_archive.rs:239-254`). **If the generation changed, the command aborts** with "Library generation changed during snapshot" (`:135-143`) — this is the second consistency barrier behind the lock.
+6. **Read the library generation** before capture (`:74`) and again after (`:129`). `read_library_generation` parses `libraries.toml` and returns `config.generation`, or `0` when the index does not exist (`backup_archive.rs:239-254`). **If the generation changed, the command aborts** with "Library generation changed during snapshot" (`:130-138`) — this is the second consistency barrier behind the lock.
 7. **Collect the snapshot set** into memory:
-   - every `*.toml` in `<config>/libraries/` that does not start with `.` (`:88-105`);
-   - `<config>/libraries.toml` if present (`:106-111`);
-   - `<config>/usage.toml` only when `--include-usage` (`:112-119`);
-   - `<config>/sync.toml` only when `--include-sync-state` (`:120-133`).
-8. **Validate every collected file**: canonical containment under the config root (`:101`, `:108`, `:115`, `:123` — `backup_archive.rs:257-280`), symlink/non-regular-file rejection (`backup_archive.rs:200-223`), and TOML well-formedness for library files (`:144-150`) and for the index (`:151-155`) (`backup_archive.rs:283-291`).
-9. **Build the manifest entries** (`:156-222`) and sort the file list by path (`:223`) so the manifest is deterministic.
-10. **Write atomically and durably** (`:228`): `atomic_write_backup` writes every file plus `manifest.toml` into the staging directory and then renames staging → final (`backup_archive.rs:295-350`). Every body goes through the sanctioned atomic/durable path (`atomic_replace` with `DurableUserData`: file fsync + parent-dir fsync), the staging directory is fsynced before the publish, and the final parent directory is fsynced after the rename — so a power loss cannot leave a backup whose bodies are truncated or whose directory entry never landed. On any error the staging directory is removed (`:344-346`), so a failed backup never leaves a half-written final directory.
-11. **Emit the report** (`:229-258`).
+   - every `*.toml` in `<config>/libraries/` that does not start with `.` (`:84-100`);
+   - `<config>/libraries.toml` if present (`:101-106`);
+   - `<config>/usage.toml` only when `--include-usage` (`:107-114`);
+   - `<config>/sync.toml` only when `--include-sync-state` (`:115-128`).
+8. **Validate every collected file**: canonical containment under the config root (`:96`, `:103`, `:110`, `:118` — `backup_archive.rs:257-280`), symlink/non-regular-file rejection (`backup_archive.rs:200-223`), and TOML well-formedness for library files (`:139-145`) and for the index (`:146-150`) (`backup_archive.rs:283-291`).
+9. **Build the manifest entries** (`:151-217`) and sort the file list by path (`:218`) so the manifest is deterministic.
+10. **Write atomically and durably** (`:223`): `atomic_write_backup` writes every file plus `manifest.toml` into the staging directory and then renames staging → final (`backup_archive.rs:295-350`). Every body goes through the sanctioned atomic/durable path (`atomic_replace` with `DurableUserData`: file fsync + parent-dir fsync), the staging directory is fsynced before the publish, and the final parent directory is fsynced after the rename — so a power loss cannot leave a backup whose bodies are truncated or whose directory entry never landed. On any error the staging directory is removed (`:344-346`), so a failed backup never leaves a half-written final directory.
+11. **Emit the report** (`:224-253`).
 
 ### What is included and excluded by default
 
@@ -144,16 +144,16 @@ The destination is always a **directory**. `--output` names the final directory;
 
 | Mode | Stream | Content |
 |---|---|---|
-| `--json` | stdout | `{"backup_dir", "schema", "version", "file_count", "total_bytes"}` (`src/commands/backup_cmd.rs:229-242`). |
-| default | stderr | `Backup created: <dir>`, schema, version, file count, total size, then one line per manifest entry: `<kind> (<path>): <size> bytes, sha256:<first 16 hex chars>` (`:243-257`). The digest is **truncated to 16 hex characters** in the human output; the full digest is in the manifest. |
+| `--json` | stdout | `{"backup_dir", "schema", "version", "file_count", "total_bytes"}` (`src/commands/backup_cmd.rs:224-236`). |
+| default | stderr | `Backup created: <dir>`, schema, version, file count, total size, then one line per manifest entry: `<kind> (<path>): <size> bytes, sha256:<first 16 hex chars>` (`:237-253`). The digest is **truncated to 16 hex characters** in the human output; the full digest is in the manifest. |
 
-`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:437-446`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:48-72` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
+`snp backup` returns `CliOutcome::Success` (exit `0`) on success (`src/main.rs:441-449`). Any failure surfaces as a `SnipError`, which the CLI maps to the canonical exit codes in `src/outcome.rs:48-72` — in practice `1` (`GENERAL_ERROR`) for I/O and runtime failures, `2` (`USAGE_ERROR`) for clap argument errors.
 
 ## Interaction with the transaction journal and locks
 
 - **Transaction journal:** none. `snp backup` never calls `begin_transaction`, so it creates no journal and needs no rollback.
 - **Mutation gate:** not called. The gate (`gate_mutation_on_interrupted_transactions`) protects *mutations*; backup does not mutate library state.
-- **Local-data lock:** acquired for the whole capture (`src/commands/backup_cmd.rs:77-78`). This is the same lock `save_library` takes (`src/library/persistence.rs:274`), which is what makes the snapshot atomic with respect to library writes.
+- **Local-data lock:** acquired for the whole capture (`src/commands/backup_cmd.rs:72-73`). This is the same lock `save_library` takes (`src/library/persistence.rs:274`), which is what makes the snapshot atomic with respect to library writes.
 - **Lock hierarchy position:** the local-data lock only. No transaction lock is taken, because there is no journal to protect.
 
 ## Key Files
@@ -173,7 +173,7 @@ The destination is always a **directory**. `--output` names the final directory;
 - The final backup directory appears only via an atomic rename of a fully-written staging directory; a failed backup leaves no partial final directory (`backup_archive.rs:295-350`).
 - **The backup is durable, not just atomic.** Bodies are fsynced through `atomic_replace` (`DurableUserData`), the staging directory is fsynced before the publish, and the final parent directory is fsynced after the rename. A plain `fs::write` body would leave a truncated file after a crash while the manifest still looked correct.
 - The manifest always lists every file present in the backup, with the exact size and SHA-256 of the stored bytes.
-- The snapshot is consistent: the local-data lock is held across capture, and the library generation is compared before and after (`:79`, `:134-143`).
+- The snapshot is consistent: the local-data lock is held across capture, and the library generation is compared before and after (`:74`, `:130-138`).
 - Symlinks and non-regular files are never backed up (`backup_archive.rs:200-223`).
 - The API key is redacted before the bytes are hashed, written, or manifested.
 

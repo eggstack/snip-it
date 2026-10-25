@@ -122,6 +122,25 @@ After (robust):
 snp list --json | jq '.[] | select(.description | contains("deploy"))'
 ```
 
+### From `snp backup --format directory`
+
+`snp backup --format` shipped in snip-it 1.3.8 and 1.3.9 and was removed
+without a deprecation period. The flag had exactly one legal value
+(`directory`), which was already the default, so dropping it changes nothing
+about the snapshot:
+
+```bash
+# Before (1.3.9):
+snp backup --format directory
+
+# After:
+snp backup
+```
+
+`snp backup` and `snp data backup` still write a directory snapshot. A script
+that still passes `--format directory` now fails with the standard usage
+error (exit 2).
+
 ---
 
 ## Alias Preservation
@@ -148,6 +167,7 @@ snp list --json | jq '.[] | select(.description | contains("deploy"))'
 | `data` | `d` | Stable |
 | `completions` | `g` | Stable |
 | `get` | — | No alias |
+| `delete` | — | No alias |
 | `doctor` | — | No alias |
 | `backup` | — | No alias |
 | `restore` | — | No alias |
@@ -163,7 +183,7 @@ Aliases are removed only with a major version bump and explicit deprecation noti
 ## The `snp data` Mirror
 
 `snp data` is a **mirror group**, not an alias for a single command. It
-re-spells five top-level commands and dispatches to the same handlers, so the
+re-spells six top-level commands and dispatches to the same handlers, so the
 two spellings must stay behaviorally identical:
 
 | `snp data` subcommand | Top-level equivalent | `snp data` alias |
@@ -173,14 +193,15 @@ two spellings must stay behaviorally identical:
 | `restore` | `snp restore` | — |
 | `repair` | `snp repair` | — |
 | `status` | `snp status` | `s` |
+| `delete` | `snp delete` | — |
 
 Note that `v` is the alias for `snp data validate` and is **unrelated** to the
 top-level `v` alias for `snp version`. The two live in different namespaces.
 
 Both spellings share one Clap schema per command (`ValidateArgs`,
-`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`), so a flag added to
-one is automatically added to the other. Equivalence is checked by
-`tests/cli_surface_compat.rs`.
+`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, `DeleteArgs`), so a
+flag added to one is automatically added to the other. Equivalence is checked
+by `tests/cli_surface_compat.rs`.
 
 ---
 

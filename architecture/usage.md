@@ -153,7 +153,7 @@ command still succeeds (`src/commands/run_cmd.rs:181-183`,
 | TUI selection loop | `src/commands/mod.rs:476-505` | Loads the index once per session and builds a one-shot `HashMap` for O(1) per-snippet lookup (not O(k·m)) |
 | `ui::SnippetListParams.usage` | `src/ui/mod.rs:614-628` | Optional `&[UsageData]` slice handed to the TUI; the TUI also reads usage for its own ordering hints (`src/ui/mod.rs:181`) |
 | `sort::rank_snippets` | `src/sort.rs:116-122` | The `usage` slice used by the `LastUsed` / `MostUsed` sort modes |
-| `list` command | `src/commands/list_cmd.rs:124` | `--sort last-used` / `--sort most-used` |
+| `list` command | `src/commands/list_cmd.rs:126` | `--sort last-used` / `--sort most-used` |
 | `validate` command | `src/commands/validate_cmd.rs:461-466` | Orphaned-usage-entry diagnostic |
 | `repair` command | `src/commands/repair_cmd.rs:434-453`, `:667-670` | Prune orphaned usage entries |
 

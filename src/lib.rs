@@ -12,7 +12,7 @@
 //!
 //! | Module | Public items |
 //! |--------|-------------|
-//! | crate root | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `load_library`, `save_library` |
+//! | crate root | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `SyncCursorKind`, `load_library`, `save_library` |
 //! | crate root | `AtomicWriteOptions`, `AtomicWriteReport`, `Durability`, `atomic_replace`, `write_private_atomic` |
 //! | [`error`] | `SnipError`, `SnipResult`, `SyncFailureKind` |
 //! | [`sort`] | `SnippetSort`, `SortOptions`, `rank_snippets` |

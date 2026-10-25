@@ -57,9 +57,9 @@ File output uses `atomic_replace` with
 `select_cmd.rs:118-125`): a cancelled selection preserves a pre-existing
 caller file, and a racing symlink cannot redirect the write — the final
 `fs::rename` replaces the destination directory entry and never follows a
-link (`src/utils/atomic.rs:412`). Note that `DurableUserData` does *not*
+link (`src/utils/atomic.rs:438-439`). Note that `DurableUserData` does *not*
 enable `reject_symlink`; that flag is `SensitiveConfig`-only
-(`src/utils/atomic.rs:62`).
+(`src/utils/atomic.rs:55`).
 
 ## Mutation vs read-only
 
@@ -138,5 +138,5 @@ runtime. `src/main.rs:632-639` does not pass `&RUNTIME`, and
 
 - `SelectArgs`: `src/commands/select_cmd.rs:11`; `OutputMode`: `:35`
 - `process_snippet`: `:40`; `run`: `:69`
-- Shared loop: `src/commands/mod.rs:399`; atomic write: `src/utils/atomic.rs:350`
+- Shared loop: `src/commands/mod.rs:399`; atomic write: `src/utils/atomic.rs:376`
 - Dispatch: `src/main.rs:626-640`; consumers: `src/commands/shell_cmd.rs:74-123`

@@ -23,17 +23,17 @@ Two artifacts live under the config directory and are easy to confuse:
 | Diagnostic log | `<config>/logs/snp.log.YYYY-MM-DD` | `tracing` subscriber, non-blocking | Free-form operational events |
 | Audit trail | `<config>/audit.log` | `audit_log()`, synchronous append | Structured record of snippet mutations |
 
-## Startup service levels (`src/main.rs:924`)
+## Startup service levels (`src/main.rs:941`)
 
 `command_behavior()` assigns the startup recovery policy **and** the
 logging/audit service level in one match, so the two cannot drift
-(`src/main.rs:919-922`). `StartupServices` has exactly two variants
-(`src/main.rs:910-914`).
+(`src/main.rs:936-939`). `StartupServices` has exactly two variants
+(`src/main.rs:928-931`).
 
 | Level | Commands | Startup behaviour |
 |-------|----------|-------------------|
-| `Minimal` (`src/main.rs:912`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1043-1044`), no `log_startup_info()` (`:1010-1012`) |
-| `Logging` (`src/main.rs:913`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1045`) + `log_startup_info()` (`:1011`), and `log_shutdown_info()` on every exit path (`:1022`, `:1029`, `:1036`) |
+| `Minimal` (`src/main.rs:929`) | Read-only: `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list/show`; dry runs (`restore --dry-run`, `repair --dry-run`, `import pet --dry-run`); the read-only `data` subgroup (`data validate\|status\|backup`, `data restore --dry-run`, `data repair --dry-run`) | No `init_default_file_logging()` (`src/main.rs:1062`), no `log_startup_info()` (`:1065-1067`) |
+| `Logging` (`src/main.rs:930`) | Mutations (`new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, mutating `library`); explicit sync (`sync`, `cron`, `register`); the internal worker (`auto-sync-worker`); config/setup (`update`, `self-replace`, `doctor`, `completions`, `shell`, `keybindings`); the default no-subcommand TUI | `init_default_file_logging()` (`src/main.rs:1063`) + `log_startup_info()` (`:1066`), and `log_shutdown_info()` on every exit path (`:1077`, `:1084`, `:1097`) |
 
 Because `init_default_file_logging()` never runs, `Minimal` commands never
 create `<config>/logs/`, never create `snp.log.*`, and never create
@@ -42,7 +42,7 @@ the config directory for their own reasons — see
 [cli.md](cli.md) for the command-level contract.)
 Note that the `Minimal` group's suppression of **startup recovery** is a
 separate mechanism: it is the recovery *policy* (`StartupRecoveryPolicy::SuppressReadOnly`,
-`src/main.rs:940`) that is checked at `src/main.rs:1051`, not the service
+`src/main.rs:957`) that is checked at `src/main.rs:1069`, not the service
 level.
 
 `log_shutdown_info()` flushes the non-blocking writer by dropping the worker
@@ -51,9 +51,9 @@ process exits.
 
 ## Subscriber setup
 
-### `init_logging(config)` (`src/logging.rs:105`)
+### `init_logging(config)` (`src/logging.rs:104`)
 
-1. **Idempotence guard** (`:106-111`): if `LOG_GUARD` already holds a guard,
+1. **Idempotence guard** (`:105-111`): if `LOG_GUARD` already holds a guard,
    return `Ok(())` immediately. `LOG_GUARD` is a
    `LazyLock<Mutex<Option<WorkerGuard>>>` (`:45-46`); the guard must stay
    alive for the process lifetime, because dropping it stops the file
@@ -155,7 +155,7 @@ The only explicit target in the workspace is the panic event's literal
 > matched **no** event: with neither `SNP_LOG` nor `RUST_LOG` set, the daily
 > log file was created but stayed **empty**. The fallback is now built by
 > `default_filter_directive()` (`:101`) from the `LOG_TARGET_PREFIX` constant
-> (`src/logging.rs:95`), which is `snip_it` — the library crate, not the binary
+> (`src/logging.rs:94`), which is `snip_it` — the library crate, not the binary
 > crate. Verified by running `snp new` against a throwaway `XDG_CONFIG_HOME`:
 > the log file went from 0 bytes to 696 bytes of records, while the
 > `SNP_LOG=warn` and `RUST_LOG=info` overrides continue to behave as before.
@@ -188,11 +188,11 @@ fields — so one record looks like:
 - **No ANSI**: disabled explicitly (`:142`), so the file is plain text.
 - **Event fields**: the event's own fields, including the message.
 
-### `init_default_file_logging()` (`src/logging.rs:172`)
+### `init_default_file_logging()` (`src/logging.rs:171`)
 
-The entry point used by `main` (`src/main.rs:1045`):
+The entry point used by `main` (`src/main.rs:1063`):
 
-1. `crate::utils::config::ensure_config_dir()` (`:177`) — creates the config
+1. `crate::utils::config::ensure_config_dir()` (`:176`) — creates the config
    directory and tightens it to `0o700` on Unix. Failures are a stderr
    warning, not an error.
 2. `LogConfig::default()` (`:180`) and `init_logging(&config)` (`:181`) —
@@ -202,11 +202,11 @@ The entry point used by `main` (`src/main.rs:1045`):
    the directory is writable, and finally ensures the config directory
    exists.
 
-`init_default_logging()` (`src/logging.rs:164-166`) is a public alias for
+`init_default_logging()` (`src/logging.rs:163-165`) is a public alias for
 `init_default_file_logging()`. It has no in-tree caller; it exists for the
-documented public API surface (`docs/PUBLIC_API.md:326`).
+documented public API surface (`docs/PUBLIC_API.md:388`).
 
-`shutdown_logging()` (`:229-234`) takes the guard out of `LOG_GUARD` and
+`shutdown_logging()` (`:228-234`) takes the guard out of `LOG_GUARD` and
 drops it, which flushes the non-blocking writer.
 
 ## Structured event functions
@@ -337,13 +337,13 @@ and installs a replacement that, on panic:
 4. `eprintln!("PANIC at {location}: {message}")` (`:282`).
 5. `previous_hook(panic_info)` (`:284`).
 
-`extract_panic_info` (`:236-251`) renders the location as
-`file:line:column` (`:239`), and downcasts the payload to `&str` or
-`String`, falling back to `"Unknown panic"` (`:242-248`).
+`extract_panic_info` (`:235-250`) renders the location as
+`file:line:column` (`:238`), and downcasts the payload to `&str` or
+`String`, falling back to `"Unknown panic"` (`:241-247`).
 
-The hook is installed first in `main()` (`src/main.rs:1038`), **before**
+The hook is installed first in `main()` (`src/main.rs:1056`), **before**
 argument parsing and **before** `init_default_file_logging()`
-(`src/main.rs:1045`). A panic that happens before logging is initialised
+(`src/main.rs:1063`). A panic that happens before logging is initialised
 therefore still restores the terminal and prints to stderr, but has no log
 file to write to. The same applies to the `target: "panic"` record: it is
 only captured when the active filter covers the `panic` target — see
@@ -388,7 +388,7 @@ std::fs::create_dir_all(&config_home).unwrap();
 let _guard = crate::utils::config::ScopedConfigDir::new(config_home.join("snp"));
 ```
 
-`ScopedConfigDir` (`src/utils/config.rs:35-57`) is compiled only under
+`ScopedConfigDir` (`src/utils/config.rs:37-57`) is compiled only under
 `#[cfg(any(test, feature = "test-support"))]`. `get_config_dir()`
 (`src/utils/config.rs:63-82`) checks the thread-local override first
 (`:64-67`) before falling back to `XDG_CONFIG_HOME`/`~/.config`. A
@@ -426,11 +426,11 @@ bodies are empty and the test passes vacuously.
 
 | File | Subject |
 |------|---------|
-| `src/logging.rs` (702 lines) | Subscriber setup, filter selection, structured events, audit trail, panic hook |
-| `src/main.rs:910-1035` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
-| `src/main.rs:1037-1075` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
+| `src/logging.rs` (705 lines) | Subscriber setup, filter selection, structured events, audit trail, panic hook |
+| `src/main.rs:928-1053` | `StartupServices` + `command_behavior()` — the recovery/logging policy matrix |
+| `src/main.rs:1055-1099` | Startup sequence: panic hook → arg parse → service level → recovery → dispatch → shutdown flush |
 | `src/utils/config.rs:63-82`, `:91-116` | `get_config_dir()` / `ensure_config_dir()` — the config-root resolution the audit path uses |
-| `src/utils/config.rs:35-57` | `ScopedConfigDir` — test-only thread-local config override |
+| `src/utils/config.rs:37-57` | `ScopedConfigDir` — test-only thread-local config override |
 | `src/utils/redact.rs:32` | `redact_secrets()` — the canonical secret stripper |
 | `src/auto_sync/status.rs:27` | `status::redact_secrets` re-export used by `redact_command` |
 | `src/commands/clip_cmd.rs:42` | Audit call site that propagates its error |
@@ -454,7 +454,7 @@ bodies are empty and the test passes vacuously.
    `ratatui::restore()`), and the log writer is flushed before the process
    dies.
 6. **The recovery policy and the logging level are decided by one match**
-   (`src/main.rs:924`), so they cannot drift apart.
+   (`src/main.rs:941`), so they cannot drift apart.
 7. **Unit tests never write to the real `~/.config/snp/`** — the audit
    sentinel test binds a per-test, thread-local config directory.
 
@@ -499,8 +499,8 @@ bodies are empty and the test passes vacuously.
   (`:381-385`), without tightening its permissions the way
   `ensure_config_dir()` does.
 - **The panic hook is installed before logging is initialised**
-  (`src/main.rs:1038` vs `:1008`), so an early panic has no log file to
+  (`src/main.rs:1056` vs `:1069`), so an early panic has no log file to
   write to — only the stderr line.
 - **`init_default_logging()` has no in-tree caller.** It is a public alias
   for `init_default_file_logging()` kept for the documented API surface
-  (`src/logging.rs:164`).
+  (`src/logging.rs:163`).

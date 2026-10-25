@@ -58,7 +58,9 @@
 
 - Items are ordered by the `--sort` mode (default `relevance`). Relevance ranks
   by the fuzzy match score when a `--filter` is given; with no filter there are
-  no scores, so the order is the library's insertion order.
+  no scores, so the order is the library's insertion order. An empty `--filter`
+  counts as no filter, so `--filter ""` produces the same order as no filter
+  at all.
 - `deleted` snippets are excluded (consistent with TUI display).
 - `output` is always present but may be an empty string.
 - No wrapping envelope — the output is a bare JSON array.
@@ -74,6 +76,14 @@ and a text content item. Successful snippet entries use these stable fields:
 `matches` array — the ambiguous entries carry only `id`, `library`, and
 `description`, while `not_found` carries an empty `matches`. Credentials,
 sync state, local output/notes, and execution are out of scope.
+
+`snippets_search` treats an **empty `query`** as "no filter": every
+non-deleted snippet in scope matches, exactly as `snp get --query ""` and
+`snp list --filter ""` do. The three surfaces share one match primitive
+(`selector::score_fuzzy_matches`); only the ranking differs. `snippets_search`
+and `snp list --filter` rank the merged set by **global relevance**, while
+`snp get --query` orders cross-library results by library → description →
+snippet ID. Within a single library the two orders coincide.
 
 ---
 
@@ -290,7 +300,7 @@ Emitted by serializing `DoctorReport` (`src/diagnostics.rs:108-124`).
 ## `restore --json`
 
 `snp restore --mode dry-run` emits a **different, manifest-focused** envelope
-first (`src/commands/restore_cmd.rs:1094-1104`) and performs no writes, no lock,
+first (`src/commands/restore_cmd.rs:1171-1182`) and performs no writes, no lock,
 and no transaction:
 
 ```json
@@ -322,7 +332,7 @@ and no transaction:
 ```
 
 - `mode` is built with `format!("{:?}")` over `RestoreMode`
-  (`src/commands/restore_cmd.rs:1084`), so values are **PascalCase**:
+  (`src/commands/restore_cmd.rs:1160`), so values are **PascalCase**:
   `"DryRun"`, `"Merge"`, `"Replace"`. It is not `"dry-run"`.
 - `conflicts` lists libraries where restore encountered conflicts.
 - `skipped` lists library names that were skipped.

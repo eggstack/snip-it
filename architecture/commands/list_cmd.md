@@ -121,7 +121,7 @@ keyword in `LibraryScope::from_filter_arg`, `src/selector.rs:65`; both layers
 agree that `"all"` means "every visible library".)
 
 Scope semantics of `readonly_library_sources`
-(`src/library/manager.rs:879`):
+(`src/library/manager.rs:911`):
 
 | `--library` | Result |
 |-------------|--------|

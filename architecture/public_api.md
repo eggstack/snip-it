@@ -108,7 +108,7 @@ Declared at `src/lib.rs:53-70`.
 
 `library` is internal, yet its data types (`Snippet`, `Snippets`,
 `LibraryConfig`, `LibraryMeta`) and its `load_library` / `save_library`
-functions are re-exported at the root (`src/lib.rs:77`) — the module is
+functions are re-exported at the root (`src/lib.rs:81`) — the module is
 private, the *types* are supported.
 
 ## The enforced contract

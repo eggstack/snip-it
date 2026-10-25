@@ -19,7 +19,7 @@
 | `select` | Yes (TUI) | No | Yes | Yes | Yes | No | No | No | No | `--raw`, `--expanded`, `--output-file` | 0, 1, 2, 4 |
 | `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 2, 3, 5 |
 | `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 2, 3, 5 |
-| `delete` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 3, 5, 9 |
+| `delete` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 2, 3, 5, 9 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
 | `doctor` | No | No | Yes | Yes | No | No | No | Yes (diagnostic probes) | No | `--report json` | 0, 1, 6 |
@@ -50,9 +50,6 @@ messages only**, all diagnostics go to stderr, and it is read-only and
 non-executing. `snp mcp install` is the exception inside the `mcp` group: it
 spawns the MCP client's own CLI to register this binary and therefore mutates
 that client's configuration. See [`MCP.md`](MCP.md).
-
-**Removed flags.** `snp backup --format` was removed: the backup snapshot is
-always a directory layout, and the flag never selected a different behavior.
 
 ## Column Definitions
 
@@ -92,7 +89,7 @@ Also see `docs/EXIT_CODES.md` for the authoritative `CliOutcome` → exit-code m
 
 ## Startup Recovery Classification
 
-Commands are classified by `command_behavior()` (`src/main.rs:924`) into a
+Commands are classified by `command_behavior()` (`src/main.rs:941`) into a
 `StartupRecoveryPolicy` **and** a `StartupServices` level, both in one `match`
 so the two cannot drift. `snp data <subcommand>` is a mirror of the top-level
 spellings and is classified in the same table.
@@ -101,7 +98,7 @@ spellings and is classified in the same table.
 |--------|----------|
 | `SuppressReadOnly` (also `StartupServices::Minimal`) | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` |
 | `SuppressReadOnly` (dry-run variants only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — plus `snp data restore --mode dry-run` and `snp data repair --dry-run` (there is no `snp data import`) |
-| `Allow` (also `StartupServices::Logging`) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
+| `Allow` (also `StartupServices::Logging`) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `delete`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` (internal subprocess) |
 | `SuppressConfiguration` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
@@ -119,11 +116,11 @@ Dry-run variants are classified by their **flag**, not by their command category
 
 - **TUI commands** (`run`, `clip`, `search`, `select`) render directly to the terminal via crossterm raw mode — they bypass stdout/stderr for the interactive portion.
 - **`list` default format** writes colored table output to stdout (includes ANSI escapes — not pipe-safe without `--json` or `--csv`).
-- **`edit --output`** is non-interactive; it writes the output field to **stderr**, not stdout (`src/commands/edit_cmd.rs:218,220,284,286` all use `eprintln!`). This matches the `edit` row's "Writes stdout: No". The `--output-stdin` variant reads from stdin.
+- **`edit --output`** is non-interactive; it writes the output field to **stderr**, not stdout (`src/commands/edit_cmd.rs:225,227,295,297` all use `eprintln!`). This matches the `edit` row's "Writes stdout: No". The `--output-stdin` variant reads from stdin.
 - **`--json`** and **`--csv`** flags conflict with each other (enforced by clap).
 - **`ExecutionFailed`** exit code: if the child process had a valid exit code, that code is propagated; otherwise exit code 8 is used.
 - **`PersistenceFailed`** maps to exit code 1 (general error) — no dedicated public exit code for persistence failures.
 - **Exit 4 (cancelled)** comes only from `snp select`. `run`, `clip`, and `search` treat a cancelled TUI selection as normal completion (exit 0).
-- **Exit 5 (ambiguous)** comes only from the exact-selector paths: `run`, `clip`, and `edit` with `--id` / `--description-exact` / `--command-exact`, and from `snp get`. The interactive TUI resolves ambiguity in-terminal instead.
-- **Exit 6 (validation failure)** comes from `snp validate`, `snp doctor`, and `snp sync discard-pending` (corrupt pending state). Exit **9 (conflict/refused)** comes from `snp sync discard-pending`.
+- **Exit 5 (ambiguous)** comes only from the exact-selector paths: `run`, `clip`, and `edit` with `--id` / `--description-exact` / `--command-exact`, and from `snp get` and `snp delete`. The interactive TUI resolves ambiguity in-terminal instead.
+- **Exit 6 (validation failure)** comes from `snp validate`, `snp doctor`, and `snp sync discard-pending` (corrupt pending state). Exit **9 (conflict/refused)** comes from `snp sync discard-pending` and from `snp delete` (the target is already tombstoned).
 - **Exit 7 (sync failure)** is reserved but currently unreachable — no command constructs `CliOutcome::SyncFailed`; sync failures surface as exit 1.

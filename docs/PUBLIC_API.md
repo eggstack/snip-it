@@ -22,10 +22,11 @@ library — it is a standalone binary.  The public surface exists because:
 ### Documented surface decisions
 
 - Implementation-only modules (`auto_sync`, `commands`, `logging`, `mcp`,
-  `process_file_lock`, `selector`, `sync`, `transaction`, `ui`, `usage`) are
-  now `#[doc(hidden)]`; protocol types are consumed from the separate
-  `snip-proto` crate. (`transaction` is `pub(crate)` in a default build and
-  `#[doc(hidden)] pub` under the `test-support` feature.)
+  `process_file_lock`, `record_lock`, `selector`, `sync`, `transaction`, `ui`,
+  `usage`) are now `#[doc(hidden)]`; protocol types are consumed from the
+  separate `snip-proto` crate. (`transaction` and `record_lock` are
+  `pub(crate)` in a default build and `#[doc(hidden)] pub` under the
+  `test-support` feature.)
 - Root-level TUI types (`SnippetData`, `ProcessResult`,
   `SelectionOutcome`) are `#[doc(hidden)]`.
 - The crate root doc comment now lists the supported API explicitly.
@@ -54,7 +55,7 @@ library — it is a standalone binary.  The public surface exists because:
 | `pub mod logging` | **application-internal** | Logging infrastructure; not for external use |
 | `pub mod mcp` | **application-internal** | Read-only stdio MCP adapter; binary + integration tests only |
 | `pub mod process_file_lock` | **application-internal** | Kernel-backed cross-process file lock |
-| `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution |
+| `pub mod selector` | **application-internal** | Deterministic non-TUI snippet resolution; `selector::score_fuzzy_matches` is the shared match primitive behind `snp get --query`, `snp list --filter`, and MCP `snippets_search` |
 | `pub mod sync` | **integration-test-only** | `SyncClient`; used by sync integration tests |
 | `pub mod ui` | **application-internal** | TUI interface; not for external consumers |
 | `pub mod usage` | **application-internal** | Local-only usage metadata; not for external use |
@@ -83,8 +84,8 @@ the external surface, unlike the `pub(crate)` modules below.
 | `pub(crate) mod encryption` | **pub(crate)** | AES-256-GCM encryption; internal |
 | `pub(crate) mod library` | **pub(crate)** | Snippet/library data structures; re-exported at root |
 | `pub(crate) mod local_data` | **pub(crate)** | Local data lock coordination |
-| `pub(crate) mod migration` | **pub(crate)** | Schema versioning for TOML migrations |
 | `pub(crate) mod output` | **pub(crate)** | Output field rendering; internal |
+| `#[cfg(feature = "test-support")] pub mod record_lock` | **application-internal** | Owned-record lock protocol shared by the transaction lock and the local-data lock; `pub(crate)` in a default build, `#[doc(hidden)] pub` under `test-support` |
 | `pub(crate) mod status_snapshot` | **pub(crate)** | Status projection for `snp status` and doctor |
 | `pub(crate) mod sync_commands` | **pub(crate)** | Sync orchestration; internal |
 | `pub(crate) mod sync_failure` | **pub(crate)** | `FailureClass` — sync-client error classification consumed by auto-sync policy; internal |
@@ -103,7 +104,7 @@ exactly:
 | `snip_it::error` | `SnipError`, `SyncFailureKind` |
 | `snip_it::outcome` | `CliOutcome`, `OutputContext`, `exit_code` |
 | `snip_it::sort` | `SnippetSort`, `SortOptions`, `rank_snippets` |
-| `snip_it` (root) | `AtomicWriteOptions`, `Durability`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `SyncCursorKind`, `load_library` |
+| `snip_it` (root) | `AtomicWriteOptions`, `Durability`, `LibraryConfig`, `LibraryMeta`, `Snippet`, `Snippets`, `load_library` |
 
 Anything not listed above is public but unpinned by that test.
 
@@ -113,8 +114,8 @@ Anything not listed above is public but unpinned by that test.
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (21 variants) |
-| `pub enum SnipError` | **stable-public** | `#[non_exhaustive]` error enum with 6 variants |
+| `pub enum SyncFailureKind` | **stable-public** | Typed sync failure classification (22 variants) |
+| `pub enum SnipError` | **stable-public** | `#[non_exhaustive]` error enum with 7 variants |
 | `pub type SnipResult<T>` | **stable-public** | `Result<T, SnipError>` alias |
 | `SnipError::io_error()` | **stable-public** | Constructor |
 | `SnipError::toml_error()` | **stable-public** | Constructor |
@@ -122,6 +123,7 @@ Anything not listed above is public but unpinned by that test.
 | `SnipError::command_error()` | **stable-public** | Constructor |
 | `SnipError::runtime_error()` | **stable-public** | Constructor |
 | `SnipError::sync_failure()` | **stable-public** | Constructor |
+| `SnipError::usage_error()` | **stable-public** | Constructor |
 | `impl From<io::Error>` | **stable-public** | Auto-conversion |
 | `impl From<CryptoError>` | **stable-public** | Auto-conversion |
 
@@ -175,6 +177,7 @@ Anything not listed above is public but unpinned by that test.
 | `pub fn save_sync_settings()` | **application-internal** | Persist sync settings |
 | `pub fn load_sync_settings()` | **application-internal** | Load sync settings |
 | `pub fn get_sync_settings()` | **application-internal** | Load with fallback |
+| `pub fn migrate_plaintext_api_key_to_keychain()` | **application-internal** | One-shot plaintext-API-key → keychain migration; mutating |
 | `SyncSettings::sync_limit_value()` | **provisional-public** | Accessor |
 | `SyncSettings::auto_sync_debounce()` | **provisional-public** | Duration accessor |
 | `SyncSettings::auto_sync_max_delay()` | **provisional-public** | Duration accessor |
@@ -208,6 +211,7 @@ Anything not listed above is public but unpinned by that test.
 | `pub struct SyncClient` | **integration-test-only** | gRPC client wrapper |
 | `SyncClient::create()` | **integration-test-only** | Constructor |
 | `SyncClient::sync_encrypted()` | **integration-test-only** | Encrypted sync |
+| `SyncClient::sync_encrypted_with_cursors()` | **integration-test-only** | Encrypted sync sending both the timestamp cursor and the write-sequence cursor |
 | `SyncClient::sync_encrypted_with_ceiling()` | **integration-test-only** | Encrypted sync with an explicit request-size ceiling |
 | `SyncClient::health_check()` | **integration-test-only** | Health check |
 | `SyncClient::register()` | **integration-test-only** | Device registration |
@@ -242,7 +246,7 @@ to external consumers.*
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod backup_archive` … `pub mod validate_cmd` (25 command modules) | **application-internal** | All CLI command modules |
+| `pub mod backup_archive` … `pub mod validate_cmd` (26 command modules) | **application-internal** | All CLI command modules |
 | `pub enum ExpandedCommand` | **application-internal** | Command expansion result |
 | `pub fn get_config_path()` | **application-internal** | Config path resolution |
 | `pub fn get_library_path()` | **application-internal** | Library path resolution |
@@ -330,7 +334,7 @@ detached auto-sync helper management.*
 | Item | Classification | Notes |
 |------|---------------|-------|
 | `pub use execution_lock::{SpawnError, WORKER_SUBCOMMAND, spawn_worker}` | **application-internal** | Worker spawn API |
-| `pub use notification::*` (9 items) | **application-internal** | Notification API |
+| `pub use notification::{…}` (9 items) | **application-internal** | Notification API |
 | `pub use pending::{ConditionalClearResult, PendingSnapshot, PendingState}` | **application-internal** | Pending state types |
 | `pub use policy::{AutoSyncPolicy, FailureClass, MutationKind, MutationOrigin, RetryDisposition}` | **application-internal** | Policy types |
 | `pub use worker::WorkerOutcome` | **application-internal** | Worker result type |
@@ -366,8 +370,8 @@ only a `pub(crate) use snip_proto as proto;` alias).
 
 | Item | Classification | Notes |
 |------|---------------|-------|
-| `pub mod snippet_sync_client` | **integration-test-only** | Generated gRPC client (`snip-proto/src/snip_proto.rs:267`) |
-| `pub mod snippet_sync_server` | **integration-test-only** | Generated gRPC server trait + impl (`snip-proto/src/snip_proto.rs:629`) |
+| `pub mod snippet_sync_client` | **integration-test-only** | Generated gRPC client (`snip-proto/src/snip_proto.rs:285`) |
+| `pub mod snippet_sync_server` | **integration-test-only** | Generated gRPC server trait + impl (`snip-proto/src/snip_proto.rs:654`) |
 
 ---
 
@@ -462,7 +466,7 @@ only a `pub(crate) use snip_proto as proto;` alias).
 ### High priority (should narrow)
 
 1. **`pub mod commands`** → `pub(crate)` — No external consumer needs CLI
-   command implementations.  The 25 command modules and their helpers are purely
+   command implementations.  The 26 command modules and their helpers are purely
    binary-internal.
 
 2. **`pub mod auto_sync`** → `pub(crate)` — The entire auto-sync subsystem
@@ -532,7 +536,7 @@ naming the real symbol:
 |------|-----|-----|
 | `src/auto_sync/execution_lock.rs:177,186` | `[`crate::utils::process`]` | `` `utils::process::is_process_alive` `` |
 | `src/commands/validate_cmd.rs:668` | `[`LibraryManager::new`]` | `` `LibraryManager::new` `` |
-| `src/selector.rs:640` | `[`crate::library::readonly_library_sources`]` | `` `library::readonly_library_sources` `` |
+| `src/selector.rs:673` | `[`crate::library::readonly_library_sources`]` | `` `library::readonly_library_sources` `` |
 
 Rule of thumb: `utils`, `library`, `commands`, and most other modules are
 `pub(crate)`, so **only items re-exported from `src/lib.rs` may be
@@ -553,7 +557,7 @@ otherwise a new broken link reaches `main` unnoticed.
 |---------------|-------|
 | **stable-public** | ~25 items (error, sort, re-exports) |
 | **provisional-public** | ~30 items (config, some config types) |
-| **pub(crate)** | 11 modules (clipboard, diagnostics, encryption, library, local_data, output, status_snapshot, sync_commands, sync_failure, test_failpoints, utils) — plus `transaction` in a default build |
+| **pub(crate)** | 12 modules (clipboard, diagnostics, encryption, library, local_data, output, record_lock, status_snapshot, sync_commands, sync_failure, test_failpoints, utils) — plus `transaction` in a default build |
 | **application-internal** | ~200+ items (commands, auto_sync, logging, ui, usage) |
 | **integration-test-only** | ~40 items (sync, proto) |
 | **removed** | 0 items |

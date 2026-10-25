@@ -188,7 +188,7 @@ is documented in [usage.md](usage.md).
 |---|---|---|---|---|
 | `snp list` | `src/commands/list_cmd.rs:135` | `--sort` (default `Relevance`) | `--favorites-first` | only for `LastUsed` / `MostUsed` |
 | `SnippetSelector::resolve` (fuzzy path) | `src/selector.rs:453` | `Relevance` | `false` (via `..Default::default()`, `src/selector.rs:449-452`) | `None` |
-| MCP `snippets_search` | `src/mcp/tools.rs:111` | `Relevance` | `false` (explicit, `src/mcp/tools.rs:118`) | `None` |
+| MCP `snippets_search` | `src/mcp/tools.rs:101` | `Relevance` | `false` (explicit, `src/mcp/tools.rs:108`) | `None` |
 
 ---
 

@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows as an unmigrated one for the first sync.
   (`snip-proto` 0.1.4, `snip-sync` 0.1.7, `snip-it` 1.4.0)
 
+- **`docs/COMMANDS.md`**: a complete reference for every `snp` subcommand —
+  what it does, which flags it takes, the exact selectors `snp get` accepts,
+  the library and sync subcommands, and the exit codes each can return.
+
 ### Changed
 
 - **The sync write-sequence cursor is now reachable.** The server assigned a
@@ -95,13 +99,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adjacent comment saying why the item is retained, and a new architecture
   guard fails if a module-level `#![allow(dead_code)]` is introduced.
 
+
+- **The sync upload path no longer deep-clones the request on every retry.**
+  `tonic::Request::from_shared` does not exist in tonic 0.14, so the `Sync`
+  RPC now goes through a codec that encodes an `Arc<SyncRequest>`; the request
+  is built once and shared by every attempt. The bytes on the wire are
+  identical to the generated client's.
+- **The encryption phase is now inside the sync budget and off the runtime
+  thread.** `ensure_budget` was a pre-flight check only — the deadline
+  covered the RPC but not the Argon2id derivations — and the batch ran
+  synchronously on the tokio worker thread, which for the auto-sync worker is
+  the only runtime thread. A large library therefore burned the whole budget
+  deriving keys, then timed out on the first RPC and was retried forever. The
+  budget is now checked before every snippet, and the batch runs on the
+  blocking pool. The salt scope is unchanged: one salt per encrypted payload.
+- **`searchable_text` no longer allocates twice per snippet per query.** The
+  output is byte-identical to the previous implementation — proven by a test
+  that keeps the old implementation as an oracle.
+- **The auto-sync worker no longer busy-polls the pending marker** every
+  250 ms when the deadline is far away; the poll interval scales with the
+  remaining time.
+- **The backup copy is now durable.** `fs::copy` does not fsync, so a backup
+  could be torn; the copy is fsynced (best-effort) after it is written.
+- **`snip-sync`'s delta page no longer runs a second full `COUNT(*)` scan**
+  when the page can prove the answer. `total` and `has_more` are unchanged.
+- **The test observer no longer removes from the front of a `Vec`** on every
+  request; both buffers are `VecDeque`s. The public API is unchanged.
+
+- **The README is now quickstart-first.** It leads with install and a working
+  first snippet, shows the real output of every example, and links out to the
+  detailed docs instead of duplicating them. The full command table, the
+  configuration-path table, and the TUI key bindings now live in `docs/`
+  (`docs/COMMANDS.md`, `docs/USER_GUIDE.md`).
+- **`USER_GUIDE.md` moved to `docs/USER_GUIDE.md`**, so every reference doc sits
+  in one indexed directory.
+
+- **snip-sync HTTP runtime (server-lifecycle-http M003)**: Replaced the Axum/Tower-HTTP
+  surface with one direct EggServe HTTP/1 health/metrics service. Tonic remains
+  on its separate listener and TLS remains external. The controlled release
+  build measured 3,898,408 bytes, 1.70% above the original Axum runtime and
+  1.65% smaller than the EggServe/Axum adapter trial.
+- **Self-update transport (updater-transport M005; supersedes M004)**:
+  `snp update` now pins `eggfetch-core` 0.2.0 on the unchanged lean
+  `standard-http1` + `redirects` + Rustls native-roots profile. Strict
+  bounded redirects, the native request/body `Timeout.total`, 1 MiB metadata /
+  256 MiB streamed-binary bounds, and 404-only Cargo fallback remain
+  unchanged. A fresh same-host release build stayed byte-identical at
+  6,776,320 bytes. The `snip-sync` updater remains on external `curl`:
+  its fresh 0.2.0 lean-profile trial grew the server binary 34.23%, past the
+  10% material-growth gate.
+
 ### Removed
 
-- **`snp backup --format` was removed.** The flag had exactly one legal value
-  (`directory`), which was already the default, and `run()` discarded the
-  parsed value — it never selected a different behavior. The `BackupFormat`
-  enum is gone with it; `snp backup` and `snp data backup` still produce a
-  directory snapshot.
+- **`snp backup --format` was removed — a breaking change to a published CLI
+  surface.** The flag had exactly one legal value (`directory`), which was
+  already the default, and `run()` discarded the parsed value — it never
+  selected a different behavior. The `BackupFormat` enum is gone with it;
+  `snp backup` and `snp data backup` still produce a directory snapshot. The
+  flag shipped in `snip-it` 1.3.8 and 1.3.9 and is removed here **without a
+  deprecation period**, so a script that still passes `--format directory`
+  now fails with the standard usage error (exit 2) instead of taking a
+  snapshot. Drop the flag from the invocation.
 - **The dead schema-version framework was removed.** `src/migration.rs`
   (`SchemaVersion`, `get_schema_version`, `needs_migration`,
   `write_schema_version`, `run_migrations`) had no production call site. The
@@ -440,248 +498,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field was pipe-escaped, so a `|` in a library name shifted the remaining
   fields of the record.
 
-### Changed
-
-- **The sync upload path no longer deep-clones the request on every retry.**
-  `tonic::Request::from_shared` does not exist in tonic 0.14, so the `Sync`
-  RPC now goes through a codec that encodes an `Arc<SyncRequest>`; the request
-  is built once and shared by every attempt. The bytes on the wire are
-  identical to the generated client's.
-- **The encryption phase is now inside the sync budget and off the runtime
-  thread.** `ensure_budget` was a pre-flight check only — the deadline
-  covered the RPC but not the Argon2id derivations — and the batch ran
-  synchronously on the tokio worker thread, which for the auto-sync worker is
-  the only runtime thread. A large library therefore burned the whole budget
-  deriving keys, then timed out on the first RPC and was retried forever. The
-  budget is now checked before every snippet, and the batch runs on the
-  blocking pool. The salt scope is unchanged: one salt per encrypted payload.
-- **`searchable_text` no longer allocates twice per snippet per query.** The
-  output is byte-identical to the previous implementation — proven by a test
-  that keeps the old implementation as an oracle.
-- **The auto-sync worker no longer busy-polls the pending marker** every
-  250 ms when the deadline is far away; the poll interval scales with the
-  remaining time.
-- **The backup copy is now durable.** `fs::copy` does not fsync, so a backup
-  could be torn; the copy is fsynced (best-effort) after it is written.
-- **`snip-sync`'s delta page no longer runs a second full `COUNT(*)` scan**
-  when the page can prove the answer. `total` and `has_more` are unchanged.
-- **The test observer no longer removes from the front of a `Vec`** on every
-  request; both buffers are `VecDeque`s. The public API is unchanged.
-
-### Security
-
-- The API-key mask disclosure is a security fix — see `Fixed`. The complete
-  key could be printed to stdout for a short multibyte server-supplied key.
-
-### Known limitations
-
-- **The server's delta cursor is still a timestamp, not a write sequence.**
-  The cursor is now server-assigned (`snippets.visible_at`, clamped to the
-  library watermark) and monotone by construction, so a row can no longer
-  become invisible because of a client-chosen `updated_at`. What remains is
-  the second-granularity wart: the `>=` filter re-delivers boundary rows.
-  A monotonic per-library write sequence needs a protocol and schema change
-  and is recorded, not yet implemented, in
-  `plans/adrs/ADR-0001-sync-delta-cursor.md`.
-- **`snip-sync` still holds one write transaction across a whole upsert
-  batch.** Releasing it sooner means splitting the batch into several
-  transactions, which changes the all-or-nothing contract the code and its
-  tests rely on. That is a design decision, not a patch.
-
-### Documentation
-- **`README.md` rewritten around the quickstart.** It is now a short
-  install → store → list → use → script walkthrough with the verified output of
-  every example, and the detail (libraries, shell integration, pet import,
-  sync, MCP, themes, diagnostics) is a one-line table that points at
-  `docs/USER_GUIDE.md` and the other contract documents. Two claims were
-  corrected while doing it: there is no `snp theme` subcommand (themes are
-  picked with `e` in the TUI or set in `themes.toml`), and `snp doctor`
-  requires a mode (`--library`, `--pet-file`, `--compatibility`, `--sync`, or
-  `--check-shell`).
-- **`docs/` re-verified against source**: every contract doc was audited
-  line-by-line against the current tree. The most consequential fixes — the
-  durability-class column in `PERSISTENCE_INVENTORY.md` was wrong for
-  **every** row (most artifacts are written by `write_private_atomic`, which
-  applies *no* class); the per-command exit categories in
-  `COMMAND_CONTRACTS.md` were wrong for a dozen commands (`run` never exits 4,
-  `restore` never exits 6/9, `sync` exits 6/9 rather than the unreachable 7,
-  and `mcp install` does mutate and spawn a process); `LIBRARY_SCOPE.md`'s
-  claim that `"all"` has one definition when it has two independent ones;
-  `JSON_SCHEMAS.md` invented `doctor.analysis_mode` values and missed the
-  `findings_safe` repair status; `MCP.md` omitted the `library` parameter and
-  the `limit` default; `USER_GUIDE.md` presented a test-only seam
-  (`SNP_ALLOW_DIR_FSYNC_FAILURE`) as a user-facing environment variable; and
-  `COMPATIBILITY.md` described a `--stdout` flag that does not exist.
-- **`docs/THREAT_MODEL.md` and `docs/SUPPLY_CHAIN_POLICY.md` corrected against
-  the source**: the asset table claimed stable IDs and timestamps were
-  encrypted (they travel as plaintext proto fields), the residual risk for a
-  compromised server was rated *Low* (it is *Medium* — the server holds the
-  API-key bearer token and can re-derive the key), the lock model was
-  described as `O_EXCL` creation (it is the kernel lock plus a PID /
-  start-token owner record), and a `SNP_TEST_EXECUTOR_MODE` seam was described
-  that does not exist. `SUPPLY_CHAIN_POLICY.md` claimed all known advisories
-  were addressed by upgrading; `cargo deny check` actually **fails** today
-  (exit 5 — advisories and licenses both FAILED), and the policy now records
-  that as a Known Gap with the exact advisory IDs instead of asserting a clean
-  bill of health.
-- **Auto-sync failure-mode semantics corrected**: `auto_sync_failure` only
-  selects the `tracing` level of the policy log line
-  (`src/auto_sync/notification.rs:242-254`). It never changes the exit code,
-  and the `warning:` on stderr is printed unconditionally for a scheduling
-  failure. Three documents claimed `error` produced a nonzero exit.
-- **Two new skills**: `.skills/testing-and-seams.md` (isolation rules, the
-  eight `test-support`-gated seams, the `required-features` clippy gap, serial
-  targets, assertion discipline, and the two crash/failpoint suites no script
-  runs) and `.skills/documentation-authoring.md` (which document owns which
-  fact, citation discipline with the mechanical validator, the full edit set
-  for a new command, and the archive-vs-prune rule). Both close gaps that
-  previously existed only as scattered prose in `AGENTS.md`.
-- **`.skills/` re-verified against source**: every skill's claims and
-  `file:line` citations were re-checked against the current tree. Notable
-  corrections — the CLI skill's dry-run startup-recovery classification was
-  inverted relative to the code (dry-run variants are matched *first* and
-  classified `SuppressReadOnly`); the sync skill described a nonexistent
-  "first batch via `Sync`" path and a nonexistent `device_id` validation; the
-  server skill claimed every endpoint is authenticated and rate-limited
-  (`/health` is neither); the remediation skill's durability-class mapping and
-  its safe-repair list were both wrong; and the planning skill's archive rules
-  were corrected against `plans/archive/README.md`.
-- **`AGENTS.md` pruned into an index**: long explanations that duplicated a
-  deep dive were replaced with one-line pointers, and a new table maps each
-  cluster of traps to its authoritative section in `architecture/overview.md`
-  § 7 or to the owning deep dive.
-- **`docs/archive/` pruned again**: three snapshots were removed because they
-  documented nothing that ever existed — a plan for fuzz work that was never
-  started, a self-contradictory feature-flag analysis recommending gates that
-  were removed, and a pre-`architecture/` module inventory that named a
-  non-existent function and carried wrong counts. The three surviving archives
-  are the ones still referenced from a live document or recording a decision
-  that shipped.
-- **Exit-code 6 wording corrected**: `docs/EXIT_CODES.md` said code 6 meant
-  "Data validation **or local persistence failure**", contradicting its own
-  variant table where `PersistenceFailed` maps to 1. The table, the source
-  doc-comments in `src/outcome.rs`, and `architecture/outcome.md` now all say
-  validation only, and the doc states plainly that a persistence failure is
-  exit 1.
-- **The false "keyring silently falls back to a mock store" claim removed
-  from five places** (`AGENTS.md`, `SECURITY.md`, `architecture/config.md`,
-  `architecture/commands/register_cmd.md`,
-  `plans/000-long-term-specification.md`): keyring 4's `default` feature is
-  `v1`, which hard-enables exactly three platform stores (Apple Keychain,
-  Windows Credential Manager, zbus Secret Service), and `keyring::Entry` is
-  gated on `v1` — so `default-features = false` is a **compile error**, not a
-  silent downgrade. There is no mock store: an unavailable keychain makes the
-  save fail loudly, and the code refuses to persist the key in plaintext.
-- **`docs/COMMAND_CONTRACTS.md` dry-run claim corrected**: it said dry-run
-  commands are classified by command category rather than by flag. The code
-  matches the dry-run variants first and classifies them `SuppressReadOnly`.
-- **Architecture deep-dives re-verified against source**: Every one of the 61
-  `architecture/` component docs was audited line-by-line against the current
-  tree, and ~1,500 stale `file:line` citations and superseded claims were
-  corrected. `architecture/overview.md` gained a runtime-topology section
-  (the `snp` / detached `auto-sync-worker` / `snip-sync` process map), a
-  review-oriented "picking a deep dive" table, and explicit statements of the
-  invariants that were previously only implied: the server's weaker merge rule
-  versus the client's, the cross-library `snippets.id` drop, the
-  readonly-vs-mutating resolver split, the durability-class matrix, and the
-  nine-variant transaction state machine.
-- **Security claims corrected where they overclaimed**: the "end-to-end
-  encryption" wording was narrowed — snippet bodies are encrypted, but the API
-  key reaches the server as a bearer token on every request, so the guarantee
-  is transport + at-rest protection, not server-blindness. The crate
-  description, `.skills/encryption-module.md`, and `AGENTS.md` were aligned.
-- **`.skills/` durability and transaction rules corrected**: the durability
-  table's per-class fsync behavior was wrong in three of four rows; the
-  `Failed` journal state is not a "persisted terminal" (no production path
-  writes it); `RollingBack`/`CleaningUp` are not legacy states; and the
-  owned-record lock family unlinks on nonce **+ PID + start token**, not
-  nonce + start token.
-- **`AGENTS.md` cross-library push note updated**: the server now probes scope
-  and reports `UpsertOutcome::ForeignScope` rather than dropping the write
-  silently — but the write is still discarded, and `last_sync` does not
-  advance while `skipped_count > 0`, so a content-duplicated library cannot
-  complete a sync until the content changes.
-- **Agent-facing docs re-verified against source**: Audited every `.skills/`
-  file, `architecture/` deep-dive, and `docs/` contract against the current
-  codebase, and corrected claims that no longer held. Notable corrections:
-  sync encrypts only `{description, command, tags}` (metadata `id`,
-  `created_at`, `updated_at`, `device_id`, `deleted` travel in plaintext) — the
-  skills previously implied the whole `ProtoSnippet` was encrypted; snippet IDs
-  are deterministic `legacy-<sha256 hex>`, not UUID v4; `snip-sync` defaults are
-  `<config>/snip-sync/snippets.db`, 5 connections, and an absolute
-  `premade-libraries` path; and the keychain seam is protected by a
-  `#[cfg(feature = "test-support")]` gate rather than a guard test (a second
-  seam, `SNP_TEST_CREDENTIAL_FILE`, was undocumented).
-- **`docs/` pruned and indexed**: `SECURITY_AUDIT`, `FEATURE_BOUNDARIES`,
-  `CANONICAL_OPERATIONS`, and `FUZZING_AND_PROPERTY_TESTS` moved to
-  `docs/archive/` with headers stating exactly why each is stale — they
-  referenced the pre-split `src/library.rs` / `src/config.rs` and pre-convention
-  "Phase 06A"-style planning labels. New `docs/README.md` classifies every
-  reference doc as current contract or archived snapshot.
-- **`LOGICAL_LAYERS.md` aligned with its enforcer**: the document claimed
-  "no file moves yet" while `tests/architecture.rs` enforces the post-split
-  module layout. It now lists the exact enforced module sets, the two known
-  cross-layer exceptions, and the `config/` exclusion.
-- **Contracts corrected**: `JSON_SCHEMAS.md` (status/doctor envelopes,
-  `restore` mode casing, dry-run shape), `LIBRARY_SCOPE.md` (`snp list
-  --library all` does not exist; only the selector path understands `"all"`),
-  `COMMAND_CONTRACTS.md` (exit-2 legend, `repair` exit 10, `edit --output`
-  writes stderr, startup-recovery table), `IDENTITY_CONTRACT.md`, and
-  `PUBLIC_API.md` (3 real rustdoc warnings, verified via `cargo doc`).
-- **Two new skills**: `.skills/selector-and-search-parity.md` (the three
-  surfaces sharing `searchable_text`, the readonly-vs-mutating resolver split,
-  and the read-only stdio MCP boundary) and
-  `.skills/persistence-and-toml-fidelity.md` (the "never post-process
-  serialized TOML" rule, the 24-case golden corpus, durability classes, and
-  fail-closed parsing) — both covering invariants that previously existed only
-  in `AGENTS.md` prose or not at all.
-- **`cargo doc` is warning-free**: fixed the three remaining `private_intra_doc_links`
-  warnings (`execution_lock.rs` `process_alive`, `validate_cmd.rs` `run`,
-  `selector.rs` `resolve_selector_readonly`) by converting links to `pub(crate)`
-  items into plain code-span text. `docs/PUBLIC_API.md` records the rule: only
-  items re-exported from `src/lib.rs` may be intra-doc-linked from a public doc
-  comment.
-- **Architecture docs rebuilt as an auditable deep-dive set**: `architecture/overview.md`
-  is now a birds-eye module map — every source module with the subsystem it owns,
-  a capability map grouped by what a user is trying to do, the layer boundaries
-  with how much of them is actually enforced, the cross-cutting invariants, the
-  primary data flows, the on-disk state table, and the testing surface — followed
-  by a Deep-Dive Index linking all 61 component documents. Each deep dive was
-  re-verified against the current source and corrected where the code had moved
-  on since the last review; the ones that changed the most grew substantially
-  (`persistence.md` 687→951 lines, `sync.md` +979, `server.md` 410→855,
-  `status.md` +762, `auto_sync.md` +723, `library.md` 208→557). A new
-  `architecture/public_api.md` documents which parts of `src/lib.rs` are the
-  supported external surface and which are `#[doc(hidden)]` crate-boundary
-  details.
-- **Every example in the user guide was executed against the real binary**,
-  and ten concrete defects were corrected: a snippet ID literal from a retired
-  fingerprint scheme (it resolved to nothing — exit 3); the claim that `n`
-  cycles sort modes and `o` toggles favorites-first (neither is true, and
-  `[used]`/`[freq]` are reachable only via `--sort`); the `themes.toml` shape
-  (`active = "Dracula"`, not an `[active]` table, so the documented form failed
-  to parse and was silently ignored); the `$VISUAL` row (it also wins for
-  `snp edit`); a `snp new` example that prompts for a description and so
-  fails non-interactively; "a fresh install creates …" (those files appear on
-  the first write, not the first read); a reset snippet that hardcoded
-  `~/.config/snp`; and a test-only build seam listed among user-facing
-  environment variables.
-
-### Added
-- **`docs/COMMANDS.md`**: a complete reference for every `snp` subcommand —
-  what it does, which flags it takes, the exact selectors `snp get` accepts,
-  the library and sync subcommands, and the exit codes each can return.
-
-### Changed
-- **The README is now quickstart-first.** It leads with install and a working
-  first snippet, shows the real output of every example, and links out to the
-  detailed docs instead of duplicating them. The full command table, the
-  configuration-path table, and the TUI key bindings now live in `docs/`
-  (`docs/COMMANDS.md`, `docs/USER_GUIDE.md`).
-- **`USER_GUIDE.md` moved to `docs/USER_GUIDE.md`**, so every reference doc sits
-  in one indexed directory.
-
-### Fixed
 - **`snp library create` orphaned the default snippet library.** Creating a
   library created the `libraries/` directory before the legacy single-file
   store was migrated. Because `is_single_file_mode()` is "`libraries/` does not
@@ -963,7 +779,262 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch: every platform uses `$XDG_CONFIG_HOME`/`~/.config` plus `/snp`, with
   a one-way macOS legacy migration.
 
+- **snip-sync HTTP parity (server-lifecycle-http M004)**: Restored the pre-migration wire
+  contract proven by exercising the Axum server over real sockets. Router
+  404/405 responses are empty with no content-type (the metrics-disabled 404
+  keeps its `"Not found"` payload), known routes answer preflight and
+  unsupported methods with `Allow: GET, HEAD`, every non-allow-all response
+  carries `Vary: origin`, and preflight responses carry CORS metadata without
+  the ordinary security headers. Socket regression tests lock the contract;
+  the release binary is byte-identical at 3,898,408 bytes.
+
+### Security
+
+- The API-key mask disclosure is a security fix — see `Fixed`. The complete
+  key could be printed to stdout for a short multibyte server-supplied key.
+
+### Known limitations
+
+- **The timestamp delta cursor is still second-granular — but only on the
+  legacy path.** The write-sequence cursor (`snippets.sequence`) is
+  server-assigned, strictly increasing per library, and exact, and the
+  bootstrap makes it reachable: a client that has adopted the watermark sends
+  a non-zero `last_sync_sequence`, and the server then answers from the exact
+  sequence filter. The timestamp cursor (`snippets.visible_at`, clamped to the
+  library watermark) survives only as the fallback for a request that carries
+  no sequence cursor, and its `>=` filter still re-delivers boundary rows
+  within the same second. See
+  `plans/adrs/ADR-0001-sync-delta-cursor.md`.
+- **`snip-sync` still holds one write transaction across a whole upsert
+  batch.** Releasing it sooner means splitting the batch into several
+  transactions, which changes the all-or-nothing contract the code and its
+  tests rely on. That is a design decision, not a patch.
+
 ### Documentation
+
+- **The documentation was re-audited against the current source before the
+  release.** Every contract document under `docs/`, every deep dive under
+  `architecture/`, and every task skill under `.skills/` was checked against
+  the code it describes, and the findings were corrected rather than
+  papered over. What changed:
+  - **The `snp delete` command was under-documented.** `docs/COMMANDS.md`
+    omitted exit 2 (no selector) and exit 1 (`--library all` refused);
+    `docs/COMMAND_CONTRACTS.md` omitted both codes from its row, omitted
+    `delete` from the startup-recovery table, and claimed exit 5 and exit 9
+    came only from `snp get` and `snp sync discard-pending`;
+    `docs/USER_GUIDE.md` had no `snp data delete` mirror, no `--library all`
+    refusal, and no `--json` status token; `docs/COMPATIBILITY.md` still
+    said the mirror group re-spells *five* commands; and
+    `docs/CLI_EXITCODE_STREAM_POLICY.md` had no stream section for `snp get`
+    or `snp delete`.
+  - **The `snp data` mirror contract was asserted but not tested for the new
+    command.** `tests/cli_surface_compat.rs` covered `validate`, `backup`,
+    `repair`, `restore`, and `status`, but not `delete` — so the new
+    spelling shipped without the mirror lock the docs claim. Two tests now
+    cover `snp delete` and `snp data delete` (success and the
+    already-deleted refusal), and the target runs in `scripts/check.sh`.
+  - **Two public doc comments claimed behavior the code does not have.**
+    `AutoSyncFailureMode::Error` promised "a distinct post-commit sync
+    failure outcome (nonzero exit code)"; the mode only selects the
+    severity of the policy log line, and the mutating command still exits
+    0. The crate-root doc comment also omitted the `SyncCursorKind`
+    re-export.
+  - **The search-parity and sync-cursor contracts reached the operator-facing
+    docs.** The empty-query rule ("no filter" on all three surfaces) and the
+    per-surface cross-library ordering are now stated in `docs/MCP.md`,
+    `docs/JSON_SCHEMAS.md`, and `docs/LIBRARY_SCOPE.md`, and the exact
+    write-sequence delta cursor is described in `docs/USER_GUIDE.md`.
+  - **Structural counts that the unreleased work had moved were corrected:**
+    the deep-dive index holds 62 documents (not 61), the test suite holds 55
+    integration targets (not 51), `src/commands/` holds 26 modules of which
+    17 define a canonical `*Args`, `src/` holds ~62k lines across 88 files,
+    and the published crate versions in `docs/SUPPLY_CHAIN_POLICY.md` and
+    `architecture/proto.md` now match the manifests.
+  - **~40 stale `file:line` citations were re-anchored.** A mechanical
+    validator found live-document citations pointing at blank or out-of-range
+    lines — mostly in `architecture/utils/atomic.md` and
+    `architecture/commands/backup_cmd.md`, which had drifted wholesale.
+    Every live citation now resolves; the remaining findings are all under
+    `docs/archive/`, whose citations are intentionally dead.
+
+- **`README.md` rewritten around the quickstart.** It is now a short
+  install → store → list → use → script walkthrough with the verified output of
+  every example, and the detail (libraries, shell integration, pet import,
+  sync, MCP, themes, diagnostics) is a one-line table that points at
+  `docs/USER_GUIDE.md` and the other contract documents. Two claims were
+  corrected while doing it: there is no `snp theme` subcommand (themes are
+  picked with `e` in the TUI or set in `themes.toml`), and `snp doctor`
+  requires a mode (`--library`, `--pet-file`, `--compatibility`, `--sync`, or
+  `--check-shell`).
+- **`docs/` re-verified against source**: every contract doc was audited
+  line-by-line against the current tree. The most consequential fixes — the
+  durability-class column in `PERSISTENCE_INVENTORY.md` was wrong for
+  **every** row (most artifacts are written by `write_private_atomic`, which
+  applies *no* class); the per-command exit categories in
+  `COMMAND_CONTRACTS.md` were wrong for a dozen commands (`run` never exits 4,
+  `restore` never exits 6/9, `sync` exits 6/9 rather than the unreachable 7,
+  and `mcp install` does mutate and spawn a process); `LIBRARY_SCOPE.md`'s
+  claim that `"all"` has one definition when it has two independent ones;
+  `JSON_SCHEMAS.md` invented `doctor.analysis_mode` values and missed the
+  `findings_safe` repair status; `MCP.md` omitted the `library` parameter and
+  the `limit` default; `USER_GUIDE.md` presented a test-only seam
+  (`SNP_ALLOW_DIR_FSYNC_FAILURE`) as a user-facing environment variable; and
+  `COMPATIBILITY.md` described a `--stdout` flag that does not exist.
+- **`docs/THREAT_MODEL.md` and `docs/SUPPLY_CHAIN_POLICY.md` corrected against
+  the source**: the asset table claimed stable IDs and timestamps were
+  encrypted (they travel as plaintext proto fields), the residual risk for a
+  compromised server was rated *Low* (it is *Medium* — the server holds the
+  API-key bearer token and can re-derive the key), the lock model was
+  described as `O_EXCL` creation (it is the kernel lock plus a PID /
+  start-token owner record), and a `SNP_TEST_EXECUTOR_MODE` seam was described
+  that does not exist. `SUPPLY_CHAIN_POLICY.md` claimed all known advisories
+  were addressed by upgrading; `cargo deny check` actually **fails** today
+  (exit 5 — advisories and licenses both FAILED), and the policy now records
+  that as a Known Gap with the exact advisory IDs instead of asserting a clean
+  bill of health.
+- **Auto-sync failure-mode semantics corrected**: `auto_sync_failure` only
+  selects the `tracing` level of the policy log line
+  (`src/auto_sync/notification.rs:242-254`). It never changes the exit code,
+  and the `warning:` on stderr is printed unconditionally for a scheduling
+  failure. Three documents claimed `error` produced a nonzero exit.
+- **Two new skills**: `.skills/testing-and-seams.md` (isolation rules, the
+  eight `test-support`-gated seams, the `required-features` clippy gap, serial
+  targets, assertion discipline, and the two crash/failpoint suites no script
+  runs) and `.skills/documentation-authoring.md` (which document owns which
+  fact, citation discipline with the mechanical validator, the full edit set
+  for a new command, and the archive-vs-prune rule). Both close gaps that
+  previously existed only as scattered prose in `AGENTS.md`.
+- **`.skills/` re-verified against source**: every skill's claims and
+  `file:line` citations were re-checked against the current tree. Notable
+  corrections — the CLI skill's dry-run startup-recovery classification was
+  inverted relative to the code (dry-run variants are matched *first* and
+  classified `SuppressReadOnly`); the sync skill described a nonexistent
+  "first batch via `Sync`" path and a nonexistent `device_id` validation; the
+  server skill claimed every endpoint is authenticated and rate-limited
+  (`/health` is neither); the remediation skill's durability-class mapping and
+  its safe-repair list were both wrong; and the planning skill's archive rules
+  were corrected against `plans/archive/README.md`.
+- **`AGENTS.md` pruned into an index**: long explanations that duplicated a
+  deep dive were replaced with one-line pointers, and a new table maps each
+  cluster of traps to its authoritative section in `architecture/overview.md`
+  § 7 or to the owning deep dive.
+- **`docs/archive/` pruned again**: three snapshots were removed because they
+  documented nothing that ever existed — a plan for fuzz work that was never
+  started, a self-contradictory feature-flag analysis recommending gates that
+  were removed, and a pre-`architecture/` module inventory that named a
+  non-existent function and carried wrong counts. The three surviving archives
+  are the ones still referenced from a live document or recording a decision
+  that shipped.
+- **Exit-code 6 wording corrected**: `docs/EXIT_CODES.md` said code 6 meant
+  "Data validation **or local persistence failure**", contradicting its own
+  variant table where `PersistenceFailed` maps to 1. The table, the source
+  doc-comments in `src/outcome.rs`, and `architecture/outcome.md` now all say
+  validation only, and the doc states plainly that a persistence failure is
+  exit 1.
+- **The false "keyring silently falls back to a mock store" claim removed
+  from five places** (`AGENTS.md`, `SECURITY.md`, `architecture/config.md`,
+  `architecture/commands/register_cmd.md`,
+  `plans/000-long-term-specification.md`): keyring 4's `default` feature is
+  `v1`, which hard-enables exactly three platform stores (Apple Keychain,
+  Windows Credential Manager, zbus Secret Service), and `keyring::Entry` is
+  gated on `v1` — so `default-features = false` is a **compile error**, not a
+  silent downgrade. There is no mock store: an unavailable keychain makes the
+  save fail loudly, and the code refuses to persist the key in plaintext.
+- **`docs/COMMAND_CONTRACTS.md` dry-run claim corrected**: it said dry-run
+  commands are classified by command category rather than by flag. The code
+  matches the dry-run variants first and classifies them `SuppressReadOnly`.
+- **Architecture deep-dives re-verified against source**: Every one of the 61
+  `architecture/` component docs was audited line-by-line against the current
+  tree, and ~1,500 stale `file:line` citations and superseded claims were
+  corrected. `architecture/overview.md` gained a runtime-topology section
+  (the `snp` / detached `auto-sync-worker` / `snip-sync` process map), a
+  review-oriented "picking a deep dive" table, and explicit statements of the
+  invariants that were previously only implied: the server's weaker merge rule
+  versus the client's, the cross-library `snippets.id` drop, the
+  readonly-vs-mutating resolver split, the durability-class matrix, and the
+  nine-variant transaction state machine.
+- **Security claims corrected where they overclaimed**: the "end-to-end
+  encryption" wording was narrowed — snippet bodies are encrypted, but the API
+  key reaches the server as a bearer token on every request, so the guarantee
+  is transport + at-rest protection, not server-blindness. The crate
+  description, `.skills/encryption-module.md`, and `AGENTS.md` were aligned.
+- **`.skills/` durability and transaction rules corrected**: the durability
+  table's per-class fsync behavior was wrong in three of four rows; the
+  `Failed` journal state is not a "persisted terminal" (no production path
+  writes it); `RollingBack`/`CleaningUp` are not legacy states; and the
+  owned-record lock family unlinks on nonce **+ PID + start token**, not
+  nonce + start token.
+- **`AGENTS.md` cross-library push note updated**: the server now probes scope
+  and reports `UpsertOutcome::ForeignScope` rather than dropping the write
+  silently — but the write is still discarded, and `last_sync` does not
+  advance while `skipped_count > 0`, so a content-duplicated library cannot
+  complete a sync until the content changes.
+- **Agent-facing docs re-verified against source**: Audited every `.skills/`
+  file, `architecture/` deep-dive, and `docs/` contract against the current
+  codebase, and corrected claims that no longer held. Notable corrections:
+  sync encrypts only `{description, command, tags}` (metadata `id`,
+  `created_at`, `updated_at`, `device_id`, `deleted` travel in plaintext) — the
+  skills previously implied the whole `ProtoSnippet` was encrypted; snippet IDs
+  are deterministic `legacy-<sha256 hex>`, not UUID v4; `snip-sync` defaults are
+  `<config>/snip-sync/snippets.db`, 5 connections, and an absolute
+  `premade-libraries` path; and the keychain seam is protected by a
+  `#[cfg(feature = "test-support")]` gate rather than a guard test (a second
+  seam, `SNP_TEST_CREDENTIAL_FILE`, was undocumented).
+- **`docs/` pruned and indexed**: `SECURITY_AUDIT`, `FEATURE_BOUNDARIES`,
+  `CANONICAL_OPERATIONS`, and `FUZZING_AND_PROPERTY_TESTS` moved to
+  `docs/archive/` with headers stating exactly why each is stale — they
+  referenced the pre-split `src/library.rs` / `src/config.rs` and pre-convention
+  "Phase 06A"-style planning labels. New `docs/README.md` classifies every
+  reference doc as current contract or archived snapshot.
+- **`LOGICAL_LAYERS.md` aligned with its enforcer**: the document claimed
+  "no file moves yet" while `tests/architecture.rs` enforces the post-split
+  module layout. It now lists the exact enforced module sets, the two known
+  cross-layer exceptions, and the `config/` exclusion.
+- **Contracts corrected**: `JSON_SCHEMAS.md` (status/doctor envelopes,
+  `restore` mode casing, dry-run shape), `LIBRARY_SCOPE.md` (`snp list
+  --library all` does not exist; only the selector path understands `"all"`),
+  `COMMAND_CONTRACTS.md` (exit-2 legend, `repair` exit 10, `edit --output`
+  writes stderr, startup-recovery table), `IDENTITY_CONTRACT.md`, and
+  `PUBLIC_API.md` (3 real rustdoc warnings, verified via `cargo doc`).
+- **Two new skills**: `.skills/selector-and-search-parity.md` (the three
+  surfaces sharing `searchable_text`, the readonly-vs-mutating resolver split,
+  and the read-only stdio MCP boundary) and
+  `.skills/persistence-and-toml-fidelity.md` (the "never post-process
+  serialized TOML" rule, the 24-case golden corpus, durability classes, and
+  fail-closed parsing) — both covering invariants that previously existed only
+  in `AGENTS.md` prose or not at all.
+- **`cargo doc` is warning-free**: fixed the three remaining `private_intra_doc_links`
+  warnings (`execution_lock.rs` `process_alive`, `validate_cmd.rs` `run`,
+  `selector.rs` `resolve_selector_readonly`) by converting links to `pub(crate)`
+  items into plain code-span text. `docs/PUBLIC_API.md` records the rule: only
+  items re-exported from `src/lib.rs` may be intra-doc-linked from a public doc
+  comment.
+- **Architecture docs rebuilt as an auditable deep-dive set**: `architecture/overview.md`
+  is now a birds-eye module map — every source module with the subsystem it owns,
+  a capability map grouped by what a user is trying to do, the layer boundaries
+  with how much of them is actually enforced, the cross-cutting invariants, the
+  primary data flows, the on-disk state table, and the testing surface — followed
+  by a Deep-Dive Index linking all 61 component documents. Each deep dive was
+  re-verified against the current source and corrected where the code had moved
+  on since the last review; the ones that changed the most grew substantially
+  (`persistence.md` 687→951 lines, `sync.md` +979, `server.md` 410→855,
+  `status.md` +762, `auto_sync.md` +723, `library.md` 208→557). A new
+  `architecture/public_api.md` documents which parts of `src/lib.rs` are the
+  supported external surface and which are `#[doc(hidden)]` crate-boundary
+  details.
+- **Every example in the user guide was executed against the real binary**,
+  and ten concrete defects were corrected: a snippet ID literal from a retired
+  fingerprint scheme (it resolved to nothing — exit 3); the claim that `n`
+  cycles sort modes and `o` toggles favorites-first (neither is true, and
+  `[used]`/`[freq]` are reachable only via `--sort`); the `themes.toml` shape
+  (`active = "Dracula"`, not an `[active]` table, so the documented form failed
+  to parse and was silently ignored); the `$VISUAL` row (it also wins for
+  `snp edit`); a `snp new` example that prompts for a description and so
+  fails non-interactively; "a fresh install creates …" (those files appear on
+  the first write, not the first read); a reset snippet that hardcoded
+  `~/.config/snp`; and a test-only build seam listed among user-facing
+  environment variables.
+
 - **README restructured around the quickstart**, cut from 348 to 233 lines. It
   now opens with install and a runnable 60-second example, keeps a full command
   table, and defers detail to `USER_GUIDE.md`, `docs/`, and
@@ -983,32 +1054,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `README.md` config table no longer implies every file exists on a fresh
   install (a new install creates only `snippets.toml` and `logs/`) and now
   documents `logs/`.
-
-### Fixed
-- **snip-sync HTTP parity (server-lifecycle-http M004)**: Restored the pre-migration wire
-  contract proven by exercising the Axum server over real sockets. Router
-  404/405 responses are empty with no content-type (the metrics-disabled 404
-  keeps its `"Not found"` payload), known routes answer preflight and
-  unsupported methods with `Allow: GET, HEAD`, every non-allow-all response
-  carries `Vary: origin`, and preflight responses carry CORS metadata without
-  the ordinary security headers. Socket regression tests lock the contract;
-  the release binary is byte-identical at 3,898,408 bytes.
-
-### Changed
-- **snip-sync HTTP runtime (server-lifecycle-http M003)**: Replaced the Axum/Tower-HTTP
-  surface with one direct EggServe HTTP/1 health/metrics service. Tonic remains
-  on its separate listener and TLS remains external. The controlled release
-  build measured 3,898,408 bytes, 1.70% above the original Axum runtime and
-  1.65% smaller than the EggServe/Axum adapter trial.
-- **Self-update transport (updater-transport M005; supersedes M004)**:
-  `snp update` now pins `eggfetch-core` 0.2.0 on the unchanged lean
-  `standard-http1` + `redirects` + Rustls native-roots profile. Strict
-  bounded redirects, the native request/body `Timeout.total`, 1 MiB metadata /
-  256 MiB streamed-binary bounds, and 404-only Cargo fallback remain
-  unchanged. A fresh same-host release build stayed byte-identical at
-  6,776,320 bytes. The `snip-sync` updater remains on external `curl`:
-  its fresh 0.2.0 lean-profile trial grew the server binary 34.23%, past the
-  10% material-growth gate.
 
 ## [1.3.9] - 2026-09-16
 

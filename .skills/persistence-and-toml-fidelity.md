@@ -98,20 +98,20 @@ Notes that the shorthand table tends to get wrong:
   **fsync** behavior, not in permissions. `AtomicWriteOptions::preserve_permissions`
   keeps the target's existing mode instead.
 - `SensitiveConfig` additionally **rejects symlinks** by default
-  (`src/utils/atomic.rs:62`). That is its only behavioral difference from
+  (`src/utils/atomic.rs:55`). That is its only behavioral difference from
   `DurableUserData`.
 - `RecoverableMetadata`'s parent-dir sync is **not** a guarantee: it degrades to
-  a warning and returns `Ok(Some(false))` (`src/utils/atomic.rs:247-264`).
+  a warning and returns `Ok(Some(false))` (`src/utils/atomic.rs:258-266`).
 
 **Snippets and libraries are not written through `atomic_replace`.** They go
-through `write_private_atomic` (`src/utils/atomic.rs:278`), which takes no
+through `write_private_atomic` (`src/utils/atomic.rs:305`), which takes no
 `Durability` argument: it always fsyncs the file, and fsyncs the parent
 directory under `SensitiveConfig` semantics — but only on Unix
-(`src/utils/atomic.rs:326-327` is `#[cfg(unix)]`).
+(`src/utils/atomic.rs:353-354` is `#[cfg(unix)]`).
 
 > **Windows hazard.** `atomic_replace` calls `sync_parent_dir` unconditionally
-> (`src/utils/atomic.rs:434`), and `parent_dir_sync_durable` returns `Err` on
-> non-Unix (`src/utils/atomic.rs:180-186`). So on Windows an `atomic_replace`
+> (`src/utils/atomic.rs:460`), and `parent_dir_sync_durable` returns `Err` on
+> non-Unix (`src/utils/atomic.rs:170-179`). So on Windows an `atomic_replace`
 > with `DurableUserData`/`SensitiveConfig` **replaces the target and then
 > returns an error** — and never returns the `AtomicWriteReport`. Callers that
 > treat `Err` as "not written" are wrong on Windows. `write_private_atomic` is

@@ -19,7 +19,11 @@ The initial tool set is intentionally read-only and contains exactly:
   `all`. Optional `limit` is bounded to 1,000 (default 100).
 - `snippets_search`: fuzzy-search using the canonical selector search
   contract (`description`, `command`, and `tags` via `SkimMatcherV2` and
-  CLI-consistent relevance ranking). `query` is required. Optional `tags`
+  CLI-consistent relevance ranking). `query` is required, but an **empty
+  `query`** is "no filter" — every non-deleted snippet in scope matches,
+  the same canonical empty-query rule as `snp get --query ""` and
+  `snp list --filter ""`. All three surfaces share one match primitive
+  (`selector::score_fuzzy_matches`). Optional `tags`
   restricts results to snippets carrying every listed tag
   (case-insensitive exact equality — more predictable than relying on fuzzy
   tag-text matching alone). Optional `search_output: true` additionally
@@ -35,6 +39,13 @@ The initial tool set is intentionally read-only and contains exactly:
 All three tools accept an optional `library` argument: a library name, or
 `all` for every registered library. An unknown library name is returned as a
 tool error. Unknown tool arguments are rejected rather than ignored.
+
+Cross-library ordering follows the merged-set family, not the selector family:
+`snippets_search` ranks the merged set by **global relevance** (the same rule
+as `snp list --filter`), while `snp get --query` orders cross-library results
+by library → description → snippet ID. Within a single library the two orders
+coincide. `snippet_get` is a selector-family tool and uses the latter order.
+See [LIBRARY_SCOPE.md](LIBRARY_SCOPE.md).
 
 Results include `id`, `library`, `description`, `command`, `tags`, `folders`,
 and `favorite`. Output/notes, sync metadata, credentials, and keychain data

@@ -78,7 +78,7 @@ qualified service name is `snip_proto.SnippetSync`
 | 8 | `DeleteLibrary` | `DeleteLibraryRequest` | `DeleteLibraryResponse` | `snip-sync/src/lib.rs:1759` | **No** |
 | 9 | `ListPremadeLibraries` | `ListPremadeLibrariesRequest` | `ListPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1819` | Yes — `src/sync.rs:1187` |
 | 10 | `GetPremadeLibrary` | `GetPremadeLibraryRequest` | `GetPremadeLibraryResponse` | `snip-sync/src/lib.rs:1871` | Yes — `src/sync.rs:1220` |
-| 11 | `SearchPremadeLibraries` | `SearchPremadeLibrariesRequest` | `SearchPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1943` | Yes — `src/sync.rs:1264` |
+| 11 | `SearchPremadeLibraries` | `SearchPremadeLibrariesRequest` | `SearchPremadeLibrariesResponse` | `snip-sync/src/lib.rs:1943` | Yes — `src/sync.rs:1375` |
 
 The server implements all 11. The client calls **9** — it never calls
 `GetSnippets` (it always uses the bidirectional `Sync`) and never calls
@@ -382,8 +382,8 @@ the three sync-path messages it is explicitly deprecated in the schema:
 
 > *"Deprecated compatibility field. New clients should send the API key in
 > the authorization metadata as `Bearer <api-key>`."*
-> (`snip-proto/proto/sync.proto:43-44` — `GetSnippetsRequest`;
-> `snip-proto/proto/sync.proto:57` and `:72` carry the shorter *"Deprecated
+> (`snip-proto/proto/sync.proto:45-46` — `GetSnippetsRequest`;
+> `snip-proto/proto/sync.proto:59` and `:74` carry the shorter *"Deprecated
 > compatibility field. Prefer authorization metadata."* wording)
 
 The remaining request messages (`CreateLibraryRequest`, `ListLibrariesRequest`,
@@ -410,7 +410,7 @@ exception** — that is where the key is *issued*.
 | Max tags | 50 | `snip-sync/src/lib.rs:104` |
 | Max tag length | 100 | `snip-sync/src/lib.rs:105` |
 | Max snippets per request | 10 000 | `snip-sync/src/lib.rs:109` — `DEFAULT_MAX_SYNC_SNIPPETS` (checked at `:1218` and `:1363`) |
-| Max snippet ID length | 128 | `snip-sync/src/lib.rs:106` |
+| Max snippet ID length | 128 | `snip-sync/src/lib.rs:118` |
 | Max device ID length | 128 | `snip-sync/src/lib.rs:107` |
 | Max API key length | 512 | `snip-sync/src/lib.rs:108` |
 
@@ -477,8 +477,8 @@ snip-proto  →  snip-sync  →  snip-it
 | Crate | Version | Path dependency |
 |-------|---------|-----------------|
 | `snip-proto` | 0.1.4 | — |
-| `snip-sync` | 0.1.7 | `snip-proto = { version = "0.1.4", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
-| `snip-it` | 1.4.0 | `snip-proto = { version = "0.1.4", path = "snip-proto" }` (`Cargo.toml:140`) |
+| `snip-sync` | 0.1.8 | `snip-proto = { version = "0.1.4", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
+| `snip-it` | 1.4.1 | `snip-proto = { version = "0.1.4", path = "snip-proto" }` (`Cargo.toml:140`) |
 
 **A proto change requires bumping `snip-proto`'s version in both
 dependents.** `snip-sync/Cargo.toml:58` and `Cargo.toml:140` both pin

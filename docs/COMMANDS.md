@@ -114,6 +114,8 @@ one library file. `--json` emits the machine-readable result.
 | The selector matched more than one snippet (nothing was deleted) | 5 |
 | No snippet matched | 3 |
 | The snippet was already deleted (nothing was changed) | 9 |
+| No selector was given (nothing was deleted) | 2 |
+| The `--library all` scope was refused (nothing was deleted) | 1 |
 
 The delete is a tombstone, not a removal: the snippet keeps its identifier and
 its `updated_at` advances past the live version, so the tombstone still syncs
@@ -170,7 +172,7 @@ never executes anything. See [`MCP.md`](MCP.md).
 | `snp doctor --check-shell <SHELL>` | Check the generated shell integration for syntax errors. |
 | `snp validate` | Validate snippet data. Read-only. |
 | `snp status` | Show library and auto-sync status. Read-only. |
-| `snp backup` | Create a secret-free backup snapshot. The snapshot is always a directory layout; the `--format` flag was removed. |
+| `snp backup` | Create a secret-free backup snapshot. The snapshot is always a directory layout. |
 | `snp restore <BACKUP_DIR>` | Restore from a backup snapshot. |
 | `snp repair` | Repair configuration and library files. |
 

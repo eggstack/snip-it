@@ -253,6 +253,33 @@ produces only JSON on stdout; the human report appears on stderr.
 **Stream split**: Clean — human-readable report always goes to stderr;
 machine-readable JSON always goes to stdout. Same convention as `snp import`.
 
+#### `snp get`
+
+- **stdout**: The selected snippet's command by default; the requested
+  `--field` value (`command`, `description`, `id`, `tags`) with `--field`; the
+  stored bytes with `--raw`; the command with variables expanded with
+  `--expanded`; the JSON envelope with `--json`.
+- **stderr**: The ambiguity report when the selector matches more than one
+  snippet — suppressed in `--json` mode. A not-found target prints nothing at
+  all, so the exit code is the only signal.
+- **Exact-byte modes**: `--raw` and `--field` write without a trailing
+  newline, so the output can be captured byte-for-byte.
+- **Exit**: 0 on success, 3 when nothing matched, 5 when the selector was
+  ambiguous. Only the default `--resolution unique` policy can exit 5;
+  `--resolution first` and `--resolution all` never do. See
+  [`EXIT_CODES.md`](EXIT_CODES.md).
+
+#### `snp delete`
+
+- **stdout**: The tombstone result — `Deleted snippet '<description>' (<id>)`,
+  or the JSON envelope (`schema`, `status`, `id`, `description`, `library`)
+  with `--json`, where `status` is `deleted` or `already_deleted`.
+- **stderr**: The ambiguity report and the not-found message. Nothing is
+  deleted unless exactly one snippet matches.
+- **Exit**: 0 when the snippet was tombstoned, 3 when nothing matched, 5 when
+  the selector was ambiguous, 9 when the target was already deleted. See
+  [`EXIT_CODES.md`](EXIT_CODES.md).
+
 ### Important Observations
 
 1. **TUI commands** (`run`, `clip`, `search`, `select`) render directly to the
@@ -275,8 +302,8 @@ machine-readable JSON always goes to stdout. Same convention as `snp import`.
    goes to stdout.
 
 7. **Error messages** always go to stderr via `eprintln!` in the main error
-   handler (`src/main.rs:1064`), or via `eprintln!` in individual commands before
-   returning `Ok(())` (graceful degradation pattern).
+   handler (`src/main.rs:1082`), or via `eprintln!` in individual commands
+   before returning `Ok(())` (graceful degradation pattern).
 
 8. **`new` prompts** go to stdout, not stderr. Piping `snp new` would see the
    "Command> " prompt on stdout mixed with any piped content.

@@ -15,7 +15,7 @@ eventually wrong**.
 |-------|----------|------|----------|
 | Agent entry point | `AGENTS.md` | The traps that will burn you. Short, dense, linked. | Agents, first 60 seconds |
 | Task skills | `.skills/*.md` | "How do I do X" for one subsystem, with the rules that task needs. | Agents, mid-task |
-| Deep dives | `architecture/*.md` | How a component actually works, with `file:line` citations. 61 deep dives (62 documents including the overview). | Reviewers and agents doing real work |
+| Deep dives | `architecture/*.md` | How a component actually works, with `file:line` citations. 62 deep dives (63 documents including the overview). | Reviewers and agents doing real work |
 | Contracts | `docs/*.md` | The operator/user-facing contract: commands, exit codes, schemas, threat model. | Users and operators |
 | Planning | `plans/**` | Intent, roadmap, ADRs, handoff and closure records. | Humans deciding what to build |
 
@@ -115,8 +115,8 @@ A new subcommand touches more than the dispatch arm. The full set:
 
 A `snp data <x>` spelling additionally needs a `DataCommands` variant, a
 dispatch arm, and a `command_behavior()` arm. `snp data` is a **mirror
-group**, not a Clap `alias` — the five data spellings (`validate`, `backup`,
-`restore`, `repair`, `status`) are the only commands with single-path
+group**, not a Clap `alias` — the six data spellings (`validate`, `backup`,
+`restore`, `repair`, `status`, `delete`) are the only commands with single-path
 `handle_*` functions in `src/main.rs`.
 
 ---

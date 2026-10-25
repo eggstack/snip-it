@@ -691,7 +691,7 @@ runs, every attacker-chosen key got a fresh budget of
 ceiling** on the authenticated gRPC surface. The peer address is bounded
 by the number of real callers, so keying on it restores an aggregate
 ceiling. Every RPC now uses the peer-derived key: `register`
-(`snip-sync/src/lib.rs:1058`), `get_snippets`, `push_snippets`, `sync`,
+(`snip-sync/src/lib.rs:1062`), `get_snippets`, `push_snippets`, `sync`,
 `create_library`, `list_libraries`, `delete_library`,
 `list_premade_libraries`, `get_premade_library`, `search_premade_libraries`.
 

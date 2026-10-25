@@ -2,7 +2,7 @@
 
 [← Back to Overview](overview.md)
 
-Deterministic test infrastructure for the whole `snip-it` workspace: the 51
+Deterministic test infrastructure for the whole `snip-it` workspace: the 55
 integration test targets under `tests/`, the shared support modules in
 `tests/support/`, the isolation model that keeps every test out of the
 developer's real config, keychain, and ports, the feature gates that keep
@@ -37,7 +37,7 @@ This document covers **how the suite is built and how to run it**. It does
 
 ## Overview
 
-The workspace holds **51 integration test targets** (`tests/*.rs` in the
+The workspace holds **55 integration test targets** (`tests/*.rs` in the
 `snip-it` crate), **4 shared support modules** (`tests/support/`), plus
 workspace unit tests (`src/**` inline `#[cfg(test)]` modules) and one
 integration target in the `snip-sync` crate
@@ -48,7 +48,7 @@ Three execution shapes exist:
 | Shape | Where | What it exercises |
 |-------|-------|-------------------|
 | **Unit** | `src/**` inline `#[cfg(test)]` modules | Pure logic — parsing, sorting, merging, state machines, serialization |
-| **Integration** | `tests/*.rs` (51 targets) | The real `snp` binary as a subprocess, in-process `snip-sync` servers, real pty pairs, real kernel locks |
+| **Integration** | `tests/*.rs` (55 targets) | The real `snp` binary as a subprocess, in-process `snip-sync` servers, real pty pairs, real kernel locks |
 | **Scripted** | `scripts/*.sh` | Cross-target contracts that no single target can prove (production seams, installer shape) |
 
 Integration tests exercise the `snp` binary as a subprocess — the real
@@ -78,7 +78,7 @@ golden-corpus TOML fidelity rules (see
 
 ## Test Target Inventory
 
-All 51 targets live in `tests/` of the `snip-it` crate. `tests/support/` and
+All 55 targets live in `tests/` of the `snip-it` crate. `tests/support/` and
 `tests/bin/` are **not** targets — they are shared modules and a helper
 binary respectively.
 
@@ -109,6 +109,8 @@ enables the in-process server helpers (it is enabled unconditionally for the
 | `tui_requires_terminal.rs` | `select`, `run`, `clip`, `search` fail cleanly with no terminal attached | parallel | — |
 | `platform_smoke.rs` | Fast cross-platform CLI smoke via the real binary; no failpoints, no server E2E, no network | parallel | — |
 | `release4_regression.rs` | Invocations without Release 4 flags preserve pre-Release-4 behavior (pinned fixtures, exact assertions) | parallel | — |
+| `cli_readonly_and_runtime.rs` | Read-only classification and runtime contracts: `snp select` is classified read-only and must not migrate a legacy single-file checkout, and `snp edit --output-stdin` rejects an invalid invocation before it reads stdin | parallel | — |
+| `cli_usage_errors.rs` | A usage fault reports the documented usage exit code (2) from either layer, a machine-readable command never exits successfully with an empty stdout, and a failed sync reports the failure in the exit status | parallel | — |
 
 ### Selector, Search, Identity, and MCP
 
@@ -160,6 +162,8 @@ enables the in-process server helpers (it is enabled unconditionally for the
 | `manifest_contracts.rs` | Restore manifest validation — 28 rejection/success cases including unknown entry kind, schema version, traversal paths, Windows reserved names, UNC paths, duplicate destinations, and fixture integrity | parallel | — |
 | `restore_security.rs` | Every rejection class of the backup-relative path validator rejects unsafe source artifacts | parallel | — |
 | `restore_transactions.rs` | Restore transactionality: dry run produces zero writes, a successful restore records exactly one pending generation, a failed restore rolls back | parallel | — |
+| `library_manager_contracts.rs` | The library manager's mutation gate refuses every local mutation while a transaction journal is unresolved or corrupt, so a pending restore can never be undermined by a write into the tree it is about to roll back | parallel | `test-support` |
+| `restore_manifest_gate.rs` | The bytes a restore stages are the bytes the manifest describes — an artifact substituted between the manifest gate and the staging read is rejected, not installed | parallel | `test-support` |
 
 ### Locking
 
@@ -195,39 +199,43 @@ enables the in-process server helpers (it is enabled unconditionally for the
 
 | Concern | Targets |
 |---------|---------|
-| CLI surface and output contracts | 10 |
+| CLI surface and output contracts | 12 |
 | Selector, search, identity, MCP | 9 |
 | Sync, server, protocol | 5 |
 | Auto-sync | 9 |
-| Persistence, backup, restore | 8 |
+| Persistence, backup, restore | 10 |
 | Locking | 3 |
 | PTY | 1 |
 | Recovery | 5 |
 | Architecture | 1 |
-| **Total** | **51** |
+| **Total** | **55** |
 
-The authoritative count is `ls tests/*.rs | wc -l` = **51**; `tests/support/`
+The authoritative count is `ls tests/*.rs | wc -l` = **55**; `tests/support/`
 and `tests/bin/` are not targets.
 
 ---
 
 ## Shared Support Modules
 
-`tests/support/` holds four modules. 39 of the 51 targets opt in with
-`mod support;` at the top of the file; the remaining 12 need no shared
+`tests/support/` holds four modules. 42 of the 55 targets opt in with
+`mod support;` at the top of the file; the remaining 13 need no shared
 helpers:
 
 | Target | Why it does not use `mod support;` |
 |--------|------------------------------------|
-| `architecture.rs` | Scans `src/` as text — no process or server needed |
+| `architecture.rs` | Source-scanning boundary test — no shared environment helpers needed |
 | `identity_contract.rs` | In-process identity assertions over `TempDir` library files, with the config dir redirected per thread (see [Gotchas](#gotchas)) |
+| `library_manager_contracts.rs` | In-process library-manager gate assertions over `TempDir` config trees, with the config dir redirected per thread |
 | `public_api_smoke.rs` | Uses the `snip_it` library directly, not the binary |
 | `persistence_unit.rs` | Exercises the atomic-write primitive in-process |
 | `pty_integration.rs` | Allocates its own pty pair and config dir |
 | `snip_sync_lifetime.rs` | Launches the real `snip-sync serve` binary |
-| `sync_integration.rs`, `sync_multibatch.rs` | Build a `SnipSyncService` directly |
+| `sync_integration.rs` | Builds a `SnipSyncService` directly |
+| `sync_multibatch.rs` | Builds a `SnipSyncService` directly |
 | `mcp_integration.rs` | Drives the MCP server over its own stdio pipe |
-| `integration.rs`, `output_contracts.rs`, `recovery_integration.rs` | Predate the shared helper module; each carries its own local `snp_cmd` / `setup_test_env` |
+| `integration.rs` | Predates the shared helper module; carries its own local `snp_cmd` / `setup_test_env` |
+| `output_contracts.rs` | Predates the shared helper module; carries its own local `snp_cmd` / `setup_test_env` |
+| `recovery_integration.rs` | Predates the shared helper module; carries its own local `snp_cmd` / `setup_test_env` |
 
 ### `tests/support/mod.rs`
 
@@ -776,7 +784,7 @@ string cannot reach the binary.
 ### `required-features` in `Cargo.toml`
 
 ```toml
-# Cargo.toml:50-84
+# Cargo.toml:50-98
 # Cross-process lock test helper binary. Only enabled under `test-support`
 # so production builds do not include this code path.
 [[bin]]
@@ -803,6 +811,13 @@ name = "local_data_lock_barriers"
 path = "tests/local_data_lock_barriers.rs"
 required-features = ["test-support"]
 
+# The restore manifest-gate test uses the mutation-barrier seam, which is
+# only compiled in under the `test-support` feature.
+[[test]]
+name = "restore_manifest_gate"
+path = "tests/restore_manifest_gate.rs"
+required-features = ["test-support"]
+
 # The identity-contract test calls `save_library` in-process. `save_library`
 # derives the mutation gate and the local-data-lock path from the *config
 # directory*, so the test needs the `ScopedConfigDir` override to avoid
@@ -812,20 +827,29 @@ required-features = ["test-support"]
 name = "identity_contract"
 path = "tests/identity_contract.rs"
 required-features = ["test-support"]
+
+# The library-manager contract test uses `ScopedConfigDir`, which is only
+# re-exported from the crate root under `test-support`.
+[[test]]
+name = "library_manager_contracts"
+path = "tests/library_manager_contracts.rs"
+required-features = ["test-support"]
 ```
 
-Exactly **five** entries carry `required-features`: the four targets above
-plus the `process_lock_helper` binary. The remaining 47 targets compile with
+Exactly **seven** entries carry `required-features`: the six targets above
+plus the `process_lock_helper` binary. The remaining 49 targets compile with
 default features.
 
 > **Note.** `cargo clippy --workspace --all-targets -- -D warnings` (the
 > `check.sh` step) does **not** pass `--all-features`. The gated targets are
 > therefore *not* linted by that command; they are linted only when a target
 > is built with `--features test-support`. `check.sh` covers
-> `platform_smoke`, `destination_permissions`, and `auto_sync_closure` that
-> way — but `repair_transactions`, `process_lock_concurrency`,
-> `local_data_lock_barriers`, and `identity_contract` are **never** linted by
-> `check.sh`. Run
+> `platform_smoke`, `architecture`, `destination_permissions`,
+> `auto_sync_closure`, `auto_sync_concurrency`, `sync_multibatch`,
+> `restore_manifest_gate`, and `selector_search_parity` that way — but
+> `repair_transactions`, `process_lock_concurrency`,
+> `local_data_lock_barriers`, `identity_contract`, and
+> `library_manager_contracts` are **never** linted by `check.sh`. Run
 > `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 > locally before landing changes to them.
 
@@ -865,10 +889,10 @@ key, authorization header, raw body, or plaintext payload
 (`snip-sync/src/test_observer.rs:1-23`).
 
 The `snip-it` crate pulls `snip-sync` in as a dev-dependency with the feature
-already on (`Cargo.toml:152`):
+already on (`Cargo.toml:166`):
 
 ```toml
-snip-sync = { version = "0.1.6", path = "snip-sync", features = ["test-helpers"] }
+snip-sync = { version = "0.1.8", path = "snip-sync", features = ["test-helpers"] }
 ```
 
 ### Production Seam Proof
@@ -1309,7 +1333,7 @@ machine needs one of these run locally before merge.
 
 ### `scripts/check.sh`
 
-The authoritative Linux-CI check list (`scripts/check.sh:15-46`):
+The authoritative Linux-CI check list (`scripts/check.sh:15-57`):
 
 | Step | Command |
 |------|---------|
@@ -1318,13 +1342,17 @@ The authoritative Linux-CI check list (`scripts/check.sh:15-46`):
 | Clippy | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Unit tests | `cargo test --workspace --lib` |
 | Platform smoke | `cargo test --test platform_smoke --features test-support` |
+| Architecture boundaries | `cargo test --test architecture --features test-support` |
 | Destination permissions | `cargo test --test destination_permissions --features test-support` |
 | Single-helper auto-sync contracts | `cargo test --test auto_sync_closure --features test-support` |
 | Auto-sync concurrency | `cargo test --test auto_sync_concurrency --features test-support -- --test-threads=1` |
 | Multi-batch sync contracts | `cargo test --test sync_multibatch --features test-support -- --test-threads=1` |
+| Restore manifest gate | `cargo test --test restore_manifest_gate --features test-support` |
+| Search parity (get --query / list --filter / MCP snippets_search) | `cargo test --test selector_search_parity --features test-support` |
+| CLI surface compatibility (snp data mirror + aliases) | `cargo test --test cli_surface_compat` |
 | snip-sync HTTP socket contracts | `cargo build -p snip-sync --bin snip-sync` then `cargo test --test snip_sync_lifetime -- --test-threads=1` |
 
-Six of the 51 targets run in CI. The other 45 run only under the
+Ten of the 55 targets run in CI. The other 45 run only under the
 full-suite command, the release script, or by hand.
 
 ### `scripts/release-check.sh verify`
@@ -1450,7 +1478,7 @@ See [Production Seam Proof](#production-seam-proof).
   (`release-check.sh:163`).
 - **`snip-sync` has its own integration target**
   (`snip-sync/tests/legacy_pid_cli.rs`), Linux-only
-  (`#![cfg(target_os = "linux")]`). It is not one of the 51.
+  (`#![cfg(target_os = "linux")]`). It is not one of the 55.
 - **The `snip_it` library is `#[doc(hidden)]` in places.** Integration tests
   use it directly, but `public_api_smoke.rs` is the guard on the *supported*
   surface listed in `src/lib.rs`.

@@ -13,19 +13,19 @@
 
 | Path | Entry point | Understands `"all"`? | Used by |
 |------|-------------|----------------------|----------|
-| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-71`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP `snippet_get` |
-| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:815`) → `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:261-302`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`), MCP `snippets_list` / `snippets_search` |
-| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:91-157`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
+| Selector path | `selector::LibraryScope::from_filter_arg` / `from_owned_arg` (`src/selector.rs:65-76`) | **Yes** → `LibraryScope::AllLibraries` | `snp get` (via `exact_selector`), exact-mode `run`/`clip`/`edit`, MCP `snippet_get` |
+| Read-only path | `library::readonly_library_sources` (`src/library/manager.rs:911`) → `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:295-336`) | **Yes** — resolves to every configured library | `snp list` (via `commands::load_readonly_snippets`), MCP `snippets_list` / `snippets_search` |
+| Single-library path | `commands::get_library_path` (`src/commands/mod.rs:92-118`) | **No** — `get_library_by_filename("all")` returns `library_not_found` | `snp new`, `snp edit`, `snp sync`, and the interactive selector (`snp search`, `snp select`) |
 
 There are **two independent** definitions of the keyword, and they agree:
 
 - The selector path matches the literal `"all"` in
   `LibraryScope::from_filter_arg` (`src/selector.rs:65-71`).
 - The read-only path matches the literal `"all"` on its own, in
-  `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:290-301`);
+  `LibraryManager::resolve_readonly_sources` (`src/library/manager.rs:325`);
   it does **not** consume `LibraryScope::from_filter_arg`.
 
-Both are unit-tested (`src/selector.rs:1086-1104`, `src/library/tests.rs:495`).
+Both are unit-tested (`src/selector.rs:1116-1131`, `src/library/tests.rs:495`).
 A command that wants cross-library support must route through one of those
 two; adding `"all"` handling to `get_library_path` would fork the rule a third
 time.
@@ -56,7 +56,7 @@ snp get --library work --query deploy
 
 The name is matched against library filenames **exactly** (case-sensitive):
 `get_library_by_filename` compares `meta.filename == name`
-(`src/library/manager.rs:235-240`). If the library does not exist, the command
+(`src/library/manager.rs:269-273`). If the library does not exist, the command
 exits with an error.
 
 ### All Libraries (`--library all`)
@@ -74,9 +74,10 @@ rejects the scope with an explicit error naming the supported alternatives.
 There is no `--all-libraries` flag anywhere in the CLI.
 
 `all` is a reserved library name. `validate_library_name`
-(`src/library/model.rs:218-223`) rejects `snp library create all`, so the
-keyword can never be ambiguous between "the library named all" and "every
-library". The check is on the exact lowercase string `all`.
+(`src/library/model.rs:250-296`, `src/library/model.rs:289-294`) rejects
+`snp library create all`, so the keyword can never be ambiguous between "the
+library named all" and "every library". The check is on the exact lowercase
+string `all`.
 
 ### Library ID (sync-linked libraries)
 
@@ -101,7 +102,7 @@ A library has **two** identifiers, and they are not interchangeable:
 | `--library <name>` | Match by filename exactly (case-sensitive), error if not found |
 | `--library all` (selector or read-only path) | Union of all visible libraries |
 | `--library all` (single-library path) | Error: `library_not_found` — the keyword is reserved, so this reads as "does not exist" |
-| Primary library not set | Error `No primary library` with the guidance `Create a library with 'snp library create <name>'` (`src/selector.rs:655-660`) |
+| Primary library not set | Error `No primary library` with the guidance `Create a library with 'snp library create <name>'` (`src/selector.rs:687-693`) |
 
 ---
 
@@ -109,8 +110,9 @@ A library has **two** identifiers, and they are not interchangeable:
 
 When `--library all` is used with a selector-based command, every match from
 every visible library is collected and then sorted deterministically by
-**library name → description → snippet ID** (`selector::finish_aggregate`,
-`src/selector.rs:558-593`). The `--resolution` policy then decides what
+**library name → description → snippet ID** (`selector::sort_matches` inside
+`selector::finish_aggregate`, `src/selector.rs:574-582`,
+`src/selector.rs:591-626`). The `--resolution` policy then decides what
 happens:
 
 - **`unique` (default)**: more than one match is **ambiguous**, not "the first
@@ -130,19 +132,26 @@ Applies to every selector, not just description:
   yields the *same* ID — that is an ambiguous match, not a unique one. An ID
   is unique only within the resolved scope.
 
+The merged-set surfaces order differently **on purpose**: `snp list --filter`
+and MCP `snippets_search` score the merged set globally and therefore order by
+**global relevance** (`sort::rank_snippets` with `SnippetSort::Relevance`),
+not by library name. The selector family resolves per library; the merged
+family merges first. Within a single library the two orders coincide. See the
+doc comment on `selector::sort_matches` (`src/selector.rs:565-570`).
+
 ---
 
 ## Machine-Output Library Identity
 
 - `snp get --json` always includes `library` and `library_id`
-  (`GetJsonOutput`, `src/commands/get_cmd.rs:68-78`), including when the scope
+  (`GetJsonOutput`, `src/commands/get_cmd.rs:67-77`), including when the scope
   came from the match itself. `library` is the filename stem; `library_id` is
   the server-side library ID and is empty for a library that is not
   sync-linked.
 - `snp list --json` emits exactly `description`, `command`, `output`, `tags`,
-  `folders`, `favorite` — **no `library` field** (`src/commands/list_cmd.rs:155-162`).
+  `folders`, `favorite` — **no `library` field** (`src/commands/list_cmd.rs:163-170`).
 - `snp list --csv` uses the same six columns; there is **no `library` column**
-  (`src/commands/list_cmd.rs:176`).
+  (`src/commands/list_cmd.rs:184`).
 
 Because `list` never reports a source library, it has no library identity in its
 output even when `--library all` concatenates several libraries.
@@ -152,7 +161,7 @@ output even when `--library all` concatenates several libraries.
 ## Flag Interaction
 
 - `snp list` warns and ignores `--library` when `--config` is set, because
-  `--config` names an explicit file path (`src/commands/list_cmd.rs:59-61`).
+  `--config` names an explicit file path (`src/commands/list_cmd.rs:57-59`).
 - `--library` help text advertises `"all"` only where the selector or read-only
   path backs the command (`snp get`, `snp list`). `snp search` names `all` only
   to say it is rejected. Do not copy that wording onto a single-library
@@ -168,11 +177,11 @@ output even when `--library all` concatenates several libraries.
 - `LibraryManager::create_library` stores the name **as given**; it does not
   lowercase it or convert spaces to hyphens. Duplicate detection at creation
   time is case-insensitive, so `Work` and `work` cannot both exist
-  (`src/library/manager.rs:404-414`).
+  (`src/library/manager.rs:439-448`).
 - Name **creation** is validated, not normalized: `validate_library_name`
   rejects empty names, names over 50 characters, path separators, a `.toml`
   suffix, and the reserved `all`
-  (`src/library/model.rs:179-225`).
+  (`src/library/model.rs:250-296`).
 - The `library_id` used in sync status and server operations is the
   **server-side** library ID, not the filename stem; it is empty until the
   library is linked to a sync server.

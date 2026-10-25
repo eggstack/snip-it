@@ -111,7 +111,7 @@ fn derive_key(api_key: &str, salt: &[u8], version: u8) -> CryptoResult<DerivedKe
 
 `DerivedKey` (`src/encryption.rs:102-113`) is `Zeroize + ZeroizeOnDrop +
 Default`; callers explicitly `zeroize()` / `drop(mem::take(&mut key))` after
-use (`src/encryption.rs:243`, `:269`). Cache keys hash the API key with the
+use (`src/encryption.rs:332`, `:359`). Cache keys hash the API key with the
 full SHA-256 digest so one user's entry can never collide with another's.
 
 ### Versioning Constraint
@@ -185,7 +185,7 @@ batch is what makes the cache effective: with a per-snippet salt every payload
 had its own cache entry and every snippet paid a full Argon2id derivation. `KeyCacheGuard` is an RAII guard whose
 `Drop` clears the whole cache (`src/encryption.rs:82-88`); it is taken at the
 top of `sync_encrypted_inner` (`src/sync.rs:504`) and of
-`run_sync_with_limits` (`src/sync_commands.rs:675`), so the cache never
+`run_sync_with_limits` (`src/sync_commands.rs:834`), so the cache never
 outlives the sync operation.
 
 Poison recovery keeps the surviving entries (still valid derived keys) instead

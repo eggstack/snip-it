@@ -40,9 +40,9 @@ pub const MAX_SYNC_TIMEOUT_SECS: u64 = 120;
 
 /// Failure behavior for post-mutation auto-sync.
 ///
-/// Controls whether a failed auto-sync emits a warning or a hard error.
-/// The `error` policy never implies rollback — the local mutation always
-/// remains committed.
+/// Selects the severity of the policy log line emitted when an auto-sync
+/// scheduling step fails. The local mutation always remains committed, and
+/// the mode never changes the mutating command's exit code.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -52,8 +52,8 @@ pub enum AutoSyncFailureMode {
     /// Retain local success, emit a concise warning to stderr.
     #[default]
     Warn,
-    /// Local mutation remains committed, but the command returns a
-    /// distinct post-commit sync failure outcome (nonzero exit code).
+    /// Local mutation remains committed; the policy log line is emitted at
+    /// `error` level instead of `warn`.
     Error,
 }
 

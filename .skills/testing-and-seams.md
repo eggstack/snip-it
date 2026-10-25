@@ -79,9 +79,9 @@ path. Never remove it.
 
 ---
 
-## Rule 3: `required-features` gates four targets and one bin
+## Rule 3: `required-features` gates six targets and one bin
 
-Exactly **five** `Cargo.toml` entries carry `required-features =
+Exactly **seven** `Cargo.toml` entries carry `required-features =
 ["test-support"]`:
 
 | Entry | Why |
@@ -90,16 +90,21 @@ Exactly **five** `Cargo.toml` entries carry `required-features =
 | `process_lock_concurrency` | needs the same API |
 | `local_data_lock_barriers` | needs the same API |
 | `identity_contract` | needs `ScopedConfigDir` to redirect the config dir |
+| `library_manager_contracts` | needs the same API |
+| `restore_manifest_gate` | needs the same API |
 | `process_lock_helper` (bin) | helper binary for the kernel-lock race |
 
-The other 47 targets compile with default features.
+The other 49 targets compile with default features.
 
 > **Clippy gap.** `cargo clippy --workspace --all-targets -- -D warnings` does
-> **not** pass `--all-features`, so it does **not** lint those four targets.
-> `scripts/check.sh` covers `platform_smoke`, `destination_permissions`, and
-> `auto_sync_closure` with `--features test-support`, but
+> **not** pass `--all-features`, so it does **not** lint those six targets.
+> `scripts/check.sh` covers `platform_smoke`, `architecture`,
+> `destination_permissions`, `auto_sync_closure`, `auto_sync_concurrency`,
+> `sync_multibatch`, `restore_manifest_gate`, and `selector_search_parity`
+> with `--features test-support`, but
 > `repair_transactions`, `process_lock_concurrency`, `local_data_lock_barriers`,
-> and `identity_contract` are never linted by CI. Run
+> `identity_contract`, and `library_manager_contracts` are never linted by
+> CI. Run
 > `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 > locally before landing changes to them.
 
@@ -143,9 +148,11 @@ Always `-- --test-threads=1` for:
 ## Rule 6: know what CI does *not* run
 
 `scripts/check.sh` (the Linux CI list) runs the installer contract, fmt,
-clippy, `--workspace --lib`, and **six** integration targets:
-`platform_smoke`, `destination_permissions`, `auto_sync_closure`,
-`auto_sync_concurrency`, `sync_multibatch`, `snip_sync_lifetime`.
+clippy, `--workspace --lib`, and **ten** integration targets:
+`platform_smoke`, `architecture`, `destination_permissions`,
+`auto_sync_closure`, `auto_sync_concurrency`, `sync_multibatch`,
+`restore_manifest_gate`, `selector_search_parity`, `cli_surface_compat`, and
+`snip_sync_lifetime`.
 
 Two deep suites are invoked by **no script at all**:
 

@@ -22,15 +22,15 @@ Deep dive: [`../architecture/cli.md`](../architecture/cli.md),
 
 ```
 clap parse → Commands (src/main.rs:91)
-            → command_behavior(cmd)          (src/main.rs:924)  startup recovery policy
-            → dispatch_command(cli)          (src/main.rs:470)  returns SnipResult<CliOutcome>
+            → command_behavior(cmd)          (src/main.rs:941)  startup recovery policy
+            → dispatch_command(cli)          (src/main.rs:481)  returns SnipResult<CliOutcome>
             → CliOutcome::exit_code()        (src/outcome.rs:76) → stable exit code
 ```
 
 `dispatch_command` returns `SnipResult<CliOutcome>`. **`Ok(...)` carries the
 outcome; `Err(...)` is an unclassified operational failure and maps to exit 1.**
 A `CliOutcome` becomes a process exit in exactly one place
-(`src/main.rs:1061`) — do not call `std::process::exit` from a command
+(`src/main.rs:1079`) — do not call `std::process::exit` from a command
 module.
 
 ### Exit codes are a stable public contract
@@ -58,7 +58,7 @@ pre-existing and frozen; 2–10 are additive and documented in
 ### `repair` is the one command outside `CliOutcome`
 
 `snp repair` uses `RepairExitStatus` (`src/commands/repair_cmd.rs:146`) and
-`exit_on_repair_status()` (`src/main.rs:401`): `UnsafeOnly` → exit 10,
+`exit_on_repair_status()` (`src/main.rs:405`): `UnsafeOnly` → exit 10,
 `PartialFailure` → exit 1. Exit 10 means "the invocation was valid, but every
 repair found was unsafe" — it is **not** a usage error.
 
@@ -66,9 +66,9 @@ repair found was unsafe" — it is **not** a usage error.
 
 ## Startup recovery classification — one table, two axes
 
-`command_behavior()` (`src/main.rs:924`) returns a `CommandBehavior` holding
+`command_behavior()` (`src/main.rs:941`) returns a `CommandBehavior` holding
 **both** a `StartupRecoveryPolicy` and a `StartupServices` level
-(`src/main.rs:911`) in a single `match`, so the two cannot drift.
+(`src/main.rs:936-939`) in a single `match`, so the two cannot drift.
 
 | Policy | Commands |
 |--------|----------|
@@ -89,7 +89,7 @@ Two easy-to-miss entries:
 are the one flag-sensitive exception: `restore --mode dry-run`,
 `repair --dry-run`, and `import pet --dry-run` are matched **before** the
 generic arms and get `SuppressReadOnly` + `StartupServices::Minimal`
-(`src/main.rs:945-962`); only their non-dry-run spellings fall through to
+(`src/main.rs:961-979`); only their non-dry-run spellings fall through to
 `Allow`.
 
 Adding a command means editing `command_behavior()`. Adding a *subcommand* to an
@@ -113,7 +113,7 @@ pipe stdout without filtering ANSI escapes or interleaved prose.
 - `snp mcp serve` is the extreme case: stdout is **protocol-only**. Any
   diagnostic on stdout corrupts the JSON-RPC stream.
 - `snp edit --output` writes the output field to **stderr**, not stdout
-  (`src/commands/edit_cmd.rs:218,220,284,286`), matching the `edit` row of
+  (`src/commands/edit_cmd.rs:225,227,295,297`), matching the `edit` row of
   `docs/COMMAND_CONTRACTS.md` ("Writes stdout: No").
 - TUI commands (`run`, `clip`, `search`, `select`) render directly to the
   terminal via crossterm raw mode and bypass stdout/stderr for the
@@ -127,11 +127,11 @@ a description.
 
 ## `snp data` is a mirror, not a second implementation
 
-`snp data <subcommand>` (`DataCommands`, `src/main.rs:281`) is a **mirror
-spelling** of `validate`, `status`, `backup`, `restore`, and `repair`. It has
-no independent behavior:
+`snp data <subcommand>` (`DataCommands`, `src/main.rs:283`) is a **mirror
+spelling** of `validate`, `status`, `backup`, `restore`, `repair`, and
+`delete`. It has no independent behavior:
 
-- It dispatches to the same handlers (`src/main.rs:862-878`).
+- It dispatches to the same handlers (`src/main.rs:874-893`).
 - It shares the same argument schema and the same startup-recovery
   classification.
 - `tests/cli_surface_compat.rs` asserts both spellings succeed with the same
@@ -142,7 +142,7 @@ will tell you if you did not.
 
 Adding a new `snp data <x>` spelling takes **three edits** in `src/main.rs`: a
 `DataCommands` variant, a dispatch arm, and a `command_behavior()` arm. Those
-five data spellings are the only commands with single-path `handle_*`
+six data spellings are the only commands with single-path `handle_*`
 functions in `main.rs`; the other ~20 commands dispatch inline inside
 `dispatch_command`.
 

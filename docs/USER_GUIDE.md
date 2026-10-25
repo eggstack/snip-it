@@ -494,6 +494,16 @@ fields such as `output`, `folders`, and `favorite` are not synchronized
 and are preserved locally when a remote version replaces the shared fields.
 Deleted snippets are retained as tombstones so a later sync can converge.
 
+### Delta cursor
+
+The server assigns every write a strictly increasing per-library sequence, and
+the client stores that cursor next to `last_sync`, so a pull returns exactly
+the rows written since the last sync instead of everything newer than a
+second-granular timestamp. The cursor is additive: a client that talks to an
+older server keeps using the timestamp cursor. `libraries.toml` records which
+cursor the server is serving in the `sync_cursor_kind` field — `unknown`,
+`timestamp`, or `sequence`.
+
 ## Syncing one account across environments
 
 The server authenticates a collection by API key. Every successful
@@ -578,6 +588,7 @@ auto_sync_failure = "warn"
 | `snp edit` (command/description) | Yes | After editor saves |
 | `snp edit --output` | No | Output is local-only, not in sync protocol |
 | TUI delete | Yes | After tombstone persisted |
+| `snp delete` | Yes | Same tombstone and notification as the TUI delete |
 | `snp import pet` (create/merge/replace) | Yes | Once per import, not per snippet |
 | `snp import pet --dry-run` | No | Read-only |
 | `snp library create` | Yes | |
@@ -854,6 +865,11 @@ snp list --filter docker --json
 snp list --search-output --filter sample
 ```
 
+An empty filter is "no filter": `snp list --filter ""` returns exactly what
+`snp list` returns. The same rule applies to `snp get --query ""` and to the
+MCP `snippets_search` tool, so one query selects the same snippets on all
+three surfaces.
+
 ### Scripting with `snp get`
 
 `snp get` is the deterministic, non-TUI entry point for scripts — it never
@@ -881,6 +897,10 @@ snp delete --query 'push a branch'  # fuzzy match; 5 if it is ambiguous
 It exits 0 when the snippet was deleted, 3 when nothing matched, 5 when the
 selector matched more than one snippet, and 9 when the snippet was already
 deleted. Nothing is deleted unless exactly one snippet matches.
+
+`snp data delete` is the same command. A delete targets one snippet in one
+library, so `--library all` is refused. Add `--json` for a machine-readable
+result whose `status` is `deleted` or `already_deleted`.
 
 `snp cron` prints a cron entry and offers to copy it to the clipboard:
 
@@ -996,8 +1016,8 @@ Exit codes follow the findings:
 
 | Exit | Meaning |
 |------|---------|
-| 0 | No findings, or every finding is `[auto]` and none were applied (report-only mode) |
-| 10 | Every finding is `[manual]` and awaits an operator decision |
+| 0 | No findings; only `[auto]` findings with none applied; `--dry-run`; or `--apply` applied every safe repair |
+| 10 | At least one finding is `[manual]` and awaits an operator decision |
 | 1 | `--apply` was passed and at least one repair failed |
 
 Only `[auto]` findings are attempted by `--apply`; `[manual]` ones are skipped

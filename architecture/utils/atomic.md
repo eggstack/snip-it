@@ -20,17 +20,17 @@ the transaction journal, the lock hierarchy, or the TOML fidelity rules — see
 
 | Item | Kind | Line | Role |
 |------|------|------|------|
-| `Durability` | enum | `src/utils/atomic.rs:24` | The four durability classes |
-| `AtomicWriteOptions` | struct | `src/utils/atomic.rs:45` | Durability + permission + symlink policy |
-| `AtomicWriteOptions::for_durability` | fn | `src/utils/atomic.rs:61` | Default options for a class |
-| `AtomicWriteOptions::preserve_permissions` | fn | `src/utils/atomic.rs:71` | Builder setter |
-| `AtomicWriteOptions::reject_symlink` | fn | `src/utils/atomic.rs:77` | Builder setter |
-| `AtomicWriteReport` | struct | `src/utils/atomic.rs:86` | What `atomic_replace` actually did |
-| `write_private_atomic` | fn | `src/utils/atomic.rs:278` | Simple atomic write of a string |
-| `atomic_replace` | fn | `src/utils/atomic.rs:350` | Durability-aware atomic replace |
-| `atomic_write_bytes` | fn | `src/utils/atomic.rs:448` | Convenience wrapper over `atomic_replace` |
-| `hex_encode` | fn | `src/utils/atomic.rs:458` | Lowercase hex digest encoding |
-| `hash_file` | fn | `src/utils/atomic.rs:475` | Canonical SHA-256 hex digest of a file |
+| `Durability` | enum | `src/utils/atomic.rs:23` | The four durability classes |
+| `AtomicWriteOptions` | struct | `src/utils/atomic.rs:39` | Durability + permission + symlink policy |
+| `AtomicWriteOptions::for_durability` | fn | `src/utils/atomic.rs:54` | Default options for a class |
+| `AtomicWriteOptions::preserve_permissions` | fn | `src/utils/atomic.rs:64` | Builder setter |
+| `AtomicWriteOptions::reject_symlink` | fn | `src/utils/atomic.rs:70` | Builder setter |
+| `AtomicWriteReport` | struct | `src/utils/atomic.rs:78` | What `atomic_replace` actually did |
+| `write_private_atomic` | fn | `src/utils/atomic.rs:305` | Simple atomic write of a string |
+| `atomic_replace` | fn | `src/utils/atomic.rs:376` | Durability-aware atomic replace |
+| `atomic_write_bytes` | fn | `src/utils/atomic.rs:474` | Convenience wrapper over `atomic_replace` |
+| `hex_encode` | fn | `src/utils/atomic.rs:484` | Lowercase hex digest encoding |
+| `hash_file` | fn | `src/utils/atomic.rs:501` | Canonical SHA-256 hex digest of a file |
 
 ---
 
@@ -45,7 +45,7 @@ pub enum Durability {
     RecoverableMetadata,
 }
 ```
-— `src/utils/atomic.rs:21-40`
+— `src/utils/atomic.rs:21-35`
 
 `Durability` is `#[non_exhaustive]`, so a `match` over it must have a
 wildcard arm — adding a class later is not a breaking change for downstream
@@ -55,27 +55,27 @@ code.
 
 | Class | File `sync_all` | Parent-dir fsync | Temp-file mode (Unix) | Symlink reject | Dir-fsync failure |
 |-------|-----------------|------------------|-----------------------|----------------|-------------------|
-| `DurableUserData` | **Yes** (`src/utils/atomic.rs:402-408`) | **Yes**, fail-closed (`:233-255`) | `0o600` (`:383-387`) | No | **Error** |
-| `SensitiveConfig` | **Yes** (`src/utils/atomic.rs:402-408`) | **Yes**, fail-closed (`:233-255`) | `0o600` (`:383-387`) | **Yes** (`:62`) | **Error** |
-| `RecoverableMetadata` | No | Best-effort, warn (`:257-264`) | `0o600` (`:383-387`) | No | Warning only |
+| `DurableUserData` | **Yes** (`src/utils/atomic.rs:428-434`) | **Yes**, fail-closed (`:248-255`) | `0o600` (`:409-413`) | No | **Error** |
+| `SensitiveConfig` | **Yes** (`src/utils/atomic.rs:428-434`) | **Yes**, fail-closed (`:248-255`) | `0o600` (`:409-413`) | **Yes** (`:55`) | **Error** |
+| `RecoverableMetadata` | No | Best-effort, warn (`:258-266`) | `0o600` (`:409-413`) | No | Warning only |
 
 > **Correction — permissions are `0o600` for every class.** The enum-level
 > doc comment (`src/utils/atomic.rs:17-20`) states that every variant applies
 > `mode(0o600)` to the temp file unconditionally, and the implementation sets
-> it that way (`src/utils/atomic.rs:383-387`); the renamed target inherits
+> it that way (`src/utils/atomic.rs:409-413`); the renamed target inherits
 > that inode's mode. The per-variant doc comment on `RecoverableMetadata`
-> (`src/utils/atomic.rs:33-36`) mentions only fsync and cleanup expectations,
+> (`src/utils/atomic.rs:32-33`) mentions only fsync and cleanup expectations,
 > not permissions. The three classes genuinely differ only in fsync behavior
 > (and `SensitiveConfig` in symlink rejection) — **not** in file mode.
 >
 > The one way to get a non-`0o600` target is `preserve_permissions(true)`,
 > which snapshots the pre-existing mode and restores it after the rename
-> (`src/utils/atomic.rs:361-373`, `:416-431`). `for_durability` defaults it to
-> `false` (`src/utils/atomic.rs:65`).
+> (`src/utils/atomic.rs:386-399`, `:442-457`). `for_durability` defaults it to
+> `false` (`src/utils/atomic.rs:58`).
 
 ### What "fail-closed" means
 
-`sync_parent_dir` (`src/utils/atomic.rs:228-266`) branches on the class:
+`sync_parent_dir` (`src/utils/atomic.rs:216-267`) branches on the class:
 
 ```rust
 if matches!(
@@ -89,7 +89,7 @@ if matches!(
     }
 }
 ```
-— `src/utils/atomic.rs:233-255`
+— `src/utils/atomic.rs:221-255`
 
 For the two durable classes a parent-directory fsync failure is an **error**:
 the caller is told the write did not achieve its durability contract. The
@@ -97,22 +97,22 @@ rename has already happened at that point, so the file content is written —
 the error means "this may not survive power loss", not "the write was
 rolled back".
 
-`parent_dir_sync_durable` is Unix-only (`src/utils/atomic.rs:172-187`); on
+`parent_dir_sync_durable` is Unix-only (`src/utils/atomic.rs:162-180`); on
 other platforms it returns
 `Err(std::io::Error::other("dir fsync unsupported on this platform"))`.
 
 > **Consequence on non-Unix platforms.** Because the durable branch maps that
 > `Err` straight to `SnipError::io_error` — and `allow_dir_fsync_failure()` is
-> `false` in production builds (`src/utils/atomic.rs:217-226`) — **every**
+> `false` in production builds (`src/utils/atomic.rs:205-214`) — **every**
 > `atomic_replace` with `DurableUserData` or `SensitiveConfig` returns an error
-> on Windows, after the rename at `src/utils/atomic.rs:412` has already
+> on Windows, after the rename at `src/utils/atomic.rs:438-439` has already
 > replaced the target. `write_private_atomic` is unaffected because its
-> `sync_parent_dir` call is compiled out entirely (`src/utils/atomic.rs:326-327`).
+> `sync_parent_dir` call is compiled out entirely (`src/utils/atomic.rs:353-354`).
 > Treat the durable classes as Unix-only in practice until this is reconciled.
 
 ### The test-only fsync seam
 
-`allow_dir_fsync_failure` (`src/utils/atomic.rs:217-226`) is the only place
+`allow_dir_fsync_failure` (`src/utils/atomic.rs:205-214`) is the only place
 the fail-closed behavior can be relaxed:
 
 | Build | Behavior |
@@ -135,15 +135,15 @@ pub struct AtomicWriteOptions {
     pub reject_symlink: bool,
 }
 ```
-— `src/utils/atomic.rs:45-56`
+— `src/utils/atomic.rs:39-50`
 
 | Field | Default from `for_durability` | Effect |
 |-------|-------------------------------|--------|
 | `durability` | the class passed in | selects fsync and dir-sync behavior |
-| `preserve_permissions` | `false` (`src/utils/atomic.rs:65`) | when `true` **and** the target existed, the original mode is restored after the rename |
-| `reject_symlink` | `true` **only** for `SensitiveConfig` (`src/utils/atomic.rs:62`) | when `true`, a symlink at the target path is an error rather than a replacement |
+| `preserve_permissions` | `false` (`src/utils/atomic.rs:58`) | when `true` **and** the target existed, the original mode is restored after the rename |
+| `reject_symlink` | `true` **only** for `SensitiveConfig` (`src/utils/atomic.rs:55`) | when `true`, a symlink at the target path is an error rather than a replacement |
 
-Both setters are consuming builder methods (`src/utils/atomic.rs:71-80`).
+Both setters are consuming builder methods (`src/utils/atomic.rs:64-73`).
 
 ---
 
@@ -156,17 +156,17 @@ pub struct AtomicWriteReport {
     pub parent_sync_supported: Option<bool>,
 }
 ```
-— `src/utils/atomic.rs:86-94`
+— `src/utils/atomic.rs:77-86`
 
 | Field | Meaning |
 |-------|---------|
-| `target_existed` | whether the target path existed before the write (`src/utils/atomic.rs:357`) |
-| `bytes_written` | length of the byte slice handed to `atomic_replace` (`src/utils/atomic.rs:438`) |
+| `target_existed` | whether the target path existed before the write (`src/utils/atomic.rs:383`) |
+| `bytes_written` | length of the byte slice handed to `atomic_replace` (`src/utils/atomic.rs:464`) |
 | `parent_sync_supported` | `Some(true)` = dir fsync succeeded; `Some(false)` = failed or unsupported; `None` = not probed (`RecoverableMetadata` skips the dir sync) (`src/utils/atomic.rs:85`, `:460`) |
 
 > **Subtlety.** `target_existed` is computed with `target.exists()`
-> (`src/utils/atomic.rs:357`), which **follows** symlinks, while validation
-> uses `symlink_metadata` (`src/utils/atomic.rs:113`), which does **not**. For
+> (`src/utils/atomic.rs:383`), which **follows** symlinks, while validation
+> uses `symlink_metadata` (`src/utils/atomic.rs:103`), which does **not**. For
 > a *broken* symlink the directory entry exists but `exists()` returns
 > `false`, so `target_existed` reports `false` even though the link was
 > replaced.
@@ -178,7 +178,7 @@ pub struct AtomicWriteReport {
 ```rust
 pub fn write_private_atomic(path: &Path, content: &str, temp_prefix: &str) -> SnipResult<()>
 ```
-— `src/utils/atomic.rs:278`
+— `src/utils/atomic.rs:305`
 
 The simple path: write a string to `path` atomically, with a private temp
 file. It takes **no `Durability` argument** — its behavior is fixed.
@@ -186,23 +186,23 @@ file. It takes **no `Durability` argument** — its behavior is fixed.
 ### Algorithm
 
 1. Resolve the parent directory and `create_dir_all` it
-   (`src/utils/atomic.rs:279-283`).
+   (`src/utils/atomic.rs:306-310`).
 2. Compute the temp path in the **same directory**:
-   `{temp_prefix}.{uuid}.tmp` (`src/utils/atomic.rs:285`). Same-directory
+   `{temp_prefix}.{uuid}.tmp` (`src/utils/atomic.rs:312`). Same-directory
    placement is what makes the later `rename` atomic.
 3. Arm the [`TempFileGuard`](tempfile_guard.md) on that path
-   (`src/utils/atomic.rs:286`).
+   (`src/utils/atomic.rs:313`).
 4. Create the temp file with `create_new(true)`:
-   - Unix: `mode(0o600)` (`src/utils/atomic.rs:288-292`).
+   - Unix: `mode(0o600)` (`src/utils/atomic.rs:315-319`).
    - Non-Unix: no creation-time permission knob in `std`, so the file
-     inherits the parent directory's ACLs (`src/utils/atomic.rs:302-312`).
-5. `write_all(content.as_bytes())` (`src/utils/atomic.rs:296`, `:313`).
+     inherits the parent directory's ACLs (`src/utils/atomic.rs:329-339`).
+5. `write_all(content.as_bytes())` (`src/utils/atomic.rs:323-324`, `:340-341`).
 6. `sync_all()` — **always**, on every platform
-   (`src/utils/atomic.rs:298-299`, `:315-316`).
-7. `fs::rename(&tmp_path, path)` (`src/utils/atomic.rs:319`).
-8. `guard.persist()` — disarm the cleanup (`src/utils/atomic.rs:320`).
+   (`src/utils/atomic.rs:325-326`, `:342-343`).
+7. `fs::rename(&tmp_path, path)` (`src/utils/atomic.rs:346`).
+8. `guard.persist()` — disarm the cleanup (`src/utils/atomic.rs:347`).
 9. **Unix only**: `sync_parent_dir(parent, path, Durability::SensitiveConfig)?`
-   (`src/utils/atomic.rs:326-327`).
+   (`src/utils/atomic.rs:353-354`).
 
 ### Properties
 
@@ -218,7 +218,7 @@ file. It takes **no `Durability` argument** — its behavior is fixed.
 Because step 9 is `#[cfg(unix)]`, **`write_private_atomic` performs no
 parent-directory sync on Windows**. Windows installs rely on the
 user-private `%APPDATA%` directory ACLs instead of a file-level DACL
-(`src/utils/atomic.rs:273-277`).
+(`src/utils/atomic.rs:300-304`).
 
 ---
 
@@ -231,25 +231,25 @@ pub fn atomic_replace(
     options: &AtomicWriteOptions,
 ) -> SnipResult<AtomicWriteReport>
 ```
-— `src/utils/atomic.rs:350`
+— `src/utils/atomic.rs:376`
 
 The full-featured path. Ten steps, in order:
 
 | # | Step | Source |
 |---|------|--------|
-| 1 | Resolve the parent directory, creating it if missing | `src/utils/atomic.rs:355` |
-| 2 | Record whether the target existed | `src/utils/atomic.rs:357` |
-| 3 | Validate the existing target (directories, FIFOs, sockets, devices; optionally symlinks) | `src/utils/atomic.rs:358` |
-| 4 | Snapshot the original permissions when `preserve_permissions` is set and the target existed | `src/utils/atomic.rs:361-373` |
-| 5 | Compute the temp path `{uuid}.tmp` in the same directory and arm the guard | `src/utils/atomic.rs:375-376` |
-| 6 | Create the temp file with `create_new(true)`; on Unix `mode(0o600)` | `src/utils/atomic.rs:379-391` |
-| 7 | `write_all(bytes)` then `flush()` | `src/utils/atomic.rs:393-398` |
-| 8 | `sync_all()` — only for `DurableUserData` and `SensitiveConfig` | `src/utils/atomic.rs:402-408` |
-| 9 | `fs::rename` over the target, then `guard.persist()` | `src/utils/atomic.rs:412-414` |
-| 10 | Restore the original permissions if requested (best-effort; errors ignored) | `src/utils/atomic.rs:416-431` |
+| 1 | Resolve the parent directory, creating it if missing | `src/utils/atomic.rs:381` |
+| 2 | Record whether the target existed | `src/utils/atomic.rs:383` |
+| 3 | Validate the existing target (directories, FIFOs, sockets, devices; optionally symlinks) | `src/utils/atomic.rs:384` |
+| 4 | Snapshot the original permissions when `preserve_permissions` is set and the target existed | `src/utils/atomic.rs:386-399` |
+| 5 | Compute the temp path `{uuid}.tmp` in the same directory and arm the guard | `src/utils/atomic.rs:401-402` |
+| 6 | Create the temp file with `create_new(true)`; on Unix `mode(0o600)` | `src/utils/atomic.rs:404-417` |
+| 7 | `write_all(bytes)` then `flush()` | `src/utils/atomic.rs:419-424` |
+| 8 | `sync_all()` — only for `DurableUserData` and `SensitiveConfig` | `src/utils/atomic.rs:428-434` |
+| 9 | `fs::rename` over the target, then `guard.persist()` | `src/utils/atomic.rs:438-440` |
+| 10 | Restore the original permissions if requested (best-effort; errors ignored) | `src/utils/atomic.rs:442-457` |
 
 Then the parent directory is synced and the report is returned
-(`src/utils/atomic.rs:434-440`).
+(`src/utils/atomic.rs:459-466`).
 
 Note the ordering: **the rename happens before the permission restore and
 before the parent-dir sync.** A failure in either of those last two steps
@@ -261,28 +261,28 @@ returns an error while the new content is already in place.
 
 | Stage | Unix behavior | Source |
 |-------|---------------|--------|
-| Temp file creation | `mode(0o600)` in `atomic_replace`; `mode(0o600)` in `write_private_atomic` | `src/utils/atomic.rs:386`, `:292` |
+| Temp file creation | `mode(0o600)` in `atomic_replace`; `mode(0o600)` in `write_private_atomic` | `src/utils/atomic.rs:409-413`, `:319` |
 | After rename | The target inherits the temp inode's mode → `0o600` | — |
-| `preserve_permissions(true)` | The pre-existing mode is snapshotted **before** the write and re-applied **after** the rename | `src/utils/atomic.rs:361-373`, `:416-431` |
-| Permission restore failure | Ignored — the write is not failed | `src/utils/atomic.rs:422-425` |
-| Non-Unix | No creation-time knob; the file inherits the parent directory's ACLs | `src/utils/atomic.rs:273-277`, `:367-370`, `:427-430` |
+| `preserve_permissions(true)` | The pre-existing mode is snapshotted **before** the write and re-applied **after** the rename | `src/utils/atomic.rs:386-399`, `:442-457` |
+| Permission restore failure | Ignored — the write is not failed | `src/utils/atomic.rs:448-451` |
+| Non-Unix | No creation-time knob; the file inherits the parent directory's ACLs | `src/utils/atomic.rs:300-304`, `:331-334`, `:453-456` |
 
 The intent of `0o600` is that newly written config and library files never
 briefly exist with broader default permissions
-(`src/utils/atomic.rs:270-271`).
+(`src/utils/atomic.rs:297-298`).
 
 Two tests pin this behavior:
 
 | Test | Assertion | Source |
 |------|-----------|--------|
-| `test_atomic_replace_durable_user_data_syncs` | a `DurableUserData` target is `0o600` — "User data must not be group/world-readable either" | `src/utils/atomic.rs:602-618` |
-| `test_atomic_replace_preserves_permissions` | with `preserve_permissions = true` and a pre-existing `0o644` file, the result is `0o644` | `src/utils/atomic.rs:630-647` |
+| `test_atomic_replace_durable_user_data_syncs` | a `DurableUserData` target is `0o600` — "User data must not be group/world-readable either" | `src/utils/atomic.rs:628-643` |
+| `test_atomic_replace_preserves_permissions` | with `preserve_permissions = true` and a pre-existing `0o644` file, the result is `0o644` | `src/utils/atomic.rs:647-662` |
 
 ---
 
 ## Symlink Rejection Rule
 
-`validate_target` (`src/utils/atomic.rs:112-167`) uses `symlink_metadata`, so
+`validate_target` (`src/utils/atomic.rs:102-157`) uses `symlink_metadata`, so
 it inspects the **link itself**, never the link target.
 
 ```rust
@@ -300,18 +300,18 @@ if meta.file_type().is_symlink() {
     return Ok(());
 }
 ```
-— `src/utils/atomic.rs:119-131`
+— `src/utils/atomic.rs:109-121`
 
 | Target at `path` | `reject_symlink = false` | `reject_symlink = true` |
 |------------------|--------------------------|-------------------------|
 | Missing | allowed | allowed |
 | Regular file | allowed | allowed |
 | **Symlink** | allowed — the link is **replaced**, never followed | **error** |
-| Directory | error (`src/utils/atomic.rs:135-140`) | error |
-| FIFO / socket / device node | error (Unix only, `src/utils/atomic.rs:142-164`) | error |
+| Directory | error (`src/utils/atomic.rs:125-130`) | error |
+| FIFO / socket / device node | error (Unix only, `src/utils/atomic.rs:132-154`) | error |
 
 `reject_symlink` defaults to `true` **only** for `SensitiveConfig`
-(`src/utils/atomic.rs:62`) — i.e. only API-key / credential style files are
+(`src/utils/atomic.rs:55`) — i.e. only API-key / credential style files are
 protected by default.
 
 ---
@@ -321,16 +321,16 @@ protected by default.
 ```rust
 pub fn hash_file(path: &Path) -> SnipResult<String>
 ```
-— `src/utils/atomic.rs:475`
+— `src/utils/atomic.rs:501`
 
 Computes the SHA-256 hex digest of a file by streaming through a `BufReader`
-with an 8 KiB buffer (`src/utils/atomic.rs:480-491`), so arbitrarily large
+with an 8 KiB buffer (`src/utils/atomic.rs:505-508`), so arbitrarily large
 files never require an in-memory copy. `hex_encode`
-(`src/utils/atomic.rs:458-465`) renders the digest as lowercase hex with a
+(`src/utils/atomic.rs:484-491`) renders the digest as lowercase hex with a
 single pre-allocated `String`.
 
 `crate::transaction::hash_file` delegates here
-(`src/transaction.rs:2488-2490`) so the two cannot diverge. The digest is
+(`src/transaction.rs:2142-2144`) so the two cannot diverge. The digest is
 computed **from the live file on disk**, not from a source buffer.
 
 ---
@@ -341,34 +341,34 @@ computed **from the live file on disk**, not from a source buffer.
 
 | Caller | Content | Temp prefix | Source |
 |--------|---------|-------------|--------|
-| `write_library_file` | library file content | caller's | `src/library/persistence.rs:16-20` |
-| `save_library_internal` | `toml::to_string_pretty` of the snippet library | library file stem, else `"snippets"` | `src/library/persistence.rs:327-331` |
-| `save_snippets` | `toml::to_string_pretty` of the config | config file stem, else `"config"` | `src/commands/mod.rs:269-273` |
-| `LibraryManager::save_config` | `toml::to_string_pretty` of `libraries.toml` | `"libraries"` | `src/library/manager.rs:803` |
-| Transaction journals | journal TOML | `"txn"` | `src/transaction.rs:1405`, `:1415` |
+| `write_library_file` | library file content | caller's | `src/library/persistence.rs:17` |
+| `save_library_internal` | `toml::to_string_pretty` of the snippet library | library file stem, else `"snippets"` | `src/library/persistence.rs:368` |
+| `save_snippets` | `toml::to_string_pretty` of the config | config file stem, else `"config"` | `src/commands/mod.rs:330` |
+| `LibraryManager::save_config` | `toml::to_string_pretty` of `libraries.toml` | `"libraries"` | `src/library/manager.rs:899` |
+| Transaction journals | journal TOML | `"txn"` | `src/transaction.rs:1057`, `:1067` |
 | Sync settings | sync settings TOML | `"sync"` | `src/config/sync_settings.rs:496` |
-| Import report | JSON report | `"import-report"` | `src/commands/import_cmd.rs:549` |
-| Backup manifest | manifest TOML | `"manifest"` | `src/commands/backup_archive.rs:318` |
+| Import report | JSON report | `"import-report"` | `src/commands/import_cmd.rs:556` |
+| Backup manifest | manifest TOML | `"manifest"` | `src/commands/backup_archive.rs:324` |
 | Usage index | usage index | `"usage"` | `src/usage.rs:161` |
 
 ### `atomic_replace`
 
 | Caller | Class | Source |
 |--------|-------|--------|
-| Transaction rollback — restore the original file bytes | `DurableUserData` | `src/transaction.rs:2250-2253` |
+| Transaction rollback — restore the original file bytes | `DurableUserData` | `src/transaction.rs:1908` |
 | `snp select --output` — write the selected command | `DurableUserData` | `src/commands/select_cmd.rs:119-123` |
 | Sync recovery marker — record the pending sync intent | `DurableUserData` | `src/sync_commands.rs:58-62` |
-| Restore — install a staged library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:918` |
-| Restore — install a restored non-library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:1408`, `:1471` |
-| Restore — install the restored `sync.toml` | `SensitiveConfig` | `src/commands/restore_cmd.rs:1520` |
+| Restore — install a staged library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:990` |
+| Restore — install a restored non-library file | `SensitiveConfig` / `DurableUserData` (per target) | `src/commands/restore_cmd.rs:1487`, `:1550` |
+| Restore — install the restored `sync.toml` | `SensitiveConfig` | `src/commands/restore_cmd.rs:1599` |
 
 ### `atomic_write_bytes`
 
 | Caller | Class | Source |
 |--------|-------|--------|
-| Theme config save | `SensitiveConfig` | `src/ui/theme.rs:563-567` |
-| Auto-sync status file | `DurableUserData` | `src/auto_sync/status.rs:167-171` |
-| Auto-sync pending marker | `DurableUserData` | `src/auto_sync/pending.rs:390-394` |
+| Theme config save | `SensitiveConfig` | `src/ui/theme.rs:558-562` |
+| Auto-sync status file | `DurableUserData` | `src/auto_sync/status.rs:167-172` |
+| Auto-sync pending marker | `DurableUserData` | `src/auto_sync/pending.rs:390-395` |
 
 > **Gap worth noting.** `RecoverableMetadata` has **no production call sites**
 > today — every production caller uses one of the two durable classes
@@ -397,27 +397,27 @@ computed **from the live file on disk**, not from a source buffer.
 1. **Every write goes through a same-directory temp file and a rename.**
    The temp file is never partially visible at the target path.
 2. **The temp file is `0o600` on Unix for every durability class**
-   (`src/utils/atomic.rs:386`, `:292`).
+   (`src/utils/atomic.rs:409-413`, `:319`).
 3. **`DurableUserData` and `SensitiveConfig` fail closed** when the parent
-   directory cannot be fsynced (`src/utils/atomic.rs:247-253`).
+   directory cannot be fsynced (`src/utils/atomic.rs:248-255`).
 4. **`RecoverableMetadata` never fsyncs the file** and only best-effort
-   fsyncs the directory (`src/utils/atomic.rs:257-264`, `:402-408`).
+   fsyncs the directory (`src/utils/atomic.rs:258-266`, `:428-434`).
 5. **A symlink at the target is replaced, never followed**
-   (`src/utils/atomic.rs:126-131`).
+   (`src/utils/atomic.rs:119-121`).
 6. **`reject_symlink` defaults to `true` only for `SensitiveConfig`**
-   (`src/utils/atomic.rs:62`).
+   (`src/utils/atomic.rs:55`).
 7. **The temp file is cleaned up on every failure path** — see
    [tempfile_guard.md](tempfile_guard.md).
 8. **`hash_file` hashes the live file**, not a source buffer
-   (`src/utils/atomic.rs:467-493`).
+   (`src/utils/atomic.rs:501-519`).
 
 ---
 
 ## Gotchas
 
 - **Do not rely on `Durability` to change the file mode.** It does not — the
-  mode is always `0o600` on Unix (`src/utils/atomic.rs:383-387`). The
-  `Durability` doc comments at `src/utils/atomic.rs:33-39` say otherwise and
+  mode is always `0o600` on Unix (`src/utils/atomic.rs:409-413`). The
+  `Durability` doc comments at `src/utils/atomic.rs:24-34` say otherwise and
   are stale.
 - **Do not use `write_private_atomic` where target validation matters.** It
   never calls `validate_target`; use `atomic_replace` when the target must be
@@ -425,13 +425,13 @@ computed **from the live file on disk**, not from a source buffer.
 - **Do not expect `write_private_atomic` to preserve permissions.** There is
   no `preserve_permissions` path; the target ends up `0o600` on Unix.
 - **Do not expect a parent-directory sync from `write_private_atomic` on
-  Windows.** The call is `#[cfg(unix)]` (`src/utils/atomic.rs:326-327`).
+  Windows.** The call is `#[cfg(unix)]` (`src/utils/atomic.rs:353-354`).
 - **Do not treat an error from `atomic_replace` after the rename as a
   rollback.** The rename is step 9 of 10; the permission restore and the
-  parent-dir sync come after it (`src/utils/atomic.rs:412-434`).
+  parent-dir sync come after it (`src/utils/atomic.rs:438-460`).
 - **Do not enable `SNP_ALLOW_DIR_FSYNC_FAILURE` outside a
   `test-support` build.** The production implementation ignores it entirely
-  (`src/utils/atomic.rs:222-226`).
+  (`src/utils/atomic.rs:210-214`).
 - **Do not match on `Durability` without a wildcard arm.** The enum is
   `#[non_exhaustive]` (`src/utils/atomic.rs:22`).
 - **Do not post-process the written TOML.** The save path writes the

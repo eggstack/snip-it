@@ -123,8 +123,8 @@ snp get --query 'push a branch' --json
 ```
 
 `snp get` exits **3** when nothing matches and **5** when a query matches more
-than one snippet. For machine-readable listings use `snp list --json` or
-`snp list --csv`. The full exit-code table is in
+than one snippet (default `--resolution unique`). For machine-readable listings
+use `snp list --json` or `snp list --csv`. The full exit-code table is in
 [docs/EXIT_CODES.md](docs/EXIT_CODES.md).
 
 ## Libraries
@@ -161,6 +161,7 @@ snp doctor --check-shell bash
 | Self-hosted encrypted sync | `snp register --server <url>` then `snp sync run` | [snip-sync/README.md](snip-sync/README.md) |
 | Auto-sync after local edits | `snp sync config --auto-sync on` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#auto-sync) |
 | Coding agents (MCP) | `snp mcp instructions claude` | [docs/MCP.md](docs/MCP.md) |
+| Delete a snippet without a TUI | `snp delete --query 'push a branch'` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#scripting-with-snp-delete) |
 | Themes | press `e` in the TUI, or edit `themes.toml` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#themes) |
 | Diagnostics | `snp doctor --library <name>` | [docs/USER_GUIDE.md](docs/USER_GUIDE.md#troubleshooting-and-recovery) |
 
@@ -208,7 +209,7 @@ Start with the [docs index](docs/README.md).
 
 Contributors and reviewers should start with
 [architecture/overview.md](architecture/overview.md) — the module map, the
-cross-cutting invariants, and the index of 61 per-component deep dives.
+cross-cutting invariants, and the index of 62 per-component deep dives.
 
 ## License
 

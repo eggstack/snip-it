@@ -630,7 +630,7 @@ flag as a reserved hook, not a live mode.
 4. **The TUI never mutates a snippet and never expands variables itself.**
    Expansion happens in `expand_snippet_command` after the loop exits.
 5. **Deleted snippets are filtered before the TUI sees them**
-   (`src/commands/mod.rs:290`); the selector has no delete-tombstone concept.
+   (`src/commands/mod.rs:376`); the selector has no delete-tombstone concept.
 6. **`SortMode::Command` is initial-only.** Interactive toggles never produce
    it.
 7. **An empty filter recomputes immediately**; non-empty edits debounce at
