@@ -97,6 +97,16 @@ name = "library_manager_contracts"
 path = "tests/library_manager_contracts.rs"
 required-features = ["test-support"]
 
+[[test]]
+name = "diagnostic_vocabulary_agreement"
+path = "tests/diagnostic_vocabulary_agreement.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "diagnostic_output_stability"
+path = "tests/diagnostic_output_stability.rs"
+required-features = ["test-support"]
+
 [package.metadata.docs.rs]
 all-features = false
 default-target = "x86_64-unknown-linux-gnu"

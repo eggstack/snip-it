@@ -20,7 +20,7 @@ the transaction journal, the lock hierarchy, or the TOML fidelity rules — see
 
 | Item | Kind | Line | Role |
 |------|------|------|------|
-| `Durability` | enum | `src/utils/atomic.rs:23` | The four durability classes |
+| `Durability` | enum | `src/utils/atomic.rs:23` | The three durability classes |
 | `AtomicWriteOptions` | struct | `src/utils/atomic.rs:39` | Durability + permission + symlink policy |
 | `AtomicWriteOptions::for_durability` | fn | `src/utils/atomic.rs:54` | Default options for a class |
 | `AtomicWriteOptions::preserve_permissions` | fn | `src/utils/atomic.rs:64` | Builder setter |
@@ -29,8 +29,13 @@ the transaction journal, the lock hierarchy, or the TOML fidelity rules — see
 | `write_private_atomic` | fn | `src/utils/atomic.rs:305` | Simple atomic write of a string |
 | `atomic_replace` | fn | `src/utils/atomic.rs:376` | Durability-aware atomic replace |
 | `atomic_write_bytes` | fn | `src/utils/atomic.rs:474` | Convenience wrapper over `atomic_replace` |
-| `hex_encode` | fn | `src/utils/atomic.rs:484` | Lowercase hex digest encoding |
-| `hash_file` | fn | `src/utils/atomic.rs:501` | Canonical SHA-256 hex digest of a file |
+| `CopySourcePolicy` | enum | `src/utils/atomic.rs` | Source admission: contained or regular-file-only |
+| `CopyOptions` | struct | `src/utils/atomic.rs` | Source policy + durability for copies |
+| `read_copy_source` | fn | `src/utils/atomic.rs` | Admit and read a copy source (symlink/non-regular refused) |
+| `copy_file` | fn | `src/utils/atomic.rs` | Admit source then land via `atomic_replace` |
+| `forensic_copy_aside` | fn | `src/utils/atomic.rs` | Best-effort corrupt-file sibling copy |
+| `hex_encode` | fn | `src/utils/atomic.rs` | Lowercase hex digest encoding |
+| `hash_file` | fn | `src/utils/atomic.rs` | Canonical SHA-256 hex digest of a file |
 
 ---
 

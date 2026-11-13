@@ -395,5 +395,5 @@ and that no unresolved medium-or-higher finding remains.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 non-interactive snippet delete | closed | `plans/implementation/snippet-crud-surface/001-non-interactive-snippet-delete.md` | `plans/closure/snippet-crud-surface/001-status.md` | — |
-| M002 folder and favorite write path | not started | — | — | M001 closed |
+| M002 folder and favorite write path | closed | `plans/implementation/snippet-crud-surface/002-folder-and-favorite-write-path.md` | `plans/closure/snippet-crud-surface/002-status.md` | — |
 | M003 non-interactive field update | not started | — | — | M001 closed |

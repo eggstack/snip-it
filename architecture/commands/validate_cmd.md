@@ -33,18 +33,19 @@ pub struct ValidateArgs {
 ## The diagnostic model
 
 ```rust
-pub enum Severity { Info, Warning, Error }
-
-pub enum Repairability { Auto, Manual, Unrepairable }
+// Shared vocabulary — src/diagnostics.rs
+pub enum DiagnosticSeverity { Info, Warning, Error }
+pub enum DiagnosticRepairability { Auto, Manual, Unrepairable }
+pub struct DiagnosticCode(/* validated String */);
 
 pub struct ValidationDiagnostic {
-    pub code: String,
-    pub severity: Severity,
+    pub code: DiagnosticCode,
+    pub severity: DiagnosticSeverity,
     pub path: Option<PathBuf>,
     pub library: Option<String>,
     pub snippet_id: Option<String>,
     pub message: String,
-    pub repairability: Repairability,
+    pub repairability: DiagnosticRepairability,
 }
 
 pub struct ValidationReport {
@@ -58,9 +59,13 @@ pub struct ValidationReport {
 }
 ```
 
-(`src/commands/validate_cmd.rs:30-68`.) `schema_version` is `"1.0.0"`, `dry_run` is always `true`, and `tool_version` comes from `crate::diagnostics::version()`.
-
-There is **no generic finding DSL** shared with `doctor` or `import`. `validate` owns `Severity` / `Repairability` / `ValidationDiagnostic` / `ValidationReport`; `doctor` and `import` own the separate `DiagnosticSeverity` / `CompatibilityDiagnostic` / `DoctorReport` / `PetImportReport` family in `src/diagnostics.rs`. Each consumer keeps its own semantics; only the *classification inputs* are shared (see [Shared classifiers](#shared-classifiers)).
+`schema_version` is `"1.0.0"`, `dry_run` is always `true`, and `tool_version`
+comes from `crate::diagnostics::version()`. Severity, code, and repairability
+are the shared M003 vocabulary in `src/diagnostics.rs`. `validate` still owns
+`ValidationDiagnostic` / `ValidationReport` (its report envelope); `doctor` /
+`import` keep `CompatibilityDiagnostic` / `DoctorReport`. Classification and
+library enumeration share `LibraryManager::scan_libraries()` → `LibraryScan`
+(see [Shared classifiers](#shared-classifiers)).
 
 ## Check categories
 
@@ -111,7 +116,7 @@ Unix only. Checks `snippets.toml`, `libraries.toml`, `sync.toml`, and `usage.tom
 
 ### 1. Global warning elevation
 
-After all checks run, the following warning codes are rewritten to `Severity::Error` (`validate_cmd.rs:706-719`):
+After all checks run, the following warning codes are rewritten to `DiagnosticSeverity::Error`:
 
 ```rust
 const STRICT_CODES: &[&str] = &[
@@ -134,7 +139,8 @@ Strict mode therefore changes the **exit code**: warnings in the elevated set tu
 
 | Shared input | Used by | Where |
 |---|---|---|
-| `LibraryManager::inspect_library_index()` → `LibraryIndexInspection` (missing files, orphan files, `PrimaryState`) | `validate`, `repair`, `doctor` | `validate_cmd.rs:375`, `repair_cmd.rs:392`, `doctor_cmd.rs:563` |
+| `LibraryManager::scan_libraries()` → `LibraryScan` (sources ∪ missing ∪ orphans ∪ primary) | `validate`, `repair` | `validate_cmd.rs` (full scan); `repair_cmd.rs` (full scan) |
+| `LibraryManager::inspect_library_index()` → `LibraryIndexInspection` (subset: missing/orphan/primary) | `doctor`, `status` | `doctor_cmd.rs` (primary only); status snapshot |
 | `crate::library::find_orphaned_ids(active_ids, usage_ids)` | `validate`, `repair` | `validate_cmd.rs:517`, `repair_cmd.rs:443` |
 | `crate::library::readonly_library_sources(...)` | `validate` | `validate_cmd.rs:677-688`, `:471` |
 
@@ -155,7 +161,8 @@ The second sentence is **aspirational, not actual** — `LibraryManager::new()`
 Concretely, for snippet data:
 
 - Library discovery goes through `crate::library::readonly_library_sources(...)` (`validate_cmd.rs:677-688`), **not** `resolve_selector`. The mutating resolver runs `ensure_library_mode()`, which can migrate and rewrite metadata — using it here would reintroduce recovery side effects into a read-only command.
-- The index cross-check uses `LibraryManager::inspect_library_index()`, a read-only inspection.
+- The index cross-check uses `LibraryManager::scan_libraries()`, a read-only
+  scan that includes index sources and on-disk orphan files.
 - `UsageIndex::load()` is a read.
 - The report declares `dry_run: true` unconditionally (`validate_cmd.rs:76`).
 - The command **never** calls `gate_mutation_on_interrupted_transactions()` and never takes the local-data or transaction lock — it does not mutate, so it needs neither.
@@ -184,8 +191,8 @@ Exit outcome (`validate_cmd.rs:731-736`):
 
 | Condition | Outcome | Exit code |
 |---|---|---|
-| No `Severity::Error` diagnostics | `CliOutcome::Success` | `0` |
-| At least one `Severity::Error` diagnostic | `CliOutcome::ValidationFailed` | `6` (`VALIDATION_FAILED`, `src/outcome.rs:62`) |
+| No `DiagnosticSeverity::Error` diagnostics | `CliOutcome::Success` | `0` |
+| At least one `DiagnosticSeverity::Error` diagnostic | `CliOutcome::ValidationFailed` | `6` (`VALIDATION_FAILED`, `src/outcome.rs:62`) |
 
 Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` into exit `6`.
 
@@ -204,7 +211,8 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 | Path | Role |
 |---|---|
 | `src/commands/validate_cmd.rs` | This command: check implementations, report model, exit mapping. |
-| `src/library/manager.rs` | `LibraryManager::inspect_library_index` — the shared index view. |
+| `src/library/manager.rs` | `LibraryManager::scan_libraries` — the shared library scan. |
+| `src/diagnostics.rs` | Shared `DiagnosticSeverity` / `DiagnosticCode` / `DiagnosticRepairability`. |
 | `src/library/mod.rs` | `readonly_library_sources`, `find_orphaned_ids`. |
 | `src/usage.rs` | `UsageIndex::load` — the usage index read. |
 | `src/commands/repair_cmd.md` | The command that acts on some of these findings. |
@@ -227,5 +235,5 @@ Because `--strict` elevates warnings to errors, `--strict` can turn exit `0` int
 - `W-CORRUPT-BAK` is reported for a **leftover** `.toml.corrupt.bak` file. It is a historical signal, not a live parse failure — the live failure would be `E-TOML-PARSE`.
 - `W-LIB-UNREADABLE` and `W-LIB-INDEX-UNREADABLE` mean the orphan-usage check was **partially or wholly skipped**. The report does not record "check skipped" as a separate flag; the diagnostic *is* the signal.
 - `W-SAME-ID-DIVERGENT` and `W-DUP-CHECK-SKIPPED` are mutually exclusive: if the raw re-parse fails you get the latter instead of the former.
-- `Severity::Error` is what drives exit `6`; `Repairability::Auto` does **not** mean `snp repair --apply` will fix it — see `repair_cmd.md` for the cases where a safe-marked item still fails to apply.
+- `DiagnosticSeverity::Error` is what drives exit `6`; `DiagnosticRepairability::Auto` does **not** mean `snp repair --apply` will fix it — see `repair_cmd.md` for the cases where a safe-marked item still fails to apply.
 - The permission check only looks at **four specific files** in the config directory. Library files under `libraries/` are not permission-checked.

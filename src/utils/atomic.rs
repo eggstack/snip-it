@@ -477,6 +477,116 @@ pub fn atomic_write_bytes(target: &Path, bytes: &[u8], durability: Durability) -
     Ok(())
 }
 
+/// Source-admission policy for the shared configuration/library copy primitive.
+///
+/// Source refusal (symlink / non-regular / outside a containment root) is
+/// implemented here — **not** by flipping [`AtomicWriteOptions::reject_symlink`],
+/// which governs the *destination* and is only the default for
+/// [`Durability::SensitiveConfig`].
+#[derive(Debug, Clone)]
+pub enum CopySourcePolicy {
+    /// Refuse a source that does not canonicalize under `root`.
+    Contained { root: PathBuf },
+    /// Admit any regular file; still refuse symlinks and non-regular files.
+    RegularFileOnly,
+}
+
+/// Options for [`read_copy_source`] / [`copy_file`].
+#[derive(Debug, Clone)]
+pub struct CopyOptions {
+    /// How the source path is admitted.
+    pub source: CopySourcePolicy,
+    /// Durability class applied when landing the copy via [`atomic_replace`].
+    /// Production backup paths use [`Durability::DurableUserData`].
+    pub durability: Durability,
+}
+
+/// Admit and read a configuration/library copy source.
+///
+/// Refusal is decided on the **source** before any bytes are read:
+/// 1. a symlink source is refused (message names the path);
+/// 2. a non-regular file is refused;
+/// 3. under [`CopySourcePolicy::Contained`], a source that does not resolve
+///    under `root` is refused;
+/// 4. otherwise the bytes are read.
+///
+/// Callers that need a consistent multi-file snapshot under a lock should use
+/// this admission half, then land bytes themselves; one-shot copies use
+/// [`copy_file`].
+pub fn read_copy_source(src: &Path, options: &CopyOptions) -> SnipResult<Vec<u8>> {
+    let meta =
+        fs::symlink_metadata(src).map_err(|e| SnipError::io_error("stat copy source", src, e))?;
+    if meta.file_type().is_symlink() {
+        return Err(SnipError::runtime_error(
+            "Copy source is a symlink",
+            Some(&format!(
+                "Refusing to copy symlink {} (could point outside config)",
+                src.display()
+            )),
+        ));
+    }
+    if !meta.is_file() {
+        return Err(SnipError::runtime_error(
+            "Copy source is not a regular file",
+            Some(&format!(
+                "Expected regular file, got {:?}: {}",
+                meta.file_type(),
+                src.display()
+            )),
+        ));
+    }
+
+    if let CopySourcePolicy::Contained { root } = &options.source {
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|e| SnipError::io_error("canonicalize copy root", root.as_path(), e))?;
+        let canonical_src = src
+            .canonicalize()
+            .map_err(|e| SnipError::io_error("canonicalize copy source", src, e))?;
+        if !canonical_src.starts_with(&canonical_root) {
+            return Err(SnipError::runtime_error(
+                "Copy source escapes containment root",
+                Some(&format!(
+                    "{} is not under root ({})",
+                    canonical_src.display(),
+                    canonical_root.display(),
+                )),
+            ));
+        }
+    }
+
+    fs::read(src).map_err(|e| SnipError::io_error("read copy source", src, e))
+}
+
+/// Admit `src` under [`CopyOptions`], then land the bytes at `dst` through
+/// [`atomic_replace`] with `options.durability`.
+///
+/// Production callers pass [`Durability::DurableUserData`] so the file content
+/// and (where supported) the parent directory entry are fsynced.
+pub fn copy_file(src: &Path, dst: &Path, options: &CopyOptions) -> SnipResult<AtomicWriteReport> {
+    let bytes = read_copy_source(src, options)?;
+    let write_opts = AtomicWriteOptions::for_durability(options.durability);
+    atomic_replace(dst, &bytes, &write_opts)
+}
+
+/// Best-effort forensic copy of a corrupt configuration/library file.
+///
+/// Uses [`copy_file`] with [`Durability::DurableUserData`] and containment under
+/// `src`'s parent. Failures (including symlink / non-regular refusal) are
+/// returned so callers can log the reason without changing their fail-open or
+/// fail-closed load policy.
+pub fn forensic_copy_aside(src: &Path, dst: &Path) -> SnipResult<AtomicWriteReport> {
+    let root = src
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let options = CopyOptions {
+        source: CopySourcePolicy::Contained { root },
+        durability: Durability::DurableUserData,
+    };
+    copy_file(src, dst, &options)
+}
+
 /// Encode a digest as lowercase hex without per-byte allocation.
 ///
 /// Pre-allocates the full `2 * digest.len()` capacity and appends with
@@ -715,5 +825,111 @@ mod tests {
             .reject_symlink(false);
         assert!(opts.preserve_permissions);
         assert!(!opts.reject_symlink);
+    }
+
+    fn durable_copy_options(root: &Path) -> CopyOptions {
+        CopyOptions {
+            source: CopySourcePolicy::Contained {
+                root: root.to_path_buf(),
+            },
+            durability: Durability::DurableUserData,
+        }
+    }
+
+    #[test]
+    fn test_copy_file_byte_identical_and_replaces() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        fs::write(&src, b"payload-v1").unwrap();
+        fs::write(&dst, b"old").unwrap();
+        let opts = durable_copy_options(dir.path());
+        let report = copy_file(&src, &dst, &opts).unwrap();
+        assert!(report.target_existed);
+        assert_eq!(fs::read(&dst).unwrap(), b"payload-v1");
+        assert_eq!(report.bytes_written, 10);
+        assert!(report.parent_sync_supported.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_copy_source_refuses_symlink_and_names_path() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real.txt");
+        fs::write(&real, b"secret-outside").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let opts = durable_copy_options(dir.path());
+        let err = read_copy_source(&link, &opts).unwrap_err().to_string();
+        assert!(err.contains("symlink"), "got: {err}");
+        assert!(
+            err.contains(link.display().to_string().as_str()),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_copy_source_refuses_non_regular() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let opts = durable_copy_options(dir.path());
+        let err = read_copy_source(&nested, &opts).unwrap_err().to_string();
+        assert!(err.contains("regular file"), "got: {err}");
+        assert!(
+            err.contains(nested.display().to_string().as_str()),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_copy_source_refuses_outside_root() {
+        let root = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let src = outside.path().join("leak.txt");
+        fs::write(&src, b"leak").unwrap();
+        let opts = durable_copy_options(root.path());
+        let err = read_copy_source(&src, &opts).unwrap_err().to_string();
+        assert!(
+            err.contains("escapes") || err.contains("not under"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_read_copy_source_admits_contained_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("ok.txt");
+        fs::write(&src, b"ok-bytes").unwrap();
+        let opts = durable_copy_options(dir.path());
+        assert_eq!(read_copy_source(&src, &opts).unwrap(), b"ok-bytes");
+    }
+
+    #[test]
+    fn test_read_copy_source_regular_file_only_admits_without_root() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("ok.txt");
+        fs::write(&src, b"ok-bytes").unwrap();
+        let opts = CopyOptions {
+            source: CopySourcePolicy::RegularFileOnly,
+            durability: Durability::DurableUserData,
+        };
+        assert_eq!(read_copy_source(&src, &opts).unwrap(), b"ok-bytes");
+    }
+
+    #[test]
+    fn test_copy_file_claims_durable_user_data() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        fs::write(&src, b"durable").unwrap();
+        let opts = durable_copy_options(dir.path());
+        assert_eq!(opts.durability, Durability::DurableUserData);
+        let report = copy_file(&src, &dst, &opts).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"durable");
+        // DurableUserData probes parent-dir sync support.
+        assert!(report.parent_sync_supported.is_some());
     }
 }

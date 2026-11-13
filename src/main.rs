@@ -202,6 +202,9 @@ enum Commands {
     Get(commands::get_cmd::GetArgs),
     /// Tombstone a snippet deterministically (no TUI, no prompt)
     Delete(commands::delete_cmd::DeleteArgs),
+    /// Set or clear favorite and folder memberships (no TUI)
+    #[command(alias = "o")]
+    Organize(commands::organize_cmd::OrganizeArgs),
     /// Internal: detached auto-sync worker (hidden, invoked by parent after mutation)
     #[command(name = "auto-sync-worker", hide = true)]
     AutoSyncWorker {
@@ -296,6 +299,8 @@ enum DataCommands {
     Status(commands::status_cmd::StatusArgs),
     /// Tombstone a snippet deterministically (no TUI, no prompt)
     Delete(commands::delete_cmd::DeleteArgs),
+    /// Set or clear favorite and folder memberships (no TUI)
+    Organize(commands::organize_cmd::OrganizeArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -476,6 +481,11 @@ fn handle_status(args: commands::status_cmd::StatusArgs) -> SnipResult<CliOutcom
 /// report format, and exit-code mapping for the operation.
 fn handle_delete(args: commands::delete_cmd::DeleteArgs) -> SnipResult<CliOutcome> {
     commands::delete_cmd::run(args)
+}
+
+/// Single-path handler for `organize` (top-level and `data` spellings).
+fn handle_organize(args: commands::organize_cmd::OrganizeArgs) -> SnipResult<CliOutcome> {
+    commands::organize_cmd::run(args)
 }
 
 fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
@@ -889,6 +899,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
             DataCommands::Delete(args) => {
                 return handle_delete(args);
             }
+            DataCommands::Organize(args) => {
+                return handle_organize(args);
+            }
         },
         Some(Commands::Get(args)) => {
             let outcome = commands::get_cmd::run(
@@ -908,6 +921,9 @@ fn dispatch_command(cli: Option<Commands>) -> SnipResult<CliOutcome> {
         }
         Some(Commands::Delete(args)) => {
             return handle_delete(args);
+        }
+        Some(Commands::Organize(args)) => {
+            return handle_organize(args);
         }
         Some(Commands::AutoSyncWorker { state_dir }) => {
             let outcome = snip_it::auto_sync::worker::run(&state_dir);
@@ -996,9 +1012,10 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
                 StartupRecoveryPolicy::SuppressReadOnly,
                 StartupServices::Minimal,
             ),
-            DataCommands::Repair(_) | DataCommands::Restore(_) | DataCommands::Delete(_) => {
-                (StartupRecoveryPolicy::Allow, StartupServices::Logging)
-            }
+            DataCommands::Repair(_)
+            | DataCommands::Restore(_)
+            | DataCommands::Delete(_)
+            | DataCommands::Organize(_) => (StartupRecoveryPolicy::Allow, StartupServices::Logging),
         },
 
         // ── Mutation commands: allow recovery, full logging+audit ───
@@ -1012,6 +1029,7 @@ fn command_behavior(cmd: Option<&Commands>) -> CommandBehavior {
             | Commands::Repair(_)
             | Commands::Restore(_)
             | Commands::Delete(_)
+            | Commands::Organize(_)
             | Commands::Premade { .. }
             | Commands::Library {
                 command:

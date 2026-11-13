@@ -52,7 +52,11 @@ pub mod usage;
 
 // ── Crate-internal ──────────────────────────────────────────────────
 pub(crate) mod clipboard;
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod diagnostics;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod diagnostics;
 pub(crate) mod encryption;
 pub(crate) mod library;
 pub(crate) mod local_data;
@@ -84,6 +88,10 @@ pub use library::{
 pub use utils::atomic::{
     AtomicWriteOptions, AtomicWriteReport, Durability, atomic_replace, write_private_atomic,
 };
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use crate::library::{LibraryManager, LibraryScan, PrimaryState};
 
 /// Per-thread override of the config directory, for tests only.
 ///

@@ -4,8 +4,8 @@ use crate::commands::pet_analysis::{
 };
 use crate::commands::shell_cmd::{self, ShellType};
 use crate::diagnostics::{
-    CompatibilityDiagnostic, DiagnosticSeverity, DoctorReport, NormalizationRecord,
-    diagnostic_counts, version,
+    CompatibilityDiagnostic, DiagnosticCode, DiagnosticSeverity, DoctorReport, NormalizationRecord,
+    diagnostic_code, diagnostic_counts, version,
 };
 use crate::error::{SnipError, SnipResult};
 use crate::library::{LibraryManager, Snippets};
@@ -68,7 +68,7 @@ const STRICT_WARNING_CODES: &[&str] = &[
 /// When `compat_mode` is true, the `CONFIG_LOAD_FAILED` severity is downgraded from Error
 /// to Warning for backward compatibility with `--compatibility` mode.
 fn map_snapshot_diagnostic(d: &StatusDiagnostic, compat_mode: bool) -> CompatibilityDiagnostic {
-    let (code, field) = match d.code.as_str() {
+    let (code_str, field) = match d.code.as_str() {
         "CONFIG_LOAD_FAILED" => (
             "sync.config.load_failed".to_string(),
             "sync_config".to_string(),
@@ -147,6 +147,9 @@ fn map_snapshot_diagnostic(d: &StatusDiagnostic, compat_mode: bool) -> Compatibi
         }
     };
 
+    let code = DiagnosticCode::new(code_str.clone())
+        .unwrap_or_else(|e| panic!("snapshot diagnostic code '{code_str}': {e}"));
+
     CompatibilityDiagnostic {
         code,
         entry_index: None,
@@ -167,7 +170,7 @@ fn append_sync_diagnostics(report: &mut DoctorReport, compat_mode: bool) {
 
     // Always include a summary entry so the report indicates sync was checked.
     report.diagnostics.push(CompatibilityDiagnostic {
-        code: "compat.sync.checked".to_string(),
+        code: diagnostic_code("compat.sync.checked"),
         entry_index: None,
         field: Some("auto_sync".to_string()),
         severity: DiagnosticSeverity::Info,
@@ -240,7 +243,7 @@ fn build_pet_report(
     let sanitized = sanitize_library_name(lib_name);
     if existing_library_names.contains(&sanitized) {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "W-DEST-CONFLICT".to_string(),
+            code: diagnostic_code("W-DEST-CONFLICT"),
             entry_index: None,
             field: Some("destination".to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -389,7 +392,7 @@ fn detect_unsupported_concepts(snippets: &Snippets, report: &mut DoctorReport) {
                 if angle_depth < 0 {
                     // Unmatched closing >
                     report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "W-MALFORMED-VAR".to_string(),
+                        code: diagnostic_code("W-MALFORMED-VAR"),
                         entry_index: Some(i),
                         field: Some("command".to_string()),
                         severity: DiagnosticSeverity::Warning,
@@ -407,7 +410,7 @@ fn detect_unsupported_concepts(snippets: &Snippets, report: &mut DoctorReport) {
         }
         if angle_depth > 0 {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "W-MALFORMED-VAR".to_string(),
+                code: diagnostic_code("W-MALFORMED-VAR"),
                 entry_index: Some(i),
                 field: Some("command".to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -421,7 +424,7 @@ fn detect_unsupported_concepts(snippets: &Snippets, report: &mut DoctorReport) {
         // Check for pet-specific fields that indicate unsupported concepts
         if !pet.folders.is_empty() {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "I-FIELD-FOLDERS".to_string(),
+                code: diagnostic_code("I-FIELD-FOLDERS"),
                 entry_index: Some(i),
                 field: Some("folders".to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -478,7 +481,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
     report.diagnostics.push(CompatibilityDiagnostic {
-        code: "compat.binary_version".to_string(),
+        code: diagnostic_code("compat.binary_version"),
         entry_index: None,
         field: Some("binary".to_string()),
         severity: DiagnosticSeverity::Info,
@@ -495,7 +498,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             .unwrap_or(false);
         if writable {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.config_dir.ok".to_string(),
+                code: diagnostic_code("compat.config_dir.ok"),
                 entry_index: None,
                 field: Some("config_dir".to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -508,7 +511,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             });
         } else {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.config_dir.readonly".to_string(),
+                code: diagnostic_code("compat.config_dir.readonly"),
                 entry_index: None,
                 field: Some("config_dir".to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -519,7 +522,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         }
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.config_dir.missing".to_string(),
+            code: diagnostic_code("compat.config_dir.missing"),
             entry_index: None,
             field: Some("config_dir".to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -533,7 +536,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.libraries_dir.ok".to_string(),
+            code: diagnostic_code("compat.libraries_dir.ok"),
             entry_index: None,
             field: Some("libraries_dir".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -543,7 +546,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.libraries_dir.missing".to_string(),
+            code: diagnostic_code("compat.libraries_dir.missing"),
             entry_index: None,
             field: Some("libraries_dir".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -573,7 +576,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     0
                 };
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "compat.primary_library.ok".to_string(),
+                    code: diagnostic_code("compat.primary_library.ok"),
                     entry_index: None,
                     field: Some("primary_library".to_string()),
                     severity: DiagnosticSeverity::Info,
@@ -585,7 +588,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             crate::library::PrimaryState::NoPrimary { .. }
             | crate::library::PrimaryState::NoLibraries => {
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "compat.primary_library.missing".to_string(),
+                    code: diagnostic_code("compat.primary_library.missing"),
                     entry_index: None,
                     field: Some("primary_library".to_string()),
                     severity: DiagnosticSeverity::Warning,
@@ -599,7 +602,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         },
         Err(e) => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.library_manager.error".to_string(),
+                code: diagnostic_code("compat.library_manager.error"),
                 entry_index: None,
                 field: Some("library_manager".to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -617,7 +620,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             Ok(settings) => {
                 if settings.enabled {
                     report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.sync.enabled".to_string(),
+                        code: diagnostic_code("compat.sync.enabled"),
                         entry_index: None,
                         field: Some("sync".to_string()),
                         severity: DiagnosticSeverity::Info,
@@ -627,7 +630,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     });
                 } else {
                     report.diagnostics.push(CompatibilityDiagnostic {
-                        code: "compat.sync.disabled".to_string(),
+                        code: diagnostic_code("compat.sync.disabled"),
                         entry_index: None,
                         field: Some("sync".to_string()),
                         severity: DiagnosticSeverity::Info,
@@ -639,7 +642,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             }
             Err(e) => {
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: "compat.sync.config_error".to_string(),
+                    code: diagnostic_code("compat.sync.config_error"),
                     entry_index: None,
                     field: Some("sync".to_string()),
                     severity: DiagnosticSeverity::Warning,
@@ -651,7 +654,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         }
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.sync.absent".to_string(),
+            code: diagnostic_code("compat.sync.absent"),
             entry_index: None,
             field: Some("sync".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -673,7 +676,8 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
 
         if found {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell.{shell_name}.ok"),
+                code: DiagnosticCode::new(format!("compat.shell.{shell_name}.ok"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -683,7 +687,8 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             });
         } else {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell.{shell_name}.missing"),
+                code: DiagnosticCode::new(format!("compat.shell.{shell_name}.missing"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -705,7 +710,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
 
     if select_available {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.select.ok".to_string(),
+            code: diagnostic_code("compat.select.ok"),
             entry_index: None,
             field: Some("select".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -715,7 +720,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.select.missing".to_string(),
+            code: diagnostic_code("compat.select.missing"),
             entry_index: None,
             field: Some("select".to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -738,7 +743,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
     let has_editor_flag = new_help.contains("--editor");
 
     report.diagnostics.push(CompatibilityDiagnostic {
-        code: "compat.acquire.command_stdin".to_string(),
+        code: diagnostic_code("compat.acquire.command_stdin"),
         entry_index: None,
         field: Some("acquire".to_string()),
         severity: if has_command_stdin {
@@ -760,7 +765,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
     });
 
     report.diagnostics.push(CompatibilityDiagnostic {
-        code: "compat.acquire.from_file".to_string(),
+        code: diagnostic_code("compat.acquire.from_file"),
         entry_index: None,
         field: Some("acquire".to_string()),
         severity: if has_from_file {
@@ -782,7 +787,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
     });
 
     report.diagnostics.push(CompatibilityDiagnostic {
-        code: "compat.acquire.editor".to_string(),
+        code: diagnostic_code("compat.acquire.editor"),
         entry_index: None,
         field: Some("acquire".to_string()),
         severity: if has_editor_flag {
@@ -815,7 +820,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
 
     if has_choice_support {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.choice_parser.ok".to_string(),
+            code: diagnostic_code("compat.choice_parser.ok"),
             entry_index: None,
             field: Some("choice_parser".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -825,7 +830,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.choice_parser.missing".to_string(),
+            code: diagnostic_code("compat.choice_parser.missing"),
             entry_index: None,
             field: Some("choice_parser".to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -847,7 +852,8 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
 
         if !shell_found {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_syntax.{shell_name}.unavailable"),
+                code: DiagnosticCode::new(format!("compat.shell_syntax.{shell_name}.unavailable"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(format!("shell_syntax_{shell_name}")),
                 severity: DiagnosticSeverity::Info,
@@ -887,7 +893,10 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                 match syntax_check {
                     Ok(status) if status.success() => {
                         report.diagnostics.push(CompatibilityDiagnostic {
-                            code: format!("compat.shell_syntax.{shell_name}.ok"),
+                            code: DiagnosticCode::new(format!(
+                                "compat.shell_syntax.{shell_name}.ok"
+                            ))
+                            .expect("doctor diagnostic code"),
                             entry_index: None,
                             field: Some(format!("shell_syntax_{shell_name}")),
                             severity: DiagnosticSeverity::Info,
@@ -898,7 +907,10 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
                     }
                     _ => {
                         report.diagnostics.push(CompatibilityDiagnostic {
-                            code: format!("compat.shell_syntax.{shell_name}.invalid"),
+                            code: DiagnosticCode::new(format!(
+                                "compat.shell_syntax.{shell_name}.invalid"
+                            ))
+                            .expect("doctor diagnostic code"),
                             entry_index: None,
                             field: Some(format!("shell_syntax_{shell_name}")),
                             severity: DiagnosticSeverity::Warning,
@@ -913,7 +925,10 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             }
             _ => {
                 report.diagnostics.push(CompatibilityDiagnostic {
-                    code: format!("compat.shell_syntax.{shell_name}.init_failed"),
+                    code: DiagnosticCode::new(format!(
+                        "compat.shell_syntax.{shell_name}.init_failed"
+                    ))
+                    .expect("doctor diagnostic code"),
                     entry_index: None,
                     field: Some(format!("shell_syntax_{shell_name}")),
                     severity: DiagnosticSeverity::Warning,
@@ -939,7 +954,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
             (None, None) => unreachable!(),
         };
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.editor.ok".to_string(),
+            code: diagnostic_code("compat.editor.ok"),
             entry_index: None,
             field: Some("editor".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -949,7 +964,7 @@ fn build_compatibility_report(strict: bool) -> SnipResult<DoctorReport> {
         });
     } else {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.editor.unset".to_string(),
+            code: diagnostic_code("compat.editor.unset"),
             entry_index: None,
             field: Some("editor".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -971,7 +986,7 @@ command = "echo ok"
     match pet_parse_test {
         Ok(_) => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.pet_toml.ok".to_string(),
+                code: diagnostic_code("compat.pet_toml.ok"),
                 entry_index: None,
                 field: Some("pet_toml".to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -982,7 +997,7 @@ command = "echo ok"
         }
         Err(e) => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.pet_toml.error".to_string(),
+                code: diagnostic_code("compat.pet_toml.error"),
                 entry_index: None,
                 field: Some("pet_toml".to_string()),
                 severity: DiagnosticSeverity::Error,
@@ -999,7 +1014,7 @@ command = "echo ok"
         let legacy_single_file = PathBuf::from(&home).join(".config/snippets.toml");
         if legacy_single_file.exists() {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.legacy.single_file".to_string(),
+                code: diagnostic_code("compat.legacy.single_file"),
                 entry_index: None,
                 field: Some("legacy".to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -1018,7 +1033,7 @@ command = "echo ok"
         let legacy_config_dir = PathBuf::from(&home).join(".snip-it");
         if legacy_config_dir.exists() {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: "compat.legacy.config_dir".to_string(),
+                code: diagnostic_code("compat.legacy.config_dir"),
                 entry_index: None,
                 field: Some("legacy".to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -1088,7 +1103,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
         "fish" => ShellType::Fish,
         _ => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_init.{shell_name}.unknown"),
+                code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.unknown"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -1123,7 +1139,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
             DiagnosticSeverity::Warning
         };
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: format!("compat.shell_init.{shell_name}.unavailable"),
+            code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.unavailable"))
+                .expect("doctor diagnostic code"),
             entry_index: None,
             field: Some(shell_name.to_string()),
             severity,
@@ -1141,7 +1158,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
         Ok(t) => t,
         Err(e) => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_init.{shell_name}.error"),
+                code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.error"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -1154,7 +1172,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
     };
     if let Err(e) = std::fs::write(tmp.path(), &code) {
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: format!("compat.shell_init.{shell_name}.error"),
+            code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.error"))
+                .expect("doctor diagnostic code"),
             entry_index: None,
             field: Some(shell_name.to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -1184,7 +1203,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
     match output {
         Ok(o) if o.status.success() => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_init.{shell_name}.ok"),
+                code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.ok"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Info,
@@ -1201,7 +1221,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
                 DiagnosticSeverity::Warning
             };
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_init.{shell_name}.invalid"),
+                code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.invalid"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity,
@@ -1212,7 +1233,8 @@ fn check_shell_init(shell_name: &str, report: &mut DoctorReport, strict: bool) {
         }
         Err(e) => {
             report.diagnostics.push(CompatibilityDiagnostic {
-                code: format!("compat.shell_init.{shell_name}.error"),
+                code: DiagnosticCode::new(format!("compat.shell_init.{shell_name}.error"))
+                    .expect("doctor diagnostic code"),
                 entry_index: None,
                 field: Some(shell_name.to_string()),
                 severity: DiagnosticSeverity::Warning,

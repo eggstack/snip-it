@@ -768,61 +768,44 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
         SnipError::io_error("create pre-restore backup dir", backup_base.clone(), e)
     })?;
 
-    /// Copy one file into the snapshot, refusing symlinks and non-regular
-    /// files.
-    ///
-    /// `fs::copy` follows symlinks, so a library file that is a symlink to a
-    /// file outside the config directory would silently copy that target's
-    /// content into the snapshot. The snapshot must only ever contain the
-    /// config's own regular files.
-    fn copy_regular_file(src: &Path, dst: &Path, label: &str) -> SnipResult<bool> {
-        let meta = match fs::symlink_metadata(src) {
-            Ok(meta) => meta,
-            Err(e) => {
-                tracing::warn!(error = %e, path = %src.display(), "skipping unreadable entry during pre-restore backup");
-                return Ok(false);
-            }
-        };
-        if meta.file_type().is_symlink() {
-            tracing::warn!(
-                path = %src.display(),
-                "skipping symlinked entry during pre-restore backup"
-            );
-            return Ok(false);
-        }
-        if !meta.is_file() {
-            tracing::warn!(
-                path = %src.display(),
-                "skipping non-regular entry during pre-restore backup"
-            );
-            return Ok(false);
-        }
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| SnipError::io_error("create backup subdir", parent, e))?;
-        }
-        fs::copy(src, dst)
-            .map_err(|e| SnipError::io_error(&format!("copy {label} to backup"), dst, e))?;
-        Ok(true)
-    }
+    // Source refusal (symlink / non-regular / outside config) is a hard error
+    // that aborts the restore before any live configuration is modified. A
+    // silently incomplete pre-restore backup is not a valid rollback point.
+    let canonical_config = config_dir.canonicalize().map_err(|e| {
+        SnipError::io_error(
+            "canonicalize config directory for pre-restore backup",
+            config_dir,
+            e,
+        )
+    })?;
+    let options = crate::utils::atomic::CopyOptions {
+        source: crate::utils::atomic::CopySourcePolicy::Contained {
+            root: canonical_config,
+        },
+        durability: crate::utils::atomic::Durability::DurableUserData,
+    };
 
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
         for entry in fs::read_dir(&libraries_dir)
             .map_err(|e| SnipError::io_error("read libraries dir", libraries_dir.clone(), e))?
         {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::warn!(error = %e, "skipping unreadable library entry during pre-restore backup");
-                    continue;
-                }
-            };
+            let entry = entry.map_err(|e| {
+                SnipError::io_error(
+                    "read library entry during pre-restore backup",
+                    &libraries_dir,
+                    e,
+                )
+            })?;
             let file_name = entry.file_name();
             let src = entry.path();
             if src.extension().is_some_and(|ext| ext == "toml") {
                 let dst = backup_base.join("libraries").join(&file_name);
-                copy_regular_file(&src, &dst, "library")?;
+                if let Some(parent) = dst.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| SnipError::io_error("create backup subdir", parent, e))?;
+                }
+                crate::utils::atomic::copy_file(&src, &dst, &options)?;
             }
         }
     }
@@ -831,15 +814,11 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
     // cover every file the restore can overwrite: the library index plus the
     // usage index and the sync configuration (both installed in replace
     // mode).
-    for (file_name, label) in [
-        ("libraries.toml", "index"),
-        ("usage.toml", "usage"),
-        ("sync.toml", "sync config"),
-    ] {
+    for file_name in ["libraries.toml", "usage.toml", "sync.toml"] {
         let src = config_dir.join(file_name);
         if src.exists() {
             let dst = backup_base.join(file_name);
-            copy_regular_file(&src, &dst, label)?;
+            crate::utils::atomic::copy_file(&src, &dst, &options)?;
         }
     }
 

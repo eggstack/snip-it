@@ -214,7 +214,7 @@ pub fn load_library(path: &Path) -> SnipResult<Snippets> {
             // Best-effort backup of corrupted file before returning the error.
             // The backup failure must not hide the original parse error.
             let backup_path = path.with_extension("toml.corrupt.bak");
-            if let Err(backup_err) = fs::copy(path, &backup_path) {
+            if let Err(backup_err) = crate::utils::atomic::forensic_copy_aside(path, &backup_path) {
                 tracing::warn!(
                     file = %path.display(),
                     error = %e,
@@ -408,41 +408,22 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     let backup_name = format!("{}.{}.toml.bak", file_stem.to_string_lossy(), timestamp);
     let backup_path = backup_dir.join(backup_name);
 
-    fs::copy(path, &backup_path)
-        .map_err(|e| SnipError::io_error("create backup", backup_path.clone(), e))?;
-
-    // `fs::copy` writes the copy without fsyncing it, so a power loss right
-    // after the save could leave the rollback point truncated. Flush the
-    // backup before the atomic write replaces the original.
-    sync_backup_file(&backup_path);
+    // Contain the source under the libraries directory (or whatever parent
+    // owns this library file). Symlink / non-regular / escaped sources are
+    // refused by the shared copy primitive; durability is DurableUserData.
+    let copy_root = path.parent().map(Path::to_path_buf).ok_or_else(|| {
+        SnipError::runtime_error(
+            "backup path has no parent",
+            Some(&path.display().to_string()),
+        )
+    })?;
+    let options = crate::utils::atomic::CopyOptions {
+        source: crate::utils::atomic::CopySourcePolicy::Contained { root: copy_root },
+        durability: crate::utils::atomic::Durability::DurableUserData,
+    };
+    crate::utils::atomic::copy_file(path, &backup_path, &options)?;
 
     Ok(Some(backup_path))
-}
-
-/// Flush a freshly copied backup to disk.
-///
-/// `fs::copy` does not fsync the destination. The flush is best-effort: a
-/// backup that cannot be synced is still a usable rollback point, so the
-/// failure is logged rather than propagated to the caller.
-fn sync_backup_file(path: &Path) {
-    match fs::OpenOptions::new().write(true).open(path) {
-        Ok(file) => {
-            if let Err(e) = file.sync_all() {
-                tracing::warn!(
-                    backup = %path.display(),
-                    error = %e,
-                    "Failed to fsync backup file"
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                backup = %path.display(),
-                error = %e,
-                "Failed to open backup file for fsync"
-            );
-        }
-    }
 }
 
 /// Returns `true` when `name` is a backup file that belongs to `file_stem`.

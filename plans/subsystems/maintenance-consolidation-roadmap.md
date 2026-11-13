@@ -1,6 +1,6 @@
 # Maintenance and Duplicate-Policy Consolidation Roadmap
 
-Status: active
+Status: closed
 
 > **2026-10-22 — M001 closed.** The milestone's implementation plan
 > (`plans/implementation/maintenance-consolidation/001-dead-subsystem-removal-and-doc-reconciliation.md`)
@@ -385,5 +385,5 @@ library scan, and that no unresolved medium-or-higher finding remains.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 dead subsystem removal + doc reconciliation | closed | `plans/implementation/maintenance-consolidation/001-dead-subsystem-removal-and-doc-reconciliation.md` | `plans/closure/maintenance-consolidation/001-status.md` | — |
-| M002 backup and snapshot policy convergence | not started | — | — | M001 closed |
-| M003 diagnostic vocabulary unification | not started | — | — | — |
+| M002 backup and snapshot policy convergence | closed | `plans/implementation/maintenance-consolidation/002-backup-and-snapshot-policy-convergence.md` | `plans/closure/maintenance-consolidation/002-status.md` | — |
+| M003 diagnostic vocabulary unification | closed | `plans/implementation/maintenance-consolidation/003-diagnostic-vocabulary-unification.md` | `plans/closure/maintenance-consolidation/003-status.md` | — |

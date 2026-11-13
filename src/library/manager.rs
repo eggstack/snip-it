@@ -5,8 +5,8 @@
 
 use super::model::validate_library_name;
 use super::model::{
-    LibraryConfig, LibraryIndexInspection, LibraryMeta, PrimaryState, ResolvedLibrarySource,
-    SequenceCursor, SyncCursorKind, library_not_found,
+    LibraryConfig, LibraryIndexInspection, LibraryMeta, LibraryScan, PrimaryState,
+    ResolvedLibrarySource, SequenceCursor, SyncCursorKind, library_not_found,
 };
 use super::persistence::write_library_file;
 use crate::config::{cached_read_toml, invalidate_toml_cache};
@@ -60,7 +60,9 @@ impl LibraryManager {
                 Err(e) => {
                     // Best-effort backup of corrupted file before returning the error.
                     let backup = config_path.with_extension("toml.corrupt");
-                    if let Err(copy_err) = fs::copy(&config_path, &backup) {
+                    if let Err(copy_err) =
+                        crate::utils::atomic::forensic_copy_aside(&config_path, &backup)
+                    {
                         tracing::warn!(
                             config = %config_path.display(),
                             error = %e,
@@ -97,7 +99,7 @@ impl LibraryManager {
     ///
     /// This is useful for tests that need an isolated config dir without
     /// mutating process-wide environment variables.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_config_dir(config_dir: PathBuf) -> SnipResult<Self> {
         let libraries_dir = config_dir.join("libraries");
         let premade_dir = config_dir.join("premade");
@@ -110,7 +112,9 @@ impl LibraryManager {
                 Ok(c) => c,
                 Err(e) => {
                     let backup = config_path.with_extension("toml.corrupt");
-                    if let Err(copy_err) = fs::copy(&config_path, &backup) {
+                    if let Err(copy_err) =
+                        crate::utils::atomic::forensic_copy_aside(&config_path, &backup)
+                    {
                         tracing::warn!(
                             error = %e,
                             backup_error = %copy_err,
@@ -341,7 +345,28 @@ impl LibraryManager {
     /// index entry, and the current primary-library state. Callers render
     /// the result into their own diagnostic types; this function performs
     /// no I/O beyond existence checks and directory listing.
+    /// Shared side-effect-free scan for diagnostic surfaces.
+    pub fn scan_libraries(&self) -> SnipResult<LibraryScan> {
+        let sources = self.resolve_readonly_sources(Some("all"))?;
+        let (missing_files, orphan_files, primary) = self.library_index_disk_view();
+        Ok(LibraryScan {
+            sources,
+            missing_files,
+            orphan_files,
+            primary,
+        })
+    }
+
     pub fn inspect_library_index(&self) -> LibraryIndexInspection {
+        let (missing_files, orphan_files, primary) = self.library_index_disk_view();
+        LibraryIndexInspection {
+            missing_files,
+            orphan_files,
+            primary,
+        }
+    }
+
+    fn library_index_disk_view(&self) -> (Vec<(String, PathBuf)>, Vec<PathBuf>, PrimaryState) {
         let mut missing_files = Vec::new();
         for meta in &self.config.libraries {
             let path = self.libraries_dir.join(format!("{}.toml", meta.filename));
@@ -396,11 +421,7 @@ impl LibraryManager {
             }
         };
 
-        LibraryIndexInspection {
-            missing_files,
-            orphan_files,
-            primary,
-        }
+        (missing_files, orphan_files, primary)
     }
 
     /// Creates a new snippet library file and registers it in the config.
