@@ -39,6 +39,7 @@ snippet can exit with a code other than 8 — see
 | `snp list` | `l` | List snippets. Never executes anything. `--json` / `--csv` for machine output. |
 | `snp get` | — | Retrieve one snippet deterministically. No TUI, no execution. The scripting entry point. |
 | `snp delete` | — | Tombstone one snippet deterministically. No TUI, no prompt. |
+| `snp organize` | `o` | Set or clear `favorite` and add or remove folder memberships. No TUI. |
 | `snp run` | `r` | Pick a snippet in the TUI and execute it through your shell. |
 | `snp clip` | `c` | Pick a snippet in the TUI and copy it to the clipboard. |
 | `snp search` | `s` | Fuzzy-search snippets in the TUI. |
@@ -120,6 +121,24 @@ one library file. `--json` emits the machine-readable result.
 The delete is a tombstone, not a removal: the snippet keeps its identifier and
 its `updated_at` advances past the live version, so the tombstone still syncs
 and still wins over live content in a merge.
+
+## Organizing snippets (`favorite` and `folders`)
+
+`snp organize` updates local-only organization fields on one snippet. It uses
+the same selector contract as `snp delete` and the same ambiguity and not-found
+rules.
+
+| Flag | Effect |
+|------|--------|
+| `--favorite` | Set `favorite = true`. |
+| `--unfavorite` | Set `favorite = false`. |
+| `--add-folder <NAME>` | Append a folder membership (non-empty, no `;`). |
+| `--remove-folder <NAME>` | Remove a folder membership. |
+
+Exactly one selector and exactly one action flag are required.
+`--library all` is refused. `--json` emits
+`{schema, status, id, description, library, favorite, folders}` where
+`status` is `updated` or `unchanged` (both exit 0).
 
 ## Libraries
 
@@ -218,6 +237,7 @@ spellings stay equivalent.
 | `snp data repair` | `snp repair` |
 | `snp data status` | `snp status` |
 | `snp data delete` | `snp delete` |
+| `snp data organize` | `snp organize` |
 
 ## Self-update
 

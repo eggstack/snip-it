@@ -218,6 +218,35 @@ pub struct LibraryIndexInspection {
     pub primary: PrimaryState,
 }
 
+/// Side-effect-free library scan shared by `validate`, `doctor`, and `repair`.
+///
+/// Performs exactly one directory listing under `libraries/` and combines
+/// index-driven sources with on-disk orphan files.
+#[derive(Debug, Clone)]
+pub struct LibraryScan {
+    /// Index-driven library sources (`resolve_readonly_sources(Some("all"))`).
+    pub sources: Vec<ResolvedLibrarySource>,
+    /// Index entries whose library file does not exist.
+    pub missing_files: Vec<(String, PathBuf)>,
+    /// Library files on disk with no index entry.
+    pub orphan_files: Vec<PathBuf>,
+    /// Current primary-library state.
+    pub primary: PrimaryState,
+}
+
+impl LibraryScan {
+    /// Every `*.toml` library file on disk (indexed paths plus orphans).
+    pub fn disk_library_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.sources.iter().map(|s| s.path.clone()).collect();
+        for orphan in &self.orphan_files {
+            if !paths.iter().any(|p| p == orphan) {
+                paths.push(orphan.clone());
+            }
+        }
+        paths
+    }
+}
+
 /// Canonical missing-library error.
 ///
 /// All read-only source resolution paths use this constructor so "library

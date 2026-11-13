@@ -20,6 +20,7 @@
 | `edit` | Yes (`$EDITOR`) or No (`--output`) | Yes (`--output-stdin`) | No | Yes | Yes (`$EDITOR`) | Yes | No | Yes (`$EDITOR`) | No | None | 0, 1, 2, 3, 5 |
 | `get` | No | No | Yes | Yes | No | No | No | No | No | `--json`, `--raw`, `--field` | 0, 1, 2, 3, 5 |
 | `delete` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 2, 3, 5, 9 |
+| `organize` | No | No | Yes | Yes | No | Yes | No | No | No | `--json` | 0, 1, 2, 3, 5 |
 | `status` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1 |
 | `validate` | No | No | Yes | Yes | No | No | No | No | No | `--json` | 0, 1, 6 |
 | `doctor` | No | No | Yes | Yes | No | No | No | Yes (diagnostic probes) | No | `--report json` | 0, 1, 6 |
@@ -41,7 +42,7 @@
 | `data` | — | — | — | — | — | — | — | — | — | — | — |
 
 `snp data <subcommand>` is a **mirror spelling** of the top-level commands
-(`validate`, `status`, `backup`, `restore`, `repair`, `delete`); it has no
+(`validate`, `status`, `backup`, `restore`, `repair`, `delete`, `organize`); it has no
 independent contract. `auto-sync-worker` and `__self-replace` are internal/replace
 subprocesses and are not user-facing contracts.
 
@@ -98,7 +99,7 @@ spellings and is classified in the same table.
 |--------|----------|
 | `SuppressReadOnly` (also `StartupServices::Minimal`) | `version`, `list`, `select`, `status`, `mcp`, `get`, `validate`, `backup`, `library list`, `library show` |
 | `SuppressReadOnly` (dry-run variants only) | `restore --mode dry-run`, `repair --dry-run`, `import pet --dry-run` — plus `snp data restore --mode dry-run` and `snp data repair --dry-run` (there is no `snp data import`) |
-| `Allow` (also `StartupServices::Logging`) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `delete`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
+| `Allow` (also `StartupServices::Logging`) | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `delete`, `organize`, `premade`, `library create`, `library delete`, `library set-primary`; also **no subcommand** (default TUI) |
 | `SuppressExplicitSync` | `sync`, `cron`, `register` |
 | `SuppressInternal` | `auto-sync-worker` (internal subprocess) |
 | `SuppressConfiguration` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` |
@@ -121,6 +122,6 @@ Dry-run variants are classified by their **flag**, not by their command category
 - **`ExecutionFailed`** exit code: if the child process had a valid exit code, that code is propagated; otherwise exit code 8 is used.
 - **`PersistenceFailed`** maps to exit code 1 (general error) — no dedicated public exit code for persistence failures.
 - **Exit 4 (cancelled)** comes only from `snp select`. `run`, `clip`, and `search` treat a cancelled TUI selection as normal completion (exit 0).
-- **Exit 5 (ambiguous)** comes only from the exact-selector paths: `run`, `clip`, and `edit` with `--id` / `--description-exact` / `--command-exact`, and from `snp get` and `snp delete`. The interactive TUI resolves ambiguity in-terminal instead.
+- **Exit 5 (ambiguous)** comes only from the exact-selector paths: `run`, `clip`, and `edit` with `--id` / `--description-exact` / `--command-exact`, and from `snp get`, `snp delete`, and `snp organize`. The interactive TUI resolves ambiguity in-terminal instead.
 - **Exit 6 (validation failure)** comes from `snp validate`, `snp doctor`, and `snp sync discard-pending` (corrupt pending state). Exit **9 (conflict/refused)** comes from `snp sync discard-pending` and from `snp delete` (the target is already tombstoned).
 - **Exit 7 (sync failure)** is reserved but currently unreachable — no command constructs `CliOutcome::SyncFailed`; sync failures surface as exit 1.

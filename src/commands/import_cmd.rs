@@ -372,7 +372,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                         "Same command as existing '{}' but different description",
                                         existing_snippet.description
                                     ),
-                                    code: "W-DUP-CMD".to_string(),
+                                    code: crate::diagnostics::diagnostic_code("W-DUP-CMD"),
                                     suggestion: None,
                                     span: None,
                                 });
@@ -385,7 +385,7 @@ pub fn run_import_pet(options: PetImportOptions) -> SnipResult<()> {
                                     message:
                                         "Same description as existing entry but different command"
                                             .to_string(),
-                                    code: "W-DUP-DESC".to_string(),
+                                    code: crate::diagnostics::diagnostic_code("W-DUP-DESC"),
                                     suggestion: None,
                                     span: None,
                                 });

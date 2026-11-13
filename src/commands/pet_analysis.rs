@@ -1,4 +1,6 @@
-use crate::diagnostics::{CompatibilityDiagnostic, DiagnosticSeverity, ImportDuplicate};
+use crate::diagnostics::{
+    CompatibilityDiagnostic, DiagnosticSeverity, ImportDuplicate, diagnostic_code,
+};
 use crate::error::{SnipError, SnipResult};
 use crate::library::Snippet;
 use crate::library::Snippets;
@@ -149,7 +151,7 @@ pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
                     };
                     if actual_type != expected_type {
                         diagnostics.push(CompatibilityDiagnostic {
-                            code: "W-TYPE-MISMATCH".to_string(),
+                            code: diagnostic_code("W-TYPE-MISMATCH"),
                             entry_index: Some(i),
                             field: Some(key.clone()),
                             severity: DiagnosticSeverity::Warning,
@@ -164,7 +166,7 @@ pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
                 }
             } else {
                 diagnostics.push(CompatibilityDiagnostic {
-                    code: "I-FIELD-UNKNOWN".to_string(),
+                    code: diagnostic_code("I-FIELD-UNKNOWN"),
                     entry_index: Some(i),
                     field: Some(key.clone()),
                     severity: DiagnosticSeverity::Info,
@@ -180,7 +182,7 @@ pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("name")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                code: "W-DESC-MISSING".to_string(),
+                code: diagnostic_code("W-DESC-MISSING"),
                 entry_index: Some(i),
                 field: Some("description".to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -195,7 +197,7 @@ pub fn detect_unknown_fields(raw_toml: &str) -> Vec<CompatibilityDiagnostic> {
             && !table.contains_key("cmd")
         {
             diagnostics.push(CompatibilityDiagnostic {
-                code: "W-CMD-MISSING".to_string(),
+                code: diagnostic_code("W-CMD-MISSING"),
                 entry_index: Some(i),
                 field: Some("command".to_string()),
                 severity: DiagnosticSeverity::Warning,
@@ -215,7 +217,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
 
     if pet.description.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "W-DESC-EMPTY".to_string(),
+            code: diagnostic_code("W-DESC-EMPTY"),
             entry_index: Some(index),
             field: Some("description".to_string()),
             severity: DiagnosticSeverity::Warning,
@@ -227,7 +229,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
 
     if pet.command.trim().is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "E-CMD-EMPTY".to_string(),
+            code: diagnostic_code("E-CMD-EMPTY"),
             entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Error,
@@ -239,7 +241,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
 
     if !pet.output.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "I-OUTPUT-PRESENT".to_string(),
+            code: diagnostic_code("I-OUTPUT-PRESENT"),
             entry_index: Some(index),
             field: Some("output".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -251,7 +253,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
 
     if pet.tags.is_empty() {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "I-TAGS-EMPTY".to_string(),
+            code: diagnostic_code("I-TAGS-EMPTY"),
             entry_index: Some(index),
             field: Some("tag".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -263,7 +265,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
         for (j, tag) in pet.tags.iter().enumerate() {
             if tag.trim().is_empty() {
                 diagnostics.push(CompatibilityDiagnostic {
-                    code: "W-TAG-EMPTY".to_string(),
+                    code: diagnostic_code("W-TAG-EMPTY"),
                     entry_index: Some(index),
                     field: Some("tag".to_string()),
                     severity: DiagnosticSeverity::Warning,
@@ -283,7 +285,7 @@ pub fn analyze_entry(index: usize, pet: &Snippet) -> Vec<CompatibilityDiagnostic
         )
     }) {
         diagnostics.push(CompatibilityDiagnostic {
-            code: "I-CHOICE-VARS".to_string(),
+            code: diagnostic_code("I-CHOICE-VARS"),
             entry_index: Some(index),
             field: Some("command".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -332,7 +334,7 @@ pub fn detect_duplicates(
                 });
             } else if same_command_different_description(&snippets[i], &snippets[j]) {
                 diagnostics.push(CompatibilityDiagnostic {
-                    code: "W-DUP-CMD".to_string(),
+                    code: diagnostic_code("W-DUP-CMD"),
                     entry_index: Some(i),
                     field: Some("command".to_string()),
                     severity: DiagnosticSeverity::Warning,
@@ -345,7 +347,7 @@ pub fn detect_duplicates(
                 });
             } else if same_description_different_command(&snippets[i], &snippets[j]) {
                 diagnostics.push(CompatibilityDiagnostic {
-                    code: "W-DUP-DESC".to_string(),
+                    code: diagnostic_code("W-DUP-DESC"),
                     entry_index: Some(i),
                     field: Some("description".to_string()),
                     severity: DiagnosticSeverity::Warning,

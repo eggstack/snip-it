@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`snp organize` — non-interactive folder and favorite updates.** A shared
+  `update_snippet_fields` primitive mirrors the M001 delete sequence for the
+  local-only `folders` and `favorite` fields. `snp organize` (alias `o`) and
+  `snp data organize` resolve one target through the mutating selector, support
+  `--favorite`, `--unfavorite`, `--add-folder`, and `--remove-folder`, and emit
+  `--json` with `status` `updated` or `unchanged`.
+
+### Changed
+
+- **Shared diagnostic vocabulary and library scan (behavior-preserving).**
+  `validate`, `doctor`, and `repair` now share `DiagnosticSeverity`,
+  `DiagnosticCode`, and `DiagnosticRepairability` in `src/diagnostics.rs`, plus
+  `LibraryManager::scan_libraries()` for side-effect-free discovery. No diagnostic
+  code, message, exit code, or JSON output shape changed.
+- **Shared backup copy policy.** Every snapshot, backup, and rollback-point path
+  now uses one copy primitive in `src/utils/atomic.rs`: symlink sources,
+  non-regular sources, and sources that resolve outside the configuration
+  directory are refused (the refusal names the path), and produced material is
+  fsynced under `Durability::DurableUserData`.
+- **`snp repair --apply` refuses unsafe backup sources.** When the configuration
+  directory contains a symlinked or non-regular library file, repair fails with
+  exit code 1 before applying any fix, instead of silently copying the symlink
+  target into the pre-repair backup.
+- **`snp restore` refuses unsafe pre-restore sources.** A symlinked or
+  non-regular library file aborts the restore before any live configuration is
+  modified (exit code 1), instead of skipping that entry with a warning.
+- **Pre-repair backups are restorable.** `snp repair --apply` now writes a
+  `manifest.toml` through the same writer as `snp backup`, so the repair backup
+  directory is a valid `snp restore` input.
+
 ## [1.4.1] - 2026-10-25
 
 ### Added

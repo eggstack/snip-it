@@ -124,6 +124,27 @@ snippet ID. Within a single library the two orders coincide.
 
 ---
 
+## `organize --json`
+
+```json
+{
+  "schema": 1,
+  "status": "updated",
+  "id": "string",
+  "description": "string",
+  "library": "string",
+  "favorite": true,
+  "folders": ["string"]
+}
+```
+
+- `status` is `updated` when this run changed the snippet and `unchanged` when
+  the requested end state already held (both exit 0).
+- `library` is the library filename stem.
+- The document is written to stdout only when a target was identified. A
+  not-found target (exit 3) and an ambiguous selector (exit 5) produce no
+  stdout document; diagnostics go to stderr.
+
 ## `delete --json`
 
 ```json

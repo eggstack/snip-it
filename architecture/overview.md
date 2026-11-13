@@ -252,6 +252,7 @@ functions in `main.rs` keep both spellings identical.
 | Select | `src/commands/select_cmd.rs` | non-executing selection for shell integration | [commands/select_cmd.md](commands/select_cmd.md) |
 | Get | `src/commands/get_cmd.rs` | deterministic non-TUI retrieval | [commands/get_cmd.md](commands/get_cmd.md) |
 | Delete | `src/commands/delete_cmd.rs` | deterministic non-TUI snippet delete | [commands/delete_cmd.md](commands/delete_cmd.md) |
+| Organize | `src/commands/organize_cmd.rs` | folder and favorite write path | [commands/organize_cmd.md](commands/organize_cmd.md) |
 | Validate | `src/commands/validate_cmd.rs` | read-only data validation | [commands/validate_cmd.md](commands/validate_cmd.md) |
 | Repair | `src/commands/repair_cmd.rs` | conservative, backed-up, idempotent repair | [commands/repair_cmd.md](commands/repair_cmd.md) |
 | Restore | `src/commands/restore_cmd.rs` | restore from a backup snapshot | [commands/restore_cmd.md](commands/restore_cmd.md) |
@@ -873,6 +874,7 @@ touching, then the "Gotchas" section at its end — that is where the traps live
 | [commands/list_cmd.md](commands/list_cmd.md) | Text-based snippet listing |
 | [commands/get_cmd.md](commands/get_cmd.md) | Deterministic non-TUI retrieval |
 | [commands/delete_cmd.md](commands/delete_cmd.md) | Deterministic non-TUI snippet delete |
+| [commands/organize_cmd.md](commands/organize_cmd.md) | Folder and favorite write path |
 | [commands/search_cmd.md](commands/search_cmd.md) | Fuzzy search with detail display |
 | [commands/select_cmd.md](commands/select_cmd.md) | Non-executing selection |
 | [commands/run_cmd.md](commands/run_cmd.md) | TUI selection + shell execution |

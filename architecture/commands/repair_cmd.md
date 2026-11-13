@@ -82,7 +82,7 @@ pub enum RepairAction {
 | `config` | `LibraryManager::new()` failed, or a library file failed to parse (`repair_cmd.rs:271-283`, `:373-385`) | `false` | Reported, never auto-applied. |
 | `ids` | snippet with empty ID, or duplicate ID across libraries (`:324-352`) | `false` | Reported only — `apply_repair` cannot execute `RepairSnippetIds` either, see [Gotchas](#gotchas). |
 | `timestamps` | `created_at == 0` or `updated_at == 0` (`:355-371`) | `false` | Same caveat as `ids`. |
-| `primary` | primary library missing its file, or no primary set (`:392-432`) | `false` | Uses the shared `LibraryManager::inspect_library_index()` so `repair` and `validate` classify the primary state identically. |
+| `primary` | primary library missing its file, or no primary set | `false` | Uses the shared `LibraryManager::scan_libraries()` so `repair` and `validate` classify the primary state identically. |
 | `usage` | orphaned usage entries (`:444-453`) | `true` | Count comes from `crate::library::find_orphaned_ids`, the same classifier `validate` uses. |
 | `transaction` | interrupted or legacy journals (`:461-588`) | `true` | Recovered via `crate::transaction::recover_transaction_by_id`. |
 | `unsafe` | corrupt journals, unsafe artifacts, `Failed` transactions (`:466-481`, `:487-505`, `:535-552`) | `false` | Reported only; the operator must inspect the journal and artifacts manually. |
@@ -134,9 +134,11 @@ The report is emitted **exactly once**, after all work is complete, so JSON coun
   usage.toml          # copy of the usage index
 ```
 
-The backup is a **plain recursive copy** (`copy_dir_recursive`, `:908-926`) — not a manifest-backed `snp backup` snapshot, and not a transaction. It is therefore **not** restorable by `snp restore` (which requires a `manifest.toml`); it is a manual escape hatch.
-
-Note that `libraries.toml` and `usage.toml` copies use `let _ = fs::copy(...)` — a **copy failure is silently ignored** (`:895`, `:901`).
+The backup is a **manifest-backed snapshot** written through the same
+`atomic_write_backup` path as `snp backup`, using the shared
+`read_copy_source` / `copy_file` admission half. Symlink, non-regular, and
+out-of-root sources fail the repair before any mutation. The directory name
+keeps the `repair-<timestamp>-<uuid>` shape and is restorable by `snp restore`.
 
 ## `apply_repair` — what each action actually does
 
@@ -218,7 +220,7 @@ pub enum RepairExitStatus {
 |---|---|
 | `src/commands/repair_cmd.rs` | This command: item collection, apply logic, backup, report, exit status. |
 | `src/transaction.rs` | `scan_transaction_journals`, `classify_journal_recovery`, `recover_transaction_by_id`. |
-| `src/library/manager.rs` | `inspect_library_index` — the shared primary-state classifier. |
+| `src/library/manager.rs` | `scan_libraries` — the shared library scan (sources ∪ orphans ∪ primary). |
 | `src/library/persistence.rs` | `find_orphaned_ids` / usage classifier used for the orphan count. |
 | `src/usage.rs` | `UsageIndex` load / prune / save. |
 | `architecture/persistence.md` | Journal states, recovery classes, lock hierarchy. |
@@ -230,7 +232,12 @@ pub enum RepairExitStatus {
 - The report is emitted exactly once, after all work completes.
 - A pre-repair backup of `libraries/`, `libraries.toml`, and `usage.toml` is taken before any repair is applied.
 - Orphaned artifact deletion is containment-checked against `<config>/.transaction/artifacts/` and rejects symlinks (`repair_cmd.rs:688-708`).
-- Primary-state and orphan-usage classification are **shared** with `validate` and `doctor` via `inspect_library_index` and `find_orphaned_ids`, so the three commands never disagree about what "orphaned" or "no primary" means.
+- Primary-state and orphan-usage classification are **shared** with `validate`
+  and `doctor` via `scan_libraries` / `inspect_library_index` and
+  `find_orphaned_ids`, so the three commands never disagree about what
+  "orphaned" or "no primary" means. Repair also carries internal
+  `DiagnosticSeverity` / `DiagnosticCode` / `DiagnosticRepairability` on each
+  item while preserving the existing JSON `category` / `safe` envelope.
 - The exit code distinguishes "found unsafe work" (`10`) from "usage error" (`2`) and from "some repairs failed" (`1`).
 
 ## Gotchas
@@ -240,7 +247,7 @@ pub enum RepairExitStatus {
 - The `safe` **field on the item** is what `--apply` filters on (`repair_cmd.rs:200`); `RepairAction::is_safe()` is a separate, unused helper (`:98-110`). Do not assume the enum method drives the filter.
 - **`FindingsSafe` is not `UnsafeOnly`.** A report-only run whose findings are all safe exits `0` with `FindingsSafe`; only a run that finds at least one unsafe finding exits `10` (`repair_cmd.rs:243-252`, `src/main.rs:401-414`).
 - `snp repair` does **not** hold the local-data lock for the whole run, and it takes no transaction lock for the non-transaction actions. It can therefore run concurrently with a `snp backup` snapshot; only the individual actions take their own locks.
-- The pre-repair backup is **not** a `snp backup` snapshot: it has no `manifest.toml` and cannot be restored with `snp restore`.
-- `libraries.toml` / `usage.toml` copy failures in the pre-repair backup are swallowed (`repair_cmd.rs:895`, `:901`).
+- The pre-repair backup carries a `manifest.toml` and is restorable by `snp restore`.
+- Symlink / non-regular / escaped sources refuse the repair with exit code 1 before any fix is applied.
 - `--library` restricts only the **library-level** checks. Transaction and orphan-artifact repairs always run against the whole transaction directory.
 - A corrupt journal is reported as `unsafe` with the fix "Requires manual quarantine or deletion" (`repair_cmd.rs:466-481`) — repair will not delete a corrupt journal for you.

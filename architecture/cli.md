@@ -229,13 +229,13 @@ Routing facts worth auditing:
 - **Top-level and `data` spellings share one code path.** `handle_validate`
   (`src/main.rs:432`), `handle_backup` (`src/main.rs:437`), `handle_restore`
   (`src/main.rs:449`), `handle_repair` (`src/main.rs:458`), `handle_status`
-  (`src/main.rs:465`), and `handle_delete` (`src/main.rs:477`) are the only
-  implementations; `Commands::Validate`
+  (`src/main.rs:465`), `handle_delete` (`src/main.rs:477`), and
+  `handle_organize` are the only implementations; `Commands::Validate`
   (`src/main.rs:845-847`), `Commands::Backup` (`src/main.rs:848-850`),
   `Commands::Restore` (`src/main.rs:851-853`), `Commands::Repair`
   (`src/main.rs:842-844`), `Commands::Status` (`src/main.rs:854-856`),
   `Commands::Delete` (`src/main.rs:909-911`) and all
-  six `DataCommands` arms (`src/main.rs:862-892`) call them.
+  seven `DataCommands` arms call them (including `organize`).
 - **Commands that own their outcome return it directly** instead of falling
   through to the `Ok(CliOutcome::Success)` tail at `src/main.rs:907`:
   `select` (`src/main.rs:632-639`), `doctor` (`src/main.rs:794-806`),
@@ -249,7 +249,8 @@ Routing facts worth auditing:
 ### Canonical `*Args` structs
 
 One canonical Clap `*Args` struct lives beside each handler — `ValidateArgs`,
-`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, `DeleteArgs`, plus
+`BackupArgs`, `RestoreArgs`, `RepairArgs`, `StatusArgs`, `DeleteArgs`,
+`OrganizeArgs`, plus
 `NewArgs`, `ListArgs`, `RunArgs`, `ClipArgs`, `SearchArgs`, `SelectArgs`,
 `EditArgs`, `GetArgs`, `DoctorArgs`, `CronArgs`, `RegisterArgs`. `src/main.rs`
 keeps only the `Commands` composition, runtime/signal/log setup, dispatch, and
@@ -304,7 +305,7 @@ initializes file logging plus `log_startup_info()` / `log_shutdown_info()`.
 | `SuppressReadOnly` | `Minimal` | `restore --dry-run`, `repair --dry-run`, `import pet --dry-run` | `src/main.rs:944-962` |
 | `SuppressReadOnly` | `Minimal` | `data validate`, `data status`, `data backup`, `data restore --dry-run`, `data repair --dry-run` | `src/main.rs:966-981` |
 | `Allow` | `Logging` | `data repair`, `data restore` (non-dry-run) | `src/main.rs:982-984` |
-| `Allow` | `Logging` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `premade`, `library create`, `library delete`, `library set-primary` | `src/main.rs:988-1004` |
+| `Allow` | `Logging` | `new`, `run`, `clip`, `search`, `edit`, `import`, `repair`, `restore`, `delete`, `organize`, `premade`, `library create`, `library delete`, `library set-primary` | `src/main.rs` |
 | `SuppressExplicitSync` | `Logging` | `sync`, `cron`, `register` | `src/main.rs:1007-1010` |
 | `SuppressInternal` | `Logging` | `auto-sync-worker` | `src/main.rs:1013-1016` |
 | `SuppressConfiguration` | `Logging` | `update`, `__self-replace`, `doctor`, `completions`, `shell`, `keybindings` | `src/main.rs:1019-1029` |

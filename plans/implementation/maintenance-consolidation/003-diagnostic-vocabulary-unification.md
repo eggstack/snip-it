@@ -1,6 +1,6 @@
 # Maintenance and Duplicate-Policy Consolidation Milestone 003 — Diagnostic vocabulary unification
 
-Status: ready
+Status: implemented
 
 Repository baseline: `dca5d3136db8a216ba4fcf8bfddac9140d1029ff`
 
