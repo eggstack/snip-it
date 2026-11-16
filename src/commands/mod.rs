@@ -19,6 +19,7 @@ pub mod keybindings_cmd;
 pub mod library_cmd;
 pub mod list_cmd;
 pub mod new_cmd;
+pub mod organize_cmd;
 pub mod pet_analysis;
 pub mod premade_cmd;
 pub mod register_cmd;
@@ -271,7 +272,7 @@ fn load_snippets_at(path: &std::path::Path) -> SnipResult<crate::library::Snippe
     let snippets: crate::library::Snippets = toml::from_str(&fixed_content).map_err(|e| {
         crate::logging::log_config_operation("parse", path, &Err(&e.to_string()));
         let backup_path = path.with_extension("toml.bak");
-        if let Err(backup_err) = std::fs::copy(path, &backup_path) {
+        if let Err(backup_err) = crate::utils::atomic::forensic_copy_aside(path, &backup_path) {
             tracing::warn!(
                 error = %e,
                 backup_error = %backup_err,
@@ -676,6 +677,165 @@ where
     }
 }
 
+/// The sync trigger a snippet field update performs once its mutation is durable.
+#[derive(Debug, Clone, Copy)]
+pub enum FieldUpdateSyncTrigger<'a> {
+    /// Notify the auto-sync subsystem after the mutation commits.
+    AutoNotify,
+    /// Run an explicit sync with the caller's runtime after the mutation commits.
+    ExplicitSync(&'a tokio::runtime::Runtime),
+}
+
+/// A single local-only field mutation for [`update_snippet_fields`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnippetFieldMutation {
+    SetFavorite,
+    ClearFavorite,
+    AddFolder(String),
+    RemoveFolder(String),
+}
+
+/// The outcome of [`update_snippet_fields`].
+#[derive(Debug, Clone)]
+pub enum SnippetFieldUpdateOutcome {
+    /// The mutation changed the snippet and was persisted.
+    Updated(crate::library::Snippet),
+    /// The requested end state already held; nothing was written.
+    Unchanged(crate::library::Snippet),
+    /// No live snippet with that identifier exists; nothing was changed.
+    NotFound,
+}
+
+enum FieldUpdateProbe {
+    Unchanged(crate::library::Snippet),
+    Missing,
+}
+
+fn snippet_field_audit_action(mutation: &SnippetFieldMutation) -> &'static str {
+    match mutation {
+        SnippetFieldMutation::SetFavorite => "favorite",
+        SnippetFieldMutation::ClearFavorite => "unfavorite",
+        SnippetFieldMutation::AddFolder(_) => "add-folder",
+        SnippetFieldMutation::RemoveFolder(_) => "remove-folder",
+    }
+}
+
+fn apply_snippet_field_mutation(
+    snippet: &mut crate::library::Snippet,
+    mutation: &SnippetFieldMutation,
+) -> bool {
+    match mutation {
+        SnippetFieldMutation::SetFavorite => {
+            if snippet.favorite {
+                return false;
+            }
+            snippet.favorite = true;
+            true
+        }
+        SnippetFieldMutation::ClearFavorite => {
+            if !snippet.favorite {
+                return false;
+            }
+            snippet.favorite = false;
+            true
+        }
+        SnippetFieldMutation::AddFolder(name) => {
+            if snippet.folders.iter().any(|f| f == name) {
+                return false;
+            }
+            snippet.folders.push(name.clone());
+            true
+        }
+        SnippetFieldMutation::RemoveFolder(name) => {
+            let before = snippet.folders.len();
+            snippet.folders.retain(|f| f != name);
+            snippet.folders.len() != before
+        }
+    }
+}
+
+/// Update one snippet's local-only fields by identifier — shared field-update primitive.
+///
+/// Same seven-step sequence as [`delete_snippet`], except the lookup never
+/// tombstones and no-ops are reported as [`SnippetFieldUpdateOutcome::Unchanged`]
+/// without rewriting the library file.
+pub fn update_snippet_fields(
+    library_path: &std::path::Path,
+    target_id: &str,
+    mutation: SnippetFieldMutation,
+    trigger: FieldUpdateSyncTrigger<'_>,
+) -> SnipResult<SnippetFieldUpdateOutcome> {
+    let mut probe: Option<FieldUpdateProbe> = None;
+    let mut updated: Option<crate::library::Snippet> = None;
+
+    let mutation_result = crate::library::update_library(library_path, |current| {
+        let index = current
+            .snippets
+            .iter()
+            .position(|s| s.id == target_id && !s.deleted);
+        let Some(index) = index else {
+            probe = Some(FieldUpdateProbe::Missing);
+            return Err(SnipError::runtime_error(
+                "Snippet not found",
+                Some("The selected snippet is no longer available"),
+            ));
+        };
+        let target = &mut current.snippets[index];
+        if !apply_snippet_field_mutation(target, &mutation) {
+            probe = Some(FieldUpdateProbe::Unchanged(target.clone()));
+            return Err(SnipError::runtime_error(
+                "Snippet unchanged",
+                Some("The snippet already matches the requested state"),
+            ));
+        }
+        let now = chrono::Utc::now().timestamp();
+        target.updated_at = target.updated_at.max(now).saturating_add(1);
+        updated = Some(target.clone());
+        Ok(())
+    });
+
+    match mutation_result {
+        Ok(_) => {}
+        Err(e) => {
+            return match probe {
+                Some(FieldUpdateProbe::Unchanged(snippet)) => {
+                    Ok(SnippetFieldUpdateOutcome::Unchanged(snippet))
+                }
+                Some(FieldUpdateProbe::Missing) => Ok(SnippetFieldUpdateOutcome::NotFound),
+                None => Err(e),
+            };
+        }
+    }
+
+    let updated = updated.ok_or_else(|| {
+        SnipError::runtime_error(
+            "Snippet not found",
+            Some("The selected snippet is no longer available"),
+        )
+    })?;
+
+    if let Err(e) = crate::logging::audit_log(snippet_field_audit_action(&mutation), &updated, None)
+    {
+        tracing::debug!("Audit log write failed: {}", e);
+    }
+
+    match trigger {
+        FieldUpdateSyncTrigger::ExplicitSync(rt) => {
+            if let Err(e) = run_explicit_sync(rt) {
+                tracing::warn!(error = %e, "post-field-update explicit sync failed");
+            }
+        }
+        FieldUpdateSyncTrigger::AutoNotify => {
+            crate::auto_sync::report_notification_result(crate::auto_sync::notify_mutation(
+                crate::auto_sync::MutationKind::SnippetUpdate,
+                crate::auto_sync::MutationOrigin::User,
+            ));
+        }
+    }
+
+    Ok(SnippetFieldUpdateOutcome::Updated(updated))
+}
+
 /// The sync trigger a snippet delete performs once its mutation is durable.
 ///
 /// The interactive path asks for an explicit sync when the caller passed
@@ -1023,6 +1183,108 @@ mod tests {
             "expected a not-found verdict, got {outcome:?}"
         );
         assert_eq!(fixture.library_bytes(), before);
+    }
+
+    #[test]
+    fn update_snippet_fields_preserves_identifier_and_advances_timestamp() {
+        let fixture = DeleteFixture::new(vec![DeleteFixture::snippet(
+            "id-1",
+            "git push",
+            "git push origin main",
+        )]);
+        let original_id = fixture.library_path.clone();
+        let live = crate::library::load_library(&original_id)
+            .expect("load fixture")
+            .snippets[0]
+            .updated_at;
+
+        let outcome = update_snippet_fields(
+            &fixture.library_path,
+            "id-1",
+            SnippetFieldMutation::SetFavorite,
+            FieldUpdateSyncTrigger::AutoNotify,
+        )
+        .expect("favorite update succeeds");
+
+        match outcome {
+            SnippetFieldUpdateOutcome::Updated(snippet) => {
+                assert_eq!(snippet.id, "id-1");
+                assert!(snippet.favorite);
+                assert_eq!(snippet.updated_at, live + 1);
+            }
+            other => panic!("expected an update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_snippet_fields_reports_unchanged_without_rewriting_file() {
+        let mut snippet = DeleteFixture::snippet("id-1", "git push", "git push");
+        snippet.favorite = true;
+        let fixture = DeleteFixture::new(vec![snippet]);
+        let before = fixture.library_bytes();
+
+        let outcome = update_snippet_fields(
+            &fixture.library_path,
+            "id-1",
+            SnippetFieldMutation::SetFavorite,
+            FieldUpdateSyncTrigger::AutoNotify,
+        )
+        .expect("unchanged reports a verdict");
+
+        assert!(matches!(outcome, SnippetFieldUpdateOutcome::Unchanged(_)));
+        assert_eq!(fixture.library_bytes(), before);
+    }
+
+    #[test]
+    fn update_snippet_fields_reports_not_found_distinctly() {
+        let fixture =
+            DeleteFixture::new(vec![DeleteFixture::snippet("id-1", "git push", "git push")]);
+        let before = fixture.library_bytes();
+
+        let outcome = update_snippet_fields(
+            &fixture.library_path,
+            "does-not-exist",
+            SnippetFieldMutation::SetFavorite,
+            FieldUpdateSyncTrigger::AutoNotify,
+        )
+        .expect("not-found reports a verdict");
+
+        assert!(matches!(outcome, SnippetFieldUpdateOutcome::NotFound));
+        assert_eq!(fixture.library_bytes(), before);
+    }
+
+    #[test]
+    fn update_snippet_fields_writes_expected_audit_action_names() {
+        let fixture =
+            DeleteFixture::new(vec![DeleteFixture::snippet("id-1", "git push", "git push")]);
+
+        for (mutation, token) in [
+            (SnippetFieldMutation::SetFavorite, "favorite"),
+            (SnippetFieldMutation::ClearFavorite, "unfavorite"),
+            (
+                SnippetFieldMutation::AddFolder("work".to_string()),
+                "add-folder",
+            ),
+            (
+                SnippetFieldMutation::RemoveFolder("work".to_string()),
+                "remove-folder",
+            ),
+        ] {
+            let _ = update_snippet_fields(
+                &fixture.library_path,
+                "id-1",
+                mutation,
+                FieldUpdateSyncTrigger::AutoNotify,
+            )
+            .expect("mutation succeeds");
+            let audit = std::fs::read_to_string(fixture.config_dir.join("audit.log"))
+                .expect("audit log written");
+            let matches = audit
+                .lines()
+                .filter(|line| line.contains(&format!("|{token}|")))
+                .count();
+            assert_eq!(matches, 1, "expected exactly one {token} audit entry");
+        }
     }
 
     #[test]

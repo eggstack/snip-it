@@ -2,8 +2,11 @@
 //!
 //! `snp validate` command — comprehensive read-only validation of snippet data.
 
+use crate::diagnostics::{
+    DiagnosticCode, DiagnosticRepairability, DiagnosticSeverity, diagnostic_code, version,
+};
 use crate::error::{SnipError, SnipResult};
-use crate::library::{LibraryManager, Snippet, Snippets};
+use crate::library::{LibraryManager, LibraryScan, Snippet, Snippets};
 use crate::outcome::CliOutcome;
 use crate::usage::UsageIndex;
 use std::collections::{HashMap, HashSet};
@@ -27,32 +30,16 @@ pub struct ValidateArgs {
     pub json: bool,
 }
 
-/// Severity level for validation diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Severity {
-    Info,
-    Warning,
-    Error,
-}
-
-/// Repairability classification for a diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Repairability {
-    Auto,
-    Manual,
-    Unrepairable,
-}
-
 /// A single validation diagnostic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ValidationDiagnostic {
-    pub code: String,
-    pub severity: Severity,
+    pub code: DiagnosticCode,
+    pub severity: DiagnosticSeverity,
     pub path: Option<PathBuf>,
     pub library: Option<String>,
     pub snippet_id: Option<String>,
     pub message: String,
-    pub repairability: Repairability,
+    pub repairability: DiagnosticRepairability,
 }
 
 /// Complete validation report.
@@ -71,7 +58,7 @@ impl ValidationReport {
     pub fn new(strict_mode: bool) -> Self {
         Self {
             schema_version: "1.0.0".to_string(),
-            tool_version: crate::diagnostics::version().to_string(),
+            tool_version: version().to_string(),
             strict_mode,
             dry_run: true,
             total_libraries: 0,
@@ -83,27 +70,27 @@ impl ValidationReport {
     pub fn has_errors(&self) -> bool {
         self.diagnostics
             .iter()
-            .any(|d| d.severity == Severity::Error)
+            .any(|d| d.severity == DiagnosticSeverity::Error)
     }
 
     pub fn error_count(&self) -> usize {
         self.diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Error)
+            .filter(|d| d.severity == DiagnosticSeverity::Error)
             .count()
     }
 
     pub fn warning_count(&self) -> usize {
         self.diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Warning)
+            .filter(|d| d.severity == DiagnosticSeverity::Warning)
             .count()
     }
 
     pub fn info_count(&self) -> usize {
         self.diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Info)
+            .filter(|d| d.severity == DiagnosticSeverity::Info)
             .count()
     }
 }
@@ -114,12 +101,12 @@ fn diags(
     lib_path: Option<&PathBuf>,
     snippet_id: Option<&str>,
     code: &str,
-    severity: Severity,
-    repairability: Repairability,
+    severity: DiagnosticSeverity,
+    repairability: DiagnosticRepairability,
     message: String,
 ) {
     report.diagnostics.push(ValidationDiagnostic {
-        code: code.to_string(),
+        code: diagnostic_code(code),
         severity,
         path: lib_path.cloned(),
         library: Some(lib_name.to_string()),
@@ -150,8 +137,8 @@ fn validate_library(
                 Some(lib_path),
                 None,
                 "E-FILE-READ",
-                Severity::Error,
-                Repairability::Manual,
+                DiagnosticSeverity::Error,
+                DiagnosticRepairability::Manual,
                 format!("Failed to read library file: {e}"),
             );
             return;
@@ -165,8 +152,8 @@ fn validate_library(
             Some(lib_path),
             None,
             "I-FILE-EMPTY",
-            Severity::Info,
-            Repairability::Auto,
+            DiagnosticSeverity::Info,
+            DiagnosticRepairability::Auto,
             "Library file is empty (no snippets)".to_string(),
         );
         return;
@@ -182,8 +169,8 @@ fn validate_library(
                 Some(lib_path),
                 None,
                 "E-TOML-PARSE",
-                Severity::Error,
-                Repairability::Manual,
+                DiagnosticSeverity::Error,
+                DiagnosticRepairability::Manual,
                 format!("TOML parse error: {e}"),
             );
             return;
@@ -208,8 +195,8 @@ fn validate_library(
                 Some(lib_path),
                 Some(id),
                 "E-DUP-ID",
-                Severity::Error,
-                Repairability::Manual,
+                DiagnosticSeverity::Error,
+                DiagnosticRepairability::Manual,
                 format!("Duplicate snippet ID '{id}' found {count} times"),
             );
         }
@@ -224,8 +211,8 @@ fn validate_library(
                 Some(lib_path),
                 None,
                 "W-ID-EMPTY",
-                Severity::Warning,
-                Repairability::Manual,
+                DiagnosticSeverity::Warning,
+                DiagnosticRepairability::Manual,
                 format!(
                     "Snippet '{}' has empty ID (load_library assigns IDs on read)",
                     truncate_desc(&s.description)
@@ -243,8 +230,8 @@ fn validate_library(
                 Some(lib_path),
                 if s.id.is_empty() { None } else { Some(&s.id) },
                 "E-CMD-EMPTY",
-                Severity::Error,
-                Repairability::Manual,
+                DiagnosticSeverity::Error,
+                DiagnosticRepairability::Manual,
                 format!(
                     "Snippet '{}' has empty command",
                     truncate_desc(&s.description)
@@ -253,9 +240,9 @@ fn validate_library(
         }
         if s.description.trim().is_empty() {
             let sev = if strict {
-                Severity::Error
+                DiagnosticSeverity::Error
             } else {
-                Severity::Warning
+                DiagnosticSeverity::Warning
             };
             diags(
                 report,
@@ -264,7 +251,7 @@ fn validate_library(
                 if s.id.is_empty() { None } else { Some(&s.id) },
                 "W-DESC-EMPTY",
                 sev,
-                Repairability::Manual,
+                DiagnosticRepairability::Manual,
                 format!(
                     "Snippet (id={}) has empty description",
                     if s.id.is_empty() {
@@ -301,8 +288,8 @@ fn validate_library(
                         Some(lib_path),
                         Some(id),
                         "W-SAME-ID-DIVERGENT",
-                        Severity::Warning,
-                        Repairability::Manual,
+                        DiagnosticSeverity::Warning,
+                        DiagnosticRepairability::Manual,
                         format!(
                             "Snippet ID '{id}' appears {} times with divergent content",
                             entries.len()
@@ -318,8 +305,8 @@ fn validate_library(
             Some(lib_path),
             None,
             "W-DUP-CHECK-SKIPPED",
-            Severity::Warning,
-            Repairability::Manual,
+            DiagnosticSeverity::Warning,
+            DiagnosticRepairability::Manual,
             "Same-ID divergent-content check skipped: raw TOML re-parse failed".to_string(),
         );
     }
@@ -335,8 +322,8 @@ fn validate_library(
                 Some(lib_path),
                 if s.id.is_empty() { None } else { Some(&s.id) },
                 "W-EXACT-DUP",
-                Severity::Warning,
-                Repairability::Manual,
+                DiagnosticSeverity::Warning,
+                DiagnosticRepairability::Manual,
                 format!(
                     "Exact duplicate snippet: '{}' / '{}'",
                     truncate_desc(&s.description),
@@ -355,8 +342,8 @@ fn validate_library(
             Some(lib_path),
             None,
             "W-CORRUPT-BAK",
-            Severity::Warning,
-            Repairability::Manual,
+            DiagnosticSeverity::Warning,
+            DiagnosticRepairability::Manual,
             format!(
                 "Corrupt backup exists at {} (indicates previous parse failure)",
                 corrupt_bak.display()
@@ -371,8 +358,8 @@ fn validate_library(
 /// `validate`, `repair`, `doctor`, and `status` classify the same index
 /// state consistently. Rendering into [`ValidationDiagnostic`] stays local
 /// to preserve `validate`'s pass/fail plus warnings semantics.
-fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: bool) {
-    let inspection = mgr.inspect_library_index();
+fn validate_index(report: &mut ValidationReport, scan: &LibraryScan, _strict: bool) {
+    let inspection = scan;
 
     // h. Check library index references to missing files
     for (name, expected_path) in &inspection.missing_files {
@@ -382,8 +369,8 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
             Some(expected_path),
             None,
             "E-INDEX-MISSING-FILE",
-            Severity::Error,
-            Repairability::Manual,
+            DiagnosticSeverity::Error,
+            DiagnosticRepairability::Manual,
             format!(
                 "Library '{name}' is registered in index but file {} does not exist",
                 expected_path.display()
@@ -403,8 +390,8 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
             Some(path),
             None,
             "W-ORPHAN-FILE",
-            Severity::Warning,
-            Repairability::Auto,
+            DiagnosticSeverity::Warning,
+            DiagnosticRepairability::Auto,
             format!(
                 "File {} is not registered in the library index",
                 path.display()
@@ -421,8 +408,8 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
                 Some(path),
                 None,
                 "E-PRIMARY-MISSING",
-                Severity::Error,
-                Repairability::Manual,
+                DiagnosticSeverity::Error,
+                DiagnosticRepairability::Manual,
                 format!(
                     "Primary library '{name}' file does not exist at {}",
                     path.display()
@@ -443,8 +430,8 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
                     None,
                     None,
                     "W-NO-PRIMARY",
-                    Severity::Warning,
-                    Repairability::Manual,
+                    DiagnosticSeverity::Warning,
+                    DiagnosticRepairability::Manual,
                     "No primary library is set but libraries exist".to_string(),
                 );
             }
@@ -458,7 +445,7 @@ fn validate_index(report: &mut ValidationReport, mgr: &LibraryManager, _strict: 
 /// Shares [`crate::library::find_orphaned_ids`] with `repair` so both
 /// commands classify the same usage state consistently; rendering into
 /// [`ValidationDiagnostic`] stays local to `validate`.
-fn validate_usage(report: &mut ValidationReport, _mgr: &LibraryManager) {
+fn validate_usage(report: &mut ValidationReport, scan: &LibraryScan) {
     // k. Orphaned usage entries
     let usage_index = UsageIndex::load();
     if usage_index.entries().is_empty() {
@@ -468,44 +455,28 @@ fn validate_usage(report: &mut ValidationReport, _mgr: &LibraryManager) {
     // Collect all active snippet IDs across all visible libraries via the
     // canonical read-only resolver (no migration, no writes).
     let mut active_ids: HashSet<String> = HashSet::new();
-    match crate::library::readonly_library_sources(Some("all")) {
-        Ok(sources) => {
-            for source in &sources {
-                match crate::library::load_library(&source.path) {
-                    Ok(snippets) => {
-                        for s in &snippets.snippets {
-                            active_ids.insert(s.id.clone());
-                        }
-                    }
-                    Err(e) => {
-                        diags(
-                            report,
-                            &source.name,
-                            Some(&source.path),
-                            None,
-                            "W-LIB-UNREADABLE",
-                            Severity::Warning,
-                            Repairability::Manual,
-                            format!(
-                                "Library '{}' could not be read ({e}); excluded from usage-orphan check",
-                                source.name
-                            ),
-                        );
-                    }
+    for source in &scan.sources {
+        match crate::library::load_library(&source.path) {
+            Ok(snippets) => {
+                for s in &snippets.snippets {
+                    active_ids.insert(s.id.clone());
                 }
             }
-        }
-        Err(e) => {
-            diags(
-                report,
-                "<usage>",
-                None,
-                None,
-                "W-LIB-INDEX-UNREADABLE",
-                Severity::Warning,
-                Repairability::Manual,
-                format!("Library index could not be read ({e}); usage-orphan check skipped"),
-            );
+            Err(e) => {
+                diags(
+                    report,
+                    &source.name,
+                    Some(&source.path),
+                    None,
+                    "W-LIB-UNREADABLE",
+                    DiagnosticSeverity::Warning,
+                    DiagnosticRepairability::Manual,
+                    format!(
+                        "Library '{}' could not be read ({e}); excluded from usage-orphan check",
+                        source.name
+                    ),
+                );
+            }
         }
     }
 
@@ -521,8 +492,8 @@ fn validate_usage(report: &mut ValidationReport, _mgr: &LibraryManager) {
             None,
             Some(&orphan_id),
             "W-USAGE-ORPHAN",
-            Severity::Warning,
-            Repairability::Auto,
+            DiagnosticSeverity::Warning,
+            DiagnosticRepairability::Auto,
             format!(
                 "Usage entry for snippet '{orphan_id}' references a snippet not found in any library"
             ),
@@ -558,8 +529,8 @@ fn validate_permissions(report: &mut ValidationReport, _strict: bool) {
                         Some(path),
                         None,
                         "W-INSECURE-PERMS",
-                        Severity::Warning,
-                        Repairability::Manual,
+                        DiagnosticSeverity::Warning,
+                        DiagnosticRepairability::Manual,
                         format!(
                             "File {} has permissions {:o} (recommended: 0600)",
                             path.display(),
@@ -591,7 +562,7 @@ fn emit_human(report: &ValidationReport) {
         eprintln!();
         eprintln!("Errors ({errors}):");
         for d in &report.diagnostics {
-            if d.severity == Severity::Error {
+            if d.severity == DiagnosticSeverity::Error {
                 emit_diagnostic(d);
             }
         }
@@ -601,7 +572,7 @@ fn emit_human(report: &ValidationReport) {
         eprintln!();
         eprintln!("Warnings ({warnings}):");
         for d in &report.diagnostics {
-            if d.severity == Severity::Warning {
+            if d.severity == DiagnosticSeverity::Warning {
                 emit_diagnostic(d);
             }
         }
@@ -611,7 +582,7 @@ fn emit_human(report: &ValidationReport) {
         eprintln!();
         eprintln!("Info ({infos}):");
         for d in &report.diagnostics {
-            if d.severity == Severity::Info {
+            if d.severity == DiagnosticSeverity::Info {
                 emit_diagnostic(d);
             }
         }
@@ -633,9 +604,9 @@ fn emit_diagnostic(d: &ValidationDiagnostic) {
         .map(|s| format!(" [snippet:{s}]"))
         .unwrap_or_default();
     let repair = match d.repairability {
-        Repairability::Auto => " (auto-repairable)",
-        Repairability::Manual => " (manual fix required)",
-        Repairability::Unrepairable => " (unrepairable)",
+        DiagnosticRepairability::Auto => " (auto-repairable)",
+        DiagnosticRepairability::Manual => " (manual fix required)",
+        DiagnosticRepairability::Unrepairable => " (unrepairable)",
     };
     eprintln!(
         "  [{code}] {lib}{snippet}: {msg}{repair}",
@@ -672,48 +643,49 @@ pub fn run(library: Option<String>, strict: bool, json: bool) -> SnipResult<CliO
 
     let mut report = ValidationReport::new(strict);
 
-    // Determine which libraries to validate via the canonical read-only
-    // resolver so legacy single-file checkouts validate in place.
-    let sources: Vec<crate::library::ResolvedLibrarySource> = match library.as_deref() {
-        Some(name) => crate::library::readonly_library_sources(Some(name)).map_err(|e| {
-            // Preserve the historical CLI detail wording for unknown names.
-            match e {
-                SnipError::Runtime { message, .. } if message == "Library not found" => {
-                    crate::library::library_not_found(name)
-                }
-                other => other,
-            }
-        })?,
-        None => crate::library::readonly_library_sources(Some("all"))?,
+    let scan = match library.as_deref() {
+        Some(name) => {
+            let mut partial = mgr.scan_libraries()?;
+            partial.sources = mgr
+                .resolve_readonly_sources(Some(name))
+                .map_err(|e| match e {
+                    SnipError::Runtime { message, .. } if message == "Library not found" => {
+                        crate::library::library_not_found(name)
+                    }
+                    other => other,
+                })?;
+            partial
+        }
+        None => mgr.scan_libraries()?,
     };
 
-    report.total_libraries = sources.len();
+    report.total_libraries = scan.sources.len();
 
     // a. Validate each library
-    for source in &sources {
+    for source in &scan.sources {
         validate_library(&mut report, &source.name, &source.path, strict);
     }
 
     // h, i, j. Validate index cross-references
-    validate_index(&mut report, &mgr, strict);
+    validate_index(&mut report, &scan, strict);
 
     // k. Validate orphaned usage entries
-    validate_usage(&mut report, &mgr);
+    validate_usage(&mut report, &scan);
 
     // l. Validate file permissions
     validate_permissions(&mut report, strict);
 
     // Strict mode: elevate warnings to errors for designated codes
     if strict {
-        const STRICT_CODES: &[&str] = &[
-            "W-ID-EMPTY",
-            "W-DESC-EMPTY",
-            "W-SAME-ID-DIVERGENT",
-            "W-EXACT-DUP",
-        ];
         for d in &mut report.diagnostics {
-            if d.severity == Severity::Warning && STRICT_CODES.contains(&d.code.as_str()) {
-                d.severity = Severity::Error;
+            if d.severity == DiagnosticSeverity::Warning
+                && d.code.is_strict_elevatable()
+                && matches!(
+                    d.code.as_str(),
+                    "W-ID-EMPTY" | "W-DESC-EMPTY" | "W-SAME-ID-DIVERGENT" | "W-EXACT-DUP"
+                )
+            {
+                d.severity = DiagnosticSeverity::Error;
             }
         }
     }
@@ -780,31 +752,31 @@ mod tests {
     fn test_report_counts() {
         let mut report = ValidationReport::new(false);
         report.diagnostics.push(ValidationDiagnostic {
-            code: "E-TEST".to_string(),
-            severity: Severity::Error,
+            code: diagnostic_code("E-TEST"),
+            severity: DiagnosticSeverity::Error,
             path: None,
             library: None,
             snippet_id: None,
             message: "err".to_string(),
-            repairability: Repairability::Manual,
+            repairability: DiagnosticRepairability::Manual,
         });
         report.diagnostics.push(ValidationDiagnostic {
-            code: "W-TEST".to_string(),
-            severity: Severity::Warning,
+            code: diagnostic_code("W-TEST"),
+            severity: DiagnosticSeverity::Warning,
             path: None,
             library: None,
             snippet_id: None,
             message: "warn".to_string(),
-            repairability: Repairability::Auto,
+            repairability: DiagnosticRepairability::Auto,
         });
         report.diagnostics.push(ValidationDiagnostic {
-            code: "I-TEST".to_string(),
-            severity: Severity::Info,
+            code: diagnostic_code("I-TEST"),
+            severity: DiagnosticSeverity::Info,
             path: None,
             library: None,
             snippet_id: None,
             message: "info".to_string(),
-            repairability: Repairability::Unrepairable,
+            repairability: DiagnosticRepairability::Unrepairable,
         });
 
         assert!(report.has_errors());
@@ -831,7 +803,7 @@ mod tests {
 
         assert_eq!(report.diagnostics.len(), 1);
         assert_eq!(report.diagnostics[0].code, "I-FILE-EMPTY");
-        assert_eq!(report.diagnostics[0].severity, Severity::Info);
+        assert_eq!(report.diagnostics[0].severity, DiagnosticSeverity::Info);
     }
 
     #[test]
@@ -898,7 +870,7 @@ mod tests {
             .filter(|d| d.code == "W-DESC-EMPTY")
             .collect();
         assert_eq!(desc_diags.len(), 1);
-        assert_eq!(desc_diags[0].severity, Severity::Warning);
+        assert_eq!(desc_diags[0].severity, DiagnosticSeverity::Warning);
     }
 
     #[test]
@@ -920,7 +892,7 @@ mod tests {
             .filter(|d| d.code == "W-DESC-EMPTY")
             .collect();
         assert_eq!(desc_diags.len(), 1);
-        assert_eq!(desc_diags[0].severity, Severity::Error);
+        assert_eq!(desc_diags[0].severity, DiagnosticSeverity::Error);
     }
 
     #[test]
@@ -942,7 +914,7 @@ mod tests {
             .filter(|d| d.code == "E-CMD-EMPTY")
             .collect();
         assert_eq!(cmd_diags.len(), 1);
-        assert_eq!(cmd_diags[0].severity, Severity::Error);
+        assert_eq!(cmd_diags[0].severity, DiagnosticSeverity::Error);
     }
 
     #[test]
@@ -991,7 +963,7 @@ mod tests {
             .filter(|d| d.code == "W-SAME-ID-DIVERGENT")
             .collect();
         assert_eq!(div_diags.len(), 1);
-        assert_eq!(div_diags[0].repairability, Repairability::Manual);
+        assert_eq!(div_diags[0].repairability, DiagnosticRepairability::Manual);
     }
 
     #[test]
@@ -1009,7 +981,10 @@ mod tests {
             .filter(|d| d.code == "E-TOML-PARSE")
             .collect();
         assert_eq!(parse_diags.len(), 1);
-        assert_eq!(parse_diags[0].repairability, Repairability::Manual);
+        assert_eq!(
+            parse_diags[0].repairability,
+            DiagnosticRepairability::Manual
+        );
     }
 
     #[test]
@@ -1028,9 +1003,10 @@ mod tests {
         .unwrap();
 
         let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let scan = mgr.scan_libraries().unwrap();
 
         let mut report = ValidationReport::new(false);
-        validate_index(&mut report, &mgr, false);
+        validate_index(&mut report, &scan, false);
 
         let missing_diags: Vec<_> = report
             .diagnostics
@@ -1050,9 +1026,10 @@ mod tests {
         write_libraries_toml(&config_dir, &[]);
 
         let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let scan = mgr.scan_libraries().unwrap();
 
         let mut report = ValidationReport::new(false);
-        validate_index(&mut report, &mgr, false);
+        validate_index(&mut report, &scan, false);
 
         let orphan_diags: Vec<_> = report
             .diagnostics
@@ -1060,7 +1037,7 @@ mod tests {
             .filter(|d| d.code == "W-ORPHAN-FILE")
             .collect();
         assert_eq!(orphan_diags.len(), 1);
-        assert_eq!(orphan_diags[0].repairability, Repairability::Auto);
+        assert_eq!(orphan_diags[0].repairability, DiagnosticRepairability::Auto);
     }
 
     #[test]
@@ -1072,9 +1049,10 @@ mod tests {
         write_libraries_toml(&config_dir, &[LibraryMeta::new("lib1")]);
 
         let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+        let scan = mgr.scan_libraries().unwrap();
 
         let mut report = ValidationReport::new(false);
-        validate_index(&mut report, &mgr, false);
+        validate_index(&mut report, &scan, false);
 
         let primary_diags: Vec<_> = report
             .diagnostics
@@ -1088,22 +1066,22 @@ mod tests {
     fn test_strict_mode_elevates_warnings() {
         let mut report = ValidationReport::new(true);
         report.diagnostics.push(ValidationDiagnostic {
-            code: "W-ID-EMPTY".to_string(),
-            severity: Severity::Warning,
+            code: diagnostic_code("W-ID-EMPTY"),
+            severity: DiagnosticSeverity::Warning,
             path: None,
             library: None,
             snippet_id: None,
             message: "test".to_string(),
-            repairability: Repairability::Auto,
+            repairability: DiagnosticRepairability::Auto,
         });
         report.diagnostics.push(ValidationDiagnostic {
-            code: "W-OTHER".to_string(),
-            severity: Severity::Warning,
+            code: diagnostic_code("W-OTHER"),
+            severity: DiagnosticSeverity::Warning,
             path: None,
             library: None,
             snippet_id: None,
             message: "other".to_string(),
-            repairability: Repairability::Auto,
+            repairability: DiagnosticRepairability::Auto,
         });
 
         // Simulate strict elevation
@@ -1114,13 +1092,14 @@ mod tests {
             "W-EXACT-DUP",
         ];
         for d in &mut report.diagnostics {
-            if d.severity == Severity::Warning && STRICT_CODES.contains(&d.code.as_str()) {
-                d.severity = Severity::Error;
+            if d.severity == DiagnosticSeverity::Warning && STRICT_CODES.contains(&d.code.as_str())
+            {
+                d.severity = DiagnosticSeverity::Error;
             }
         }
 
-        assert_eq!(report.diagnostics[0].severity, Severity::Error);
-        assert_eq!(report.diagnostics[1].severity, Severity::Warning);
+        assert_eq!(report.diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(report.diagnostics[1].severity, DiagnosticSeverity::Warning);
     }
 
     #[test]
@@ -1161,9 +1140,13 @@ mod tests {
 
     #[test]
     fn test_severity_serialization_roundtrip() {
-        for sev in [Severity::Info, Severity::Warning, Severity::Error] {
+        for sev in [
+            DiagnosticSeverity::Info,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Error,
+        ] {
             let json = serde_json::to_string(&sev).unwrap();
-            let back: Severity = serde_json::from_str(&json).unwrap();
+            let back: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(sev, back);
         }
     }
@@ -1171,12 +1154,12 @@ mod tests {
     #[test]
     fn test_repairability_serialization_roundtrip() {
         for rep in [
-            Repairability::Auto,
-            Repairability::Manual,
-            Repairability::Unrepairable,
+            DiagnosticRepairability::Auto,
+            DiagnosticRepairability::Manual,
+            DiagnosticRepairability::Unrepairable,
         ] {
             let json = serde_json::to_string(&rep).unwrap();
-            let back: Repairability = serde_json::from_str(&json).unwrap();
+            let back: DiagnosticRepairability = serde_json::from_str(&json).unwrap();
             assert_eq!(rep, back);
         }
     }
@@ -1184,18 +1167,18 @@ mod tests {
     #[test]
     fn test_validation_diagnostic_serialization() {
         let diag = ValidationDiagnostic {
-            code: "E-TEST".to_string(),
-            severity: Severity::Error,
+            code: diagnostic_code("E-TEST"),
+            severity: DiagnosticSeverity::Error,
             path: Some(PathBuf::from("/tmp/test.toml")),
             library: Some("mylib".to_string()),
             snippet_id: Some("abc-123".to_string()),
             message: "test message".to_string(),
-            repairability: Repairability::Auto,
+            repairability: DiagnosticRepairability::Auto,
         };
         let json = serde_json::to_string(&diag).unwrap();
         let back: ValidationDiagnostic = serde_json::from_str(&json).unwrap();
         assert_eq!(back.code, "E-TEST");
-        assert_eq!(back.severity, Severity::Error);
+        assert_eq!(back.severity, DiagnosticSeverity::Error);
         assert_eq!(back.library, Some("mylib".to_string()));
     }
 
@@ -1205,13 +1188,13 @@ mod tests {
         report.total_libraries = 2;
         report.total_snippets = 10;
         report.diagnostics.push(ValidationDiagnostic {
-            code: "W-TEST".to_string(),
-            severity: Severity::Warning,
+            code: diagnostic_code("W-TEST"),
+            severity: DiagnosticSeverity::Warning,
             path: None,
             library: Some("lib".to_string()),
             snippet_id: None,
             message: "warn".to_string(),
-            repairability: Repairability::Manual,
+            repairability: DiagnosticRepairability::Manual,
         });
 
         let json = serde_json::to_string_pretty(&report).unwrap();

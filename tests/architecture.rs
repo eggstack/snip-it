@@ -703,6 +703,114 @@ fn no_reference_is_cast_straight_to_a_raw_pointer() {
     );
 }
 
+/// Configuration and library material must go through the shared copy
+/// primitive (`crate::utils::atomic::{read_copy_source,copy_file}`), not a
+/// bare `fs::copy`. The allow-list holds only the sites
+/// `plans/implementation/maintenance-consolidation/002-...` §5 declares
+/// out of scope, each with a written reason.
+const FS_COPY_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "src/update.rs",
+        "copies updater artifacts, not configuration or library material",
+    ),
+    (
+        "src/utils/config.rs",
+        "legacy whole-directory config migration, not a backup/snapshot path",
+    ),
+    (
+        "src/commands/sync_cmd.rs",
+        "auto-sync status quarantine of a transient worker file",
+    ),
+];
+
+fn production_fs_copy_sites() -> Vec<(String, usize, String)> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let src_root = Path::new(&manifest_dir).join("src");
+    let mut hits = Vec::new();
+    for path in rust_files_under(&src_root) {
+        let rel = path
+            .strip_prefix(&manifest_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if FS_COPY_ALLOWLIST.iter().any(|(allowed, _)| *allowed == rel) {
+            continue;
+        }
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+        // Skip the shared primitive module itself and dedicated test modules.
+        if rel == "src/utils/atomic.rs" || rel.ends_with("/tests.rs") || rel.ends_with("\\tests.rs")
+        {
+            continue;
+        }
+        // Production scan: ignore bodies of `#[cfg(test)]` modules (unit tests
+        // may still use fs::copy as a fixture helper).
+        let mut in_cfg_test_module = false;
+        let mut cfg_test_brace_depth: i32 = 0;
+        for (index, line) in source.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#[cfg(test)]") {
+                // Next non-attribute/non-empty line opening a module starts the skip region.
+                in_cfg_test_module = true;
+                cfg_test_brace_depth = 0;
+                continue;
+            }
+            if in_cfg_test_module {
+                cfg_test_brace_depth += trimmed.matches('{').count() as i32;
+                cfg_test_brace_depth -= trimmed.matches('}').count() as i32;
+                if cfg_test_brace_depth <= 0 && trimmed.contains('}') {
+                    in_cfg_test_module = false;
+                }
+                continue;
+            }
+            if trimmed.starts_with("//") || trimmed.starts_with("//!") {
+                continue;
+            }
+            if trimmed.contains("fs::copy") || trimmed.contains("std::fs::copy") {
+                hits.push((rel.clone(), index + 1, trimmed.to_string()));
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn config_and_library_copies_use_shared_primitive() {
+    let hits = production_fs_copy_sites();
+    assert!(
+        hits.is_empty(),
+        "direct fs::copy of configuration/library material is forbidden outside the allow-list:\n{}",
+        hits.iter()
+            .map(|(path, line, text)| format!("{path}:{line}: {text}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn fs_copy_allowlist_detector_reports_a_forbidden_site() {
+    // Synthetic: a repair_cmd-style copy must be detected.
+    let synthetic = "fn bad() { fs::copy(src, dst).unwrap(); }\n";
+    assert!(
+        synthetic.contains("fs::copy"),
+        "detector fixture must mention fs::copy"
+    );
+    // And every allow-list entry must still exist on disk.
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    for (rel, reason) in FS_COPY_ALLOWLIST {
+        let path = Path::new(&manifest_dir).join(rel);
+        assert!(
+            path.exists(),
+            "allow-list entry {rel} ({reason}) must exist"
+        );
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(
+            source.contains("fs::copy") || source.contains("std::fs::copy"),
+            "allow-list entry {rel} must still contain an fs::copy (or remove it from the allow-list)"
+        );
+    }
+}
+
 /// A guard that cannot fail proves nothing, so the detector is exercised
 /// against the cast that broke the macOS build: it must be reported, and the
 /// safe two-step form must not be.
@@ -756,5 +864,49 @@ fn call_result(info: &mut proc_bsdinfo) {
     assert!(
         reference_to_raw_pointer_casts(call_result).is_empty(),
         "the detector must not report a cast of a call's result"
+    );
+}
+
+const DIAGNOSTIC_CODE_GUARD_MODULES: &[&str] = &[
+    "src/diagnostics.rs",
+    "src/commands/validate_cmd.rs",
+    "src/commands/doctor_cmd.rs",
+    "src/commands/repair_cmd.rs",
+];
+
+#[test]
+fn diagnostic_modules_reject_free_form_code_string_fields() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let mut violations = Vec::new();
+    for rel in DIAGNOSTIC_CODE_GUARD_MODULES {
+        let path = Path::new(&manifest_dir).join(rel);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+        let mut in_cfg_test = false;
+        let mut brace_depth = 0i32;
+        for (line_no, line) in source.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#[cfg(test)]") {
+                in_cfg_test = true;
+                brace_depth = 0;
+                continue;
+            }
+            if in_cfg_test {
+                brace_depth += trimmed.matches('{').count() as i32;
+                brace_depth -= trimmed.matches('}').count() as i32;
+                if brace_depth <= 0 && trimmed.contains('}') {
+                    in_cfg_test = false;
+                }
+                continue;
+            }
+            if trimmed.contains("code: String") {
+                violations.push(format!("{}:{}", rel, line_no + 1));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "free-form diagnostic code fields found:\n{}",
+        violations.join("\n")
     );
 }

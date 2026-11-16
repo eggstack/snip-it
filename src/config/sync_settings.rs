@@ -15,8 +15,6 @@ use crate::error::{SnipError, SnipResult};
 use crate::utils::config::get_sync_config_path;
 use crate::utils::toml_helpers::fix_invalid_toml_escapes;
 use serde::{Deserialize, Serialize};
-use std::fs;
-
 const KEYCHAIN_SERVICE: &str = "snp-sync";
 pub(crate) const KEYCHAIN_MARKER: &str = "@keychain";
 const KEYCHAIN_DEFAULT_USER: &str = "api-key";
@@ -535,7 +533,7 @@ fn fail_closed_on_corrupt_config(
     detail: Option<&str>,
 ) -> SnipError {
     let backup_path = path.with_extension("toml.corrupt.bak");
-    let backup_error = fs::copy(path, &backup_path).err();
+    let backup_error = crate::utils::atomic::forensic_copy_aside(path, &backup_path).err();
 
     if claim_corrupt_config_warning(path) {
         match &backup_error {

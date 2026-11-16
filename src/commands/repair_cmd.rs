@@ -6,6 +6,9 @@
 //! candidates, and applies fixes only when explicitly requested.
 //! Always creates a backup before any mutations.
 
+use crate::diagnostics::{
+    DiagnosticCode, DiagnosticRepairability, DiagnosticSeverity, diagnostic_code,
+};
 use crate::error::{SnipError, SnipResult};
 use crate::library::LibraryManager;
 use std::fs;
@@ -77,8 +80,8 @@ pub enum RepairAction {
 }
 
 impl RepairAction {
-    /// Short category string for display.
-    pub fn category(&self) -> &'static str {
+    /// Per-action category label (distinct from per-finding `RepairItem::category`).
+    pub fn action_category(&self) -> &'static str {
         match self {
             RepairAction::PruneOrphanedUsage => "usage",
             RepairAction::RollbackTransaction { .. } => "transaction",
@@ -107,6 +110,45 @@ impl RepairAction {
                 | RepairAction::RemoveTerminalJournal { .. }
                 | RepairAction::RemoveOrphanedArtifact
         )
+    }
+
+    pub fn severity(&self) -> DiagnosticSeverity {
+        self.diagnostic_code()
+            .severity()
+            .unwrap_or(DiagnosticSeverity::Info)
+    }
+
+    pub fn repairability(&self) -> DiagnosticRepairability {
+        if self.is_safe() {
+            DiagnosticRepairability::Auto
+        } else {
+            DiagnosticRepairability::Manual
+        }
+    }
+
+    pub fn diagnostic_code(&self) -> DiagnosticCode {
+        diagnostic_code(self.diagnostic_code_str())
+    }
+
+    fn diagnostic_code_str(&self) -> &'static str {
+        match self {
+            RepairAction::PruneOrphanedUsage => "W-USAGE-ORPHAN",
+            RepairAction::RepairLibraryIndex => "W-NO-PRIMARY",
+            RepairAction::RepairSnippetIds => "W-ID-EMPTY",
+            RepairAction::RepairTimestamps => "W-DUP-CHECK-SKIPPED",
+            _ => "I-REPAIR-TX",
+        }
+    }
+
+    /// Default per-finding category when no override is supplied.
+    pub fn default_finding_category(&self) -> &'static str {
+        match self {
+            RepairAction::PruneOrphanedUsage => "usage",
+            RepairAction::RepairLibraryIndex => "index",
+            RepairAction::RepairSnippetIds => "ids",
+            RepairAction::RepairTimestamps => "timestamps",
+            _ => "transaction",
+        }
     }
 
     /// Get the transaction ID for this action, if applicable.
@@ -139,6 +181,32 @@ pub struct RepairItem {
     /// Target path for the repair action, if applicable.
     /// This replaces fragile string parsing of the problem description.
     pub target_path: Option<PathBuf>,
+    pub severity: DiagnosticSeverity,
+    pub repairability: DiagnosticRepairability,
+    pub code: DiagnosticCode,
+}
+
+fn push_repair_item(
+    report: &mut RepairReport,
+    action: RepairAction,
+    category: impl Into<String>,
+    problem: String,
+    fix: String,
+    safe: Option<bool>,
+    target_path: Option<PathBuf>,
+) {
+    let safe = safe.unwrap_or_else(|| action.is_safe());
+    report.items.push(RepairItem {
+        severity: action.severity(),
+        repairability: action.repairability(),
+        code: action.diagnostic_code(),
+        action,
+        category: category.into(),
+        problem,
+        fix,
+        safe,
+        target_path,
+    });
 }
 
 /// Exit status for the repair command.
@@ -271,18 +339,20 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
     let mgr = match LibraryManager::new() {
         Ok(m) => m,
         Err(e) => {
-            report.items.push(RepairItem {
-                action: RepairAction::RepairLibraryIndex,
-                category: "config".to_string(),
-                problem: format!("Failed to load library manager: {e}"),
-                fix: "Check ~/.config/snp/libraries.toml for corruption".to_string(),
-                safe: false,
-                target_path: None,
-            });
+            push_repair_item(
+                report,
+                RepairAction::RepairLibraryIndex,
+                "config",
+                format!("Failed to load library manager: {e}"),
+                "Check ~/.config/snp/libraries.toml for corruption".to_string(),
+                Some(false),
+                None,
+            );
             return Ok(());
         }
     };
 
+    let scan = mgr.scan_libraries()?;
     let libraries_dir = mgr.get_libraries_dir().clone();
 
     // If a specific library was requested, only check that one
@@ -297,16 +367,7 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
             ));
         }
     } else {
-        // Check all libraries
-        if !libraries_dir.exists() {
-            return Ok(());
-        }
-        fs::read_dir(&libraries_dir)
-            .map_err(|e| SnipError::io_error("read libraries directory", libraries_dir.clone(), e))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
-            .collect()
+        scan.disk_library_paths()
     };
 
     let mut all_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -323,65 +384,69 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                 // Check for empty IDs
                 for (i, snippet) in snippets.snippets.iter().enumerate() {
                     if snippet.id.is_empty() {
-                        report.items.push(RepairItem {
-                            action: RepairAction::RepairSnippetIds,
-                            category: "ids".to_string(),
-                            problem: format!(
+                        push_repair_item(
+                            report,
+                            RepairAction::RepairSnippetIds,
+                            "ids",
+                            format!(
                                 "Snippet {} in '{}' has empty ID",
                                 i,
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
-                            fix: "Generate UUID for snippet".to_string(),
-                            safe: false,
-                            target_path: None,
-                        });
+                            "Generate UUID for snippet".to_string(),
+                            Some(false),
+                            None,
+                        );
                     } else if !all_ids.insert(snippet.id.clone()) {
-                        report.items.push(RepairItem {
-                            action: RepairAction::RepairSnippetIds,
-                            category: "ids".to_string(),
-                            problem: format!(
+                        push_repair_item(
+                            report,
+                            RepairAction::RepairSnippetIds,
+                            "ids",
+                            format!(
                                 "Duplicate ID '{}' in '{}'",
                                 snippet.id,
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
-                            fix: "Regenerate duplicate ID".to_string(),
-                            safe: false,
-                            target_path: None,
-                        });
+                            "Regenerate duplicate ID".to_string(),
+                            Some(false),
+                            None,
+                        );
                     }
                 }
 
                 // Check for missing timestamps
                 for (i, snippet) in snippets.snippets.iter().enumerate() {
                     if snippet.created_at == 0 || snippet.updated_at == 0 {
-                        report.items.push(RepairItem {
-                            action: RepairAction::RepairTimestamps,
-                            category: "timestamps".to_string(),
-                            problem: format!(
+                        push_repair_item(
+                            report,
+                            RepairAction::RepairTimestamps,
+                            "timestamps",
+                            format!(
                                 "Snippet {} ('{}') in '{}' has zero timestamp",
                                 i,
                                 snippet.description,
                                 lib_path.file_stem().unwrap_or_default().to_string_lossy()
                             ),
-                            fix: "Set timestamps to current time".to_string(),
-                            safe: false,
-                            target_path: None,
-                        });
+                            "Set timestamps to current time".to_string(),
+                            Some(false),
+                            None,
+                        );
                     }
                 }
             }
             Err(e) => {
-                report.items.push(RepairItem {
-                    action: RepairAction::RepairLibraryIndex,
-                    category: "config".to_string(),
-                    problem: format!(
+                push_repair_item(
+                    report,
+                    RepairAction::RepairLibraryIndex,
+                    "config",
+                    format!(
                         "Failed to load '{}': {e}",
                         lib_path.file_stem().unwrap_or_default().to_string_lossy()
                     ),
-                    fix: "Check file for TOML syntax errors".to_string(),
-                    safe: false,
-                    target_path: None,
-                });
+                    "Check file for TOML syntax errors".to_string(),
+                    Some(false),
+                    None,
+                );
             }
         }
     }
@@ -389,16 +454,17 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
     // Check primary library selection via the shared index inspection so
     // `repair` classifies the same primary state as `validate`/`doctor`.
     // Rendering into `RepairItem` stays local to preserve repair semantics.
-    match &mgr.inspect_library_index().primary {
+    match &scan.primary {
         crate::library::PrimaryState::FileMissing { name, .. } => {
-            report.items.push(RepairItem {
-                action: RepairAction::RepairLibraryIndex,
-                category: "primary".to_string(),
-                problem: format!("Primary library '{name}' references missing file"),
-                fix: "Promote first available library to primary".to_string(),
-                safe: false,
-                target_path: None,
-            });
+            push_repair_item(
+                report,
+                RepairAction::RepairLibraryIndex,
+                "primary",
+                format!("Primary library '{name}' references missing file"),
+                "Promote first available library to primary".to_string(),
+                Some(false),
+                None,
+            );
         }
         crate::library::PrimaryState::NoPrimary { count } => {
             // No primary set — check if we can auto-assign
@@ -408,23 +474,25 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
                     .first()
                     .map(|l| l.filename.clone())
                     .unwrap_or_default();
-                report.items.push(RepairItem {
-                    action: RepairAction::RepairLibraryIndex,
-                    category: "primary".to_string(),
-                    problem: "No primary library is set (only one library exists)".to_string(),
-                    fix: format!("Set '{name}' as primary"),
-                    safe: false,
-                    target_path: None,
-                });
+                push_repair_item(
+                    report,
+                    RepairAction::RepairLibraryIndex,
+                    "primary",
+                    "No primary library is set (only one library exists)".to_string(),
+                    format!("Set '{name}' as primary"),
+                    Some(false),
+                    None,
+                );
             } else if *count > 0 {
-                report.items.push(RepairItem {
-                    action: RepairAction::RepairLibraryIndex,
-                    category: "primary".to_string(),
-                    problem: "No primary library is set".to_string(),
-                    fix: "Run 'snp library set-primary <name>' to choose one".to_string(),
-                    safe: false,
-                    target_path: None,
-                });
+                push_repair_item(
+                    report,
+                    RepairAction::RepairLibraryIndex,
+                    "primary",
+                    "No primary library is set".to_string(),
+                    "Run 'snp library set-primary <name>' to choose one".to_string(),
+                    Some(false),
+                    None,
+                );
             }
         }
         crate::library::PrimaryState::Present { .. }
@@ -442,14 +510,15 @@ fn collect_repair_candidates(report: &mut RepairReport, library: Option<&str>) -
         .collect();
     let orphaned_count = crate::library::find_orphaned_ids(&active_id_set, &usage_ids).len();
     if orphaned_count > 0 {
-        report.items.push(RepairItem {
-            action: RepairAction::PruneOrphanedUsage,
-            category: "usage".to_string(),
-            problem: format!("{orphaned_count} orphaned usage entries (snippets no longer exist)"),
-            fix: "Remove orphaned usage entries".to_string(),
-            safe: true,
-            target_path: None,
-        });
+        push_repair_item(
+            report,
+            RepairAction::PruneOrphanedUsage,
+            "usage",
+            format!("{orphaned_count} orphaned usage entries (snippets no longer exist)"),
+            "Remove orphaned usage entries".to_string(),
+            Some(true),
+            None,
+        );
     }
 
     Ok(())
@@ -464,20 +533,21 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
 
     // Fail closed on corrupt journals.
     for corrupt in &inventory.corrupt {
-        report.items.push(RepairItem {
-            action: RepairAction::RollbackTransaction {
+        push_repair_item(
+            report,
+            RepairAction::RollbackTransaction {
                 transaction_id: corrupt.path.display().to_string(),
             },
-            category: "unsafe".to_string(),
-            problem: format!(
+            "unsafe",
+            format!(
                 "Corrupt transaction journal '{}': {}",
                 corrupt.path.display(),
                 corrupt.error
             ),
-            fix: "Requires manual quarantine or deletion".to_string(),
-            safe: false,
-            target_path: Some(corrupt.path.clone()),
-        });
+            "Requires manual quarantine or deletion".to_string(),
+            Some(false),
+            Some(corrupt.path.clone()),
+        );
     }
 
     for journal in &inventory.journals {
@@ -486,21 +556,22 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
                 Ok(class) => class,
                 Err(e) => {
                     // Unsafe artifact inspection failure — report as unsafe/manual.
-                    report.items.push(RepairItem {
-                        action: RepairAction::RollbackTransaction {
+                    push_repair_item(
+                        report,
+                        RepairAction::RollbackTransaction {
                             transaction_id: journal.id.clone(),
                         },
-                        category: "unsafe".to_string(),
-                        problem: format!(
+                        "unsafe",
+                        format!(
                             "Transaction '{}' (op: {}) has unsafe artifacts: {e}",
                             crate::transaction::short_transaction_id(&journal.id),
                             journal.operation,
                         ),
-                        fix: "Requires manual investigation — preserve journal and artifacts"
+                        "Requires manual investigation — preserve journal and artifacts"
                             .to_string(),
-                        safe: false,
-                        target_path: None,
-                    });
+                        Some(false),
+                        None,
+                    );
                     continue;
                 }
             };
@@ -533,21 +604,21 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
                 }
             }
             crate::transaction::RecoveryClass::UnsafeFailed => {
-                report.items.push(RepairItem {
-                    action: RepairAction::RollbackTransaction {
+                push_repair_item(
+                    report,
+                    RepairAction::RollbackTransaction {
                         transaction_id: journal.id.clone(),
                     },
-                    category: "unsafe".to_string(),
-                    problem: format!(
+                    "unsafe",
+                    format!(
                         "Transaction '{}' (op: {}) is in a Failed state",
                         crate::transaction::short_transaction_id(&journal.id),
                         journal.operation,
                     ),
-                    fix: "Requires manual investigation — preserve journal and artifacts"
-                        .to_string(),
-                    safe: false,
-                    target_path: None,
-                });
+                    "Requires manual investigation — preserve journal and artifacts".to_string(),
+                    Some(false),
+                    None,
+                );
                 continue;
             }
         };
@@ -564,19 +635,20 @@ fn collect_transaction_repairs(report: &mut RepairReport) -> SnipResult<()> {
             _ => "Repair transaction",
         };
 
-        report.items.push(RepairItem {
+        push_repair_item(
+            report,
             action,
-            category: "transaction".to_string(),
-            problem: format!(
+            "transaction",
+            format!(
                 "Transaction '{}' (op: {}, state: {:?})",
                 crate::transaction::short_transaction_id(&journal.id),
                 journal.operation,
                 journal.state
             ),
-            fix: fix.to_string(),
-            safe: true,
-            target_path: None,
-        });
+            fix.to_string(),
+            Some(true),
+            None,
+        );
     }
 
     // Scan for orphaned artifact directories — directories under
@@ -638,17 +710,18 @@ fn collect_orphan_artifact_repairs(report: &mut RepairReport, state_dir: &Path) 
         {
             let id = dir_name.to_string_lossy().to_string();
             if !journal_ids.contains(&id) {
-                report.items.push(RepairItem {
-                    action: RepairAction::RemoveOrphanedArtifact,
-                    category: "transaction".to_string(),
-                    problem: format!(
+                push_repair_item(
+                    report,
+                    RepairAction::RemoveOrphanedArtifact,
+                    "transaction",
+                    format!(
                         "Orphaned transaction artifact directory '{}'",
                         path.display()
                     ),
-                    fix: "Remove orphaned artifact directory".to_string(),
-                    safe: true,
-                    target_path: Some(path.clone()),
-                });
+                    "Remove orphaned artifact directory".to_string(),
+                    Some(true),
+                    Some(path.clone()),
+                );
             }
         }
     }
@@ -850,83 +923,126 @@ fn collect_active_snippet_ids() -> Vec<String> {
         Ok(m) => m,
         Err(_) => return ids,
     };
-    let libraries_dir = mgr.get_libraries_dir().clone();
-    if !libraries_dir.exists() {
+    let Ok(scan) = mgr.scan_libraries() else {
         return ids;
-    }
-    if let Ok(entries) = fs::read_dir(&libraries_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "toml")
-                && let Ok(snippets) = crate::library::load_library(&path)
-            {
-                for snippet in &snippets.snippets {
-                    ids.push(snippet.id.clone());
-                }
+    };
+    for path in scan.disk_library_paths() {
+        if let Ok(snippets) = crate::library::load_library(&path) {
+            for snippet in &snippets.snippets {
+                ids.push(snippet.id.clone());
             }
         }
     }
     ids
 }
 
-/// Create a timestamped backup of the entire config directory for repair.
+/// Create a timestamped, manifest-backed repair backup restorable by `snp restore`.
+///
+/// Uses the shared copy-source admission half and the same
+/// [`super::backup_archive::atomic_write_backup`] writer as `snp backup`, so
+/// symlink / non-regular / escaped sources fail the repair before any mutation
+/// and the backup carries a `manifest.toml`.
 fn create_repair_backup() -> SnipResult<PathBuf> {
+    use super::backup_archive::{
+        BackupEntryKind, BackupManifest, BackupManifestEntry, atomic_write_backup,
+        read_for_snapshot, sha256_hex, validate_canonical_containment,
+    };
+
     let config_dir = crate::utils::config::get_config_dir();
+    let canonical_config = config_dir.canonicalize().map_err(|e| {
+        SnipError::io_error(
+            "canonicalize config directory for repair backup",
+            &config_dir,
+            e,
+        )
+    })?;
     let backup_root = config_dir.join("backups");
     fs::create_dir_all(&backup_root)
         .map_err(|e| SnipError::io_error("create backup directory", backup_root.clone(), e))?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let backup_dir = backup_root.join(format!("repair-{timestamp}-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&backup_dir).map_err(|e| {
-        SnipError::io_error("create repair backup directory", backup_dir.clone(), e)
-    })?;
+    let staging_dir = backup_dir.with_extension(format!("staging.{}", uuid::Uuid::new_v4()));
 
-    // Copy libraries directory
+    let mut manifest = BackupManifest {
+        schema: 1,
+        created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
+        snip_it_version: crate::diagnostics::version().to_string(),
+        layout: "directory".to_string(),
+        files: Vec::new(),
+    };
+    let mut backup_files: Vec<(String, String, Vec<u8>)> = Vec::new();
+
     let libraries_dir = config_dir.join("libraries");
     if libraries_dir.exists() {
-        let dest = backup_dir.join("libraries");
-        copy_dir_recursive(&libraries_dir, &dest)?;
-    }
-
-    // Copy libraries.toml
-    let config_file = config_dir.join("libraries.toml");
-    if config_file.exists() {
-        let dest = backup_dir.join("libraries.toml");
-        fs::copy(&config_file, &dest)
-            .map_err(|e| SnipError::io_error("copy libraries.toml into repair backup", dest, e))?;
-    }
-
-    // Copy usage.toml
-    let usage_file = config_dir.join("usage.toml");
-    if usage_file.exists() {
-        let dest = backup_dir.join("usage.toml");
-        fs::copy(&usage_file, &dest)
-            .map_err(|e| SnipError::io_error("copy usage.toml into repair backup", dest, e))?;
-    }
-
-    Ok(backup_dir)
-}
-
-/// Recursively copy a directory.
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> SnipResult<()> {
-    fs::create_dir_all(dst)
-        .map_err(|e| SnipError::io_error("create backup subdirectory", dst.to_path_buf(), e))?;
-    for entry in fs::read_dir(src)
-        .map_err(|e| SnipError::io_error("read source directory", src.to_path_buf(), e))?
-    {
-        let entry =
-            entry.map_err(|e| SnipError::io_error("read directory entry", src.to_path_buf(), e))?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)
-                .map_err(|e| SnipError::io_error("copy file for backup", src_path.clone(), e))?;
+        let entries: Vec<_> = fs::read_dir(&libraries_dir)
+            .map_err(|e| SnipError::io_error("read libraries directory", libraries_dir.clone(), e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.ends_with(".toml") && !name.starts_with('.')
+            })
+            .collect();
+        for entry in &entries {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let src = entry.path();
+            validate_canonical_containment(&src, &canonical_config, "library file")?;
+            let bytes = read_for_snapshot(&src, "library")?;
+            let sha = sha256_hex(&bytes);
+            let rel = format!("libraries/{file_name}");
+            manifest.files.push(BackupManifestEntry {
+                path: rel.clone(),
+                kind: BackupEntryKind::Library,
+                size: bytes.len() as u64,
+                sha256: sha,
+            });
+            backup_files.push((rel, BackupEntryKind::Library.to_string(), bytes));
         }
     }
-    Ok(())
+
+    let config_file = config_dir.join("libraries.toml");
+    if config_file.exists() {
+        validate_canonical_containment(&config_file, &canonical_config, "libraries index")?;
+        let bytes = read_for_snapshot(&config_file, "libraries index")?;
+        let sha = sha256_hex(&bytes);
+        manifest.files.push(BackupManifestEntry {
+            path: "libraries.toml".to_string(),
+            kind: BackupEntryKind::Index,
+            size: bytes.len() as u64,
+            sha256: sha,
+        });
+        backup_files.push((
+            "libraries.toml".to_string(),
+            BackupEntryKind::Index.to_string(),
+            bytes,
+        ));
+    }
+
+    let usage_file = config_dir.join("usage.toml");
+    if usage_file.exists() {
+        validate_canonical_containment(&usage_file, &canonical_config, "usage")?;
+        let bytes = read_for_snapshot(&usage_file, "usage")?;
+        let sha = sha256_hex(&bytes);
+        manifest.files.push(BackupManifestEntry {
+            path: "usage.toml".to_string(),
+            kind: BackupEntryKind::Usage,
+            size: bytes.len() as u64,
+            sha256: sha,
+        });
+        backup_files.push((
+            "usage.toml".to_string(),
+            BackupEntryKind::Usage.to_string(),
+            bytes,
+        ));
+    }
+
+    manifest.files.sort_by(|a, b| a.path.cmp(&b.path));
+    let file_refs: Vec<(&str, &str, &[u8])> = backup_files
+        .iter()
+        .map(|(path, kind, bytes)| (path.as_str(), kind.as_str(), bytes.as_slice()))
+        .collect();
+    atomic_write_backup(&staging_dir, &backup_dir, &file_refs, &manifest)?;
+    Ok(backup_dir)
 }
 
 /// Emit the repair report in human-readable format.
@@ -1051,8 +1167,6 @@ fn emit_json_report(report: &RepairReport) -> SnipResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
     #[test]
     fn test_repair_report_default() {
         let report = RepairReport::default();
@@ -1062,34 +1176,54 @@ mod tests {
 
     #[test]
     fn test_repair_item_creation() {
-        let item = RepairItem {
-            action: RepairAction::PruneOrphanedUsage,
-            category: "usage".to_string(),
-            problem: "orphaned entries".to_string(),
-            fix: "prune".to_string(),
-            safe: true,
-            target_path: None,
-        };
+        let mut report = RepairReport::default();
+        push_repair_item(
+            &mut report,
+            RepairAction::PruneOrphanedUsage,
+            "usage",
+            "orphaned entries".to_string(),
+            "prune".to_string(),
+            Some(true),
+            None,
+        );
+        let item = &report.items[0];
         assert!(item.safe);
         assert_eq!(item.category, "usage");
         assert_eq!(item.action, RepairAction::PruneOrphanedUsage);
+        assert_eq!(item.code, "W-USAGE-ORPHAN");
     }
 
     #[test]
-    fn test_copy_dir_recursive() {
-        let src = TempDir::new().unwrap();
-        let dst = TempDir::new().unwrap();
-
-        // Create source structure
-        fs::write(src.path().join("file.txt"), "hello").unwrap();
-        fs::create_dir(src.path().join("sub")).unwrap();
-        fs::write(src.path().join("sub").join("nested.txt"), "world").unwrap();
-
-        let dest = dst.path().join("copy");
-        copy_dir_recursive(src.path(), &dest).unwrap();
-
-        assert!(dest.join("file.txt").exists());
-        assert!(dest.join("sub").join("nested.txt").exists());
-        assert_eq!(fs::read_to_string(dest.join("file.txt")).unwrap(), "hello");
+    fn test_repair_action_repairability_matches_is_safe() {
+        let actions = [
+            RepairAction::PruneOrphanedUsage,
+            RepairAction::RollbackTransaction {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::ResumeCleanup {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::FinalizeCommittedLocal {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::CleanupLegacyCommitted {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::CleanupLegacyRolledBack {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::RemoveTerminalJournal {
+                transaction_id: "tx".to_string(),
+            },
+            RepairAction::RemoveOrphanedArtifact,
+            RepairAction::RepairLibraryIndex,
+            RepairAction::RepairSnippetIds,
+            RepairAction::RepairTimestamps,
+        ];
+        for action in &actions {
+            let safe = action.is_safe();
+            let auto = action.repairability() == DiagnosticRepairability::Auto;
+            assert_eq!(safe, auto, "mismatch for {action:?}");
+        }
     }
 }

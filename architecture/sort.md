@@ -285,7 +285,8 @@ The TUI comparator short-circuits entirely when there is nothing to sort by:
   there are no scores to sort on.
 - `favorites_first` is `false` for both MCP search and the selector's fuzzy
   path. Only `snp list --favorites-first` (`src/commands/list_cmd.rs:30-31`)
-  and the TUI turn it on — `snp search --favorites-first`
+  and the TUI turn it on — scripts can set the underlying flag with
+  `snp organize --favorite` before sorting. `snp search --favorites-first`
   (`src/commands/search_cmd.rs:19-20`) reaches the TUI comparator, not
   `rank_snippets`.
 - The TUI and the CLI do **not** produce identical orders for the same data;

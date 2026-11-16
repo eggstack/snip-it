@@ -1951,6 +1951,30 @@ fn test_inspect_library_index_orphan_files() {
 }
 
 #[test]
+fn test_scan_libraries_matches_inspection_and_sources() {
+    let tmp = TestDir::new();
+    let config_dir = tmp.path().join("cfg");
+    let libs_dir = config_dir.join("libraries");
+    std::fs::create_dir_all(&libs_dir).unwrap();
+    let mut indexed = LibraryMeta::new("indexed");
+    indexed.is_primary = true;
+    write_index(&config_dir, &[indexed]);
+    write_lib_file(&libs_dir, "indexed");
+    write_lib_file(&libs_dir, "orphan");
+    let mgr = LibraryManager::with_config_dir(config_dir).unwrap();
+
+    let inspection = mgr.inspect_library_index();
+    let scan = mgr.scan_libraries().unwrap();
+
+    assert_eq!(scan.missing_files, inspection.missing_files);
+    assert_eq!(scan.orphan_files, inspection.orphan_files);
+    assert_eq!(scan.primary, inspection.primary);
+    assert_eq!(scan.sources.len(), 1);
+    assert_eq!(scan.sources[0].name, "indexed");
+    assert_eq!(scan.disk_library_paths().len(), 2);
+}
+
+#[test]
 fn test_find_orphaned_ids_shared_classifier() {
     let active: HashSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
     let usage = vec![

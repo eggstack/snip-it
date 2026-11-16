@@ -54,9 +54,10 @@ Doctor uses the `CompatibilityDiagnostic` family from `src/diagnostics.rs`, **no
 
 ```rust
 pub enum DiagnosticSeverity { Info, Warning, Error }
+pub struct DiagnosticCode(/* validated String */);
 
 pub struct CompatibilityDiagnostic {
-    pub code: String,
+    pub code: DiagnosticCode,
     pub severity: DiagnosticSeverity,
     pub message: String,
     pub entry_index: Option<usize>,
@@ -66,7 +67,12 @@ pub struct CompatibilityDiagnostic {
 }
 ```
 
-(`src/diagnostics.rs:9-38`.) There is **no generic finding DSL**: `validate`, `doctor`, and `import` each keep their own diagnostic types and their own pass/fail semantics. What they *do* share is the classification input — `LibraryManager::inspect_library_index()` and `crate::library::find_orphaned_ids` — so the commands never disagree about the underlying state.
+(`src/diagnostics.rs`.) Severity and code are the shared M003 vocabulary;
+`validate` also uses `DiagnosticRepairability`. Each surface still keeps its
+own report type and pass/fail semantics. Classification inputs are shared —
+`LibraryManager::inspect_library_index()` / `scan_libraries()` and
+`crate::library::find_orphaned_ids` — so the commands never disagree about
+the underlying state.
 
 Doctor's report is `DoctorReport` (`src/diagnostics.rs:106-145`), documented in `doctor_report.md`.
 
@@ -176,10 +182,10 @@ The only temp file doctor creates is the shell-init syntax-check fixture, which 
 |---|---|
 | `src/commands/doctor_cmd.rs` | This command: modes, the environment audit, file analysis, strict elevation. |
 | `src/commands/doctor_report.rs` | Report rendering (`DiagnosticReportFormat`, `emit_human_report`). |
-| `src/diagnostics.rs` | `DoctorReport`, `CompatibilityDiagnostic`, `DiagnosticSeverity`. |
+| `src/diagnostics.rs` | `DoctorReport`, `CompatibilityDiagnostic`, `DiagnosticSeverity`, `DiagnosticCode`. |
 | `src/commands/pet_analysis.rs` | `read_source_file`, `parse_pet_toml`, `detect_unknown_fields`, `analyze_entry`, `detect_duplicates`. |
 | `src/status_snapshot.rs` | `capture_snapshot` — the canonical sync status view. |
-| `src/library/manager.rs` | `inspect_library_index` — the shared primary-state view. |
+| `src/library/manager.rs` | `inspect_library_index` / `scan_libraries` — shared index and scan views. |
 | `src/commands/shell_cmd.rs` | `generate_bash` / `generate_zsh` / `generate_fish`. |
 | `architecture/commands/doctor_report.md` | The rendering layer. |
 | `architecture/diagnostics.md` | The shared diagnostic model. |
