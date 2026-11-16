@@ -296,3 +296,37 @@ fn delete_top_and_data_agree_on_an_already_deleted_target() {
     );
     assert_eq!(second.status.code(), Some(9));
 }
+
+#[test]
+fn organize_top_and_data_produce_equivalent_json() {
+    let (_tmp_top, config_top) = setup_test_env();
+    setup_basic_library(&config_top);
+    let (_tmp_data, config_data) = setup_test_env();
+    setup_basic_library(&config_data);
+
+    let top = run_args(
+        &config_top,
+        &["organize", "--id", "compat-1", "--favorite", "--json"],
+    );
+    let data = run_args(
+        &config_data,
+        &[
+            "data",
+            "organize",
+            "--id",
+            "compat-1",
+            "--favorite",
+            "--json",
+        ],
+    );
+    assert_success(&top, "snp organize --favorite --json");
+    assert_success(&data, "snp data organize --favorite --json");
+
+    let top_json: serde_json::Value = serde_json::from_slice(&top.stdout).unwrap();
+    let data_json: serde_json::Value = serde_json::from_slice(&data.stdout).unwrap();
+    assert_eq!(top_json["status"], data_json["status"]);
+    assert_eq!(top_json["status"], "updated");
+    assert_eq!(top_json["id"], data_json["id"]);
+    assert_eq!(top_json["favorite"], data_json["favorite"]);
+    assert_eq!(top_json["folders"], data_json["folders"]);
+}

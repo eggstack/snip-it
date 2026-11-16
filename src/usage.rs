@@ -147,7 +147,7 @@ impl UsageIndex {
     /// fail-closed path, loading never refuses to proceed.
     fn backup_corrupt_file(path: &Path) {
         let backup = path.with_extension("toml.corrupt.bak");
-        match fs::copy(path, &backup) {
+        match crate::utils::atomic::forensic_copy_aside(path, &backup) {
             Ok(_) => tracing::warn!(backup = %backup.display(), "backed up corrupt usage index"),
             Err(e) => {
                 tracing::warn!(error = %e, path = %path.display(), "failed to back up corrupt usage index")

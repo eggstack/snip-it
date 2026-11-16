@@ -9,7 +9,8 @@ The library module is the core data layer of snip-it. It defines the
 ID repair, timestamped backups, single-file → multi-library migration,
 and the `LibraryManager` registry. It also owns the canonical
 side-effect-free read path (`resolve_readonly_sources`,
-`inspect_library_index`) shared by CLI, MCP, and diagnostics.
+`inspect_library_index`, `scan_libraries`) shared by CLI, MCP, and
+diagnostics.
 
 **Files**: `src/library/mod.rs` (re-exports), `src/library/model.rs`
 (types + pure helpers), `src/library/persistence.rs` (load/save/backup),
@@ -108,13 +109,21 @@ pub struct LibraryIndexInspection {
     pub orphan_files: Vec<PathBuf>,
     pub primary: PrimaryState,
 }
+
+pub struct LibraryScan {
+    pub sources: Vec<ResolvedLibrarySource>,
+    pub missing_files: Vec<(String, PathBuf)>,
+    pub orphan_files: Vec<PathBuf>,
+    pub primary: PrimaryState,
+}
 ```
 
 `ResolvedLibrarySource` is constructed **without** migration, directory
-creation, or metadata rewrites (`model.rs:105-111`). `PrimaryState` and
-`LibraryIndexInspection` are a shared read-only view: `doctor`, `validate`,
-`repair`, and `status` each render it into their own diagnostic types
-(`model.rs:135-139`).
+creation, or metadata rewrites. `PrimaryState` and
+`LibraryIndexInspection` are a shared read-only index view; `LibraryScan`
+adds index-driven `sources` so `validate` and `repair` share one
+enumeration (sources ∪ orphans ∪ missing ∪ primary) without a second
+`read_dir`.
 
 ### Pure helpers — `src/library/model.rs:150-225`
 
@@ -405,12 +414,14 @@ used by `snp list`), `selector::resolve_selector_readonly()` (`snp get`), MCP
 ### Index inspection
 
 ```rust
-pub fn inspect_library_index(&self) -> LibraryIndexInspection  // manager.rs:310
+pub fn inspect_library_index(&self) -> LibraryIndexInspection
+pub fn scan_libraries(&self) -> SnipResult<LibraryScan>
 ```
 
-Existence checks + directory listing only. `doctor`, `validate`, `repair`,
-`status` render this shared state into their own diagnostic types; no
-generic finding DSL was introduced (`manager.rs:304-310`).
+Existence checks + one directory listing. `inspect_library_index` is the
+narrow index view (`doctor` / `status`); `scan_libraries` is the full
+diagnostic scan (`validate` / `repair`). Each surface still renders into
+its own report types — no generic finding DSL.
 
 ### CRUD and linkage
 
@@ -460,8 +471,8 @@ without mutating process-wide environment variables.
 | `device_id` | Yes | Conflict-resolution input; not searchable |
 | `deleted` | Yes | Soft-delete tombstone; deletion beats live content |
 | `output` | **No** | Local-only notes. Not in `ProtoSnippet`; not searchable |
-| `folders` | **No** | Local-only organization. Not searchable |
-| `favorite` | **No** | Local-only starred flag. Not searchable |
+| `folders` | **No** | Local-only organization. Not searchable; writable via `snp organize` |
+| `favorite` | **No** | Local-only starred flag. Not searchable; writable via `snp organize` |
 
 `output` / `folders` / `favorite` are excluded from the sync fingerprint.
 `output` is not part of `ProtoSnippet` at all, and `snp edit --output`
@@ -493,9 +504,9 @@ cross-library scope keyword in
 | File | Role |
 |------|------|
 | `src/library/mod.rs` | Module root; re-exports `model`, `persistence`, `manager` so the pre-split `crate::library::*` paths keep working (`mod.rs:31-40`) |
-| `src/library/model.rs` | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `ResolvedLibrarySource`, `PrimaryState`, `LibraryIndexInspection`, and the pure helpers `library_not_found` / `find_orphaned_ids` / `validate_library_name` |
+| `src/library/model.rs` | `Snippet`, `Snippets`, `LibraryConfig`, `LibraryMeta`, `ResolvedLibrarySource`, `PrimaryState`, `LibraryIndexInspection`, `LibraryScan`, and the pure helpers `library_not_found` / `find_orphaned_ids` / `validate_library_name` |
 | `src/library/persistence.rs` | `load_library`, `save_library`, `save_library_internal`, `backup_library`, `normalize_snippet_ids`, `deterministic_legacy_id`, `deterministic_duplicate_id` |
-| `src/library/manager.rs` | `LibraryManager` registry/primary behavior, `ensure_library_mode`, and the canonical read-only resolver `resolve_readonly_sources` / `readonly_library_sources` |
+| `src/library/manager.rs` | `LibraryManager` registry/primary behavior, `ensure_library_mode`, `resolve_readonly_sources` / `readonly_library_sources`, `inspect_library_index`, `scan_libraries` |
 | `src/library/tests.rs` | 97 in-crate unit tests: round-trip, `pet` compatibility, ID normalization, name validation |
 | `src/utils/atomic.rs` | `write_private_atomic` / `atomic_replace` — the write primitives the save path uses |
 | `src/utils/config.rs` | `get_config_dir`, `derive_sync_state_dir`, and the `#[cfg(test)]` `ScopedConfigDir` override |

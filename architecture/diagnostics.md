@@ -26,6 +26,8 @@ sync/auto-sync state machine ([sync.md](sync.md),
 
 ## Key Types (`src/diagnostics.rs`)
 
+Shared vocabulary (M003): [`DiagnosticSeverity`](../../src/diagnostics.rs), [`DiagnosticCode`](../../src/diagnostics.rs) (validated `E-`/`W-`/`I-`, `compat.*`, `sync.*`), and [`DiagnosticRepairability`](../../src/diagnostics.rs). Report envelopes (`ValidationReport`, `DoctorReport`, repair `JsonRepairItem`) remain per-surface.
+
 | Type | Location | Shape |
 |------|----------|-------|
 | `DiagnosticSeverity` | `:11` | `Info` (informational) / `Warning` (recoverable; imported with changes) / `Error` (cannot proceed safely) — serde round-trips |

@@ -1,20 +1,135 @@
 //! **Layer: Domain/Core**
 //!
-//! Compatibility diagnostic models for import and doctor operations.
+//! Shared diagnostic vocabulary and report models for `validate`, `doctor`,
+//! `import`, and related surfaces.
 //!
 //! Pure data types with no I/O or platform dependencies.
 
+use crate::error::{SnipError, SnipResult};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-/// Severity level for compatibility diagnostics.
+/// Severity level shared across diagnostic surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiagnosticSeverity {
     /// Informational message.
     Info,
-    /// Recoverable issue; entry imported with changes.
+    /// Recoverable issue.
     Warning,
-    /// Entry cannot be imported safely.
+    /// Blocking issue.
     Error,
+}
+
+/// Repairability classification shared with `snp validate` (serde names unchanged).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagnosticRepairability {
+    Auto,
+    Manual,
+    Unrepairable,
+}
+
+/// Validated diagnostic code (`E-`/`W-`/`I-`, `compat.*`, or `sync.*`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DiagnosticCode(String);
+
+impl DiagnosticCode {
+    /// Validate and construct a diagnostic code.
+    pub fn new(raw: impl Into<String>) -> SnipResult<Self> {
+        let raw = raw.into();
+        if validate_diagnostic_code(&raw) {
+            Ok(Self(raw))
+        } else {
+            Err(SnipError::runtime_error(
+                "Invalid diagnostic code",
+                Some(&format!(
+                    "Diagnostic code '{raw}' is not in the published namespace"
+                )),
+            ))
+        }
+    }
+
+    /// Construct a code that must already satisfy the namespace (programming-error panic otherwise).
+    pub fn expect_valid(raw: &str) -> Self {
+        Self::new(raw).unwrap_or_else(|e| panic!("invalid diagnostic code {raw:?}: {e}"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Severity implied by an `E-`/`W-`/`I-` prefix; `None` for dotted forms.
+    pub fn severity(&self) -> Option<DiagnosticSeverity> {
+        if self.0.starts_with("E-") {
+            Some(DiagnosticSeverity::Error)
+        } else if self.0.starts_with("W-") {
+            Some(DiagnosticSeverity::Warning)
+        } else if self.0.starts_with("I-") {
+            Some(DiagnosticSeverity::Info)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_strict_elevatable(&self) -> bool {
+        self.0.starts_with("W-")
+    }
+}
+
+impl fmt::Display for DiagnosticCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for DiagnosticCode {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for DiagnosticCode {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+/// Construct a validated code for a known-good literal at a call site.
+pub fn diagnostic_code(raw: &str) -> DiagnosticCode {
+    DiagnosticCode::expect_valid(raw)
+}
+
+fn validate_diagnostic_code(raw: &str) -> bool {
+    if raw.is_empty() {
+        return false;
+    }
+    if let Some(rest) = raw.strip_prefix("E-") {
+        return screaming_case_body(rest);
+    }
+    if let Some(rest) = raw.strip_prefix("W-") {
+        return screaming_case_body(rest);
+    }
+    if let Some(rest) = raw.strip_prefix("I-") {
+        return screaming_case_body(rest);
+    }
+    if let Some(rest) = raw.strip_prefix("compat.") {
+        return dotted_tail_valid(rest);
+    }
+    if let Some(rest) = raw.strip_prefix("sync.") {
+        return dotted_tail_valid(rest);
+    }
+    false
+}
+
+fn screaming_case_body(body: &str) -> bool {
+    !body.is_empty()
+        && body
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn dotted_tail_valid(tail: &str) -> bool {
+    !tail.is_empty() && tail.split('.').all(|segment| !segment.is_empty())
 }
 
 /// Byte-offset span within the source file.
@@ -27,7 +142,7 @@ pub struct SourceSpan {
 /// A single compatibility diagnostic produced during import or doctor checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompatibilityDiagnostic {
-    pub code: String,
+    pub code: DiagnosticCode,
     pub severity: DiagnosticSeverity,
     pub message: String,
     pub entry_index: Option<usize>,
@@ -174,7 +289,7 @@ mod tests {
 
     fn make_diagnostic(severity: DiagnosticSeverity) -> CompatibilityDiagnostic {
         CompatibilityDiagnostic {
-            code: "TEST".to_string(),
+            code: diagnostic_code("I-TEST"),
             severity,
             message: "test".to_string(),
             entry_index: None,
@@ -254,7 +369,7 @@ mod tests {
     #[test]
     fn test_compatibility_diagnostic_serialization() {
         let diagnostic = CompatibilityDiagnostic {
-            code: "TOML_ESCAPE".to_string(),
+            code: diagnostic_code("W-TYPE-MISMATCH"),
             severity: DiagnosticSeverity::Warning,
             message: "Backslash in double-quoted string".to_string(),
             entry_index: Some(5),
@@ -266,7 +381,7 @@ mod tests {
         let json = serde_json::to_string(&diagnostic).unwrap();
         let roundtripped: CompatibilityDiagnostic = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(roundtripped.code, "TOML_ESCAPE");
+        assert_eq!(roundtripped.code, "W-TYPE-MISMATCH");
         assert_eq!(roundtripped.severity, DiagnosticSeverity::Warning);
         assert_eq!(roundtripped.message, "Backslash in double-quoted string");
         assert_eq!(roundtripped.entry_index, Some(5));
@@ -289,7 +404,7 @@ mod tests {
     #[test]
     fn test_diagnostic_span_skip_none() {
         let diag = CompatibilityDiagnostic {
-            code: "TEST".to_string(),
+            code: diagnostic_code("I-TEST"),
             severity: DiagnosticSeverity::Info,
             message: "test".to_string(),
             entry_index: None,
@@ -309,7 +424,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         for i in 0..10 {
             diagnostics.push(CompatibilityDiagnostic {
-                code: format!("CODE-{i}"),
+                code: DiagnosticCode::new(format!("I-TEST-{i}")).expect("test code"),
                 severity: DiagnosticSeverity::Info,
                 message: format!("msg {i}"),
                 entry_index: Some(i),
@@ -319,7 +434,7 @@ mod tests {
             });
         }
         for (i, d) in diagnostics.iter().enumerate() {
-            assert_eq!(d.code, format!("CODE-{i}"));
+            assert_eq!(d.code.as_str(), format!("I-TEST-{i}"));
             assert_eq!(d.entry_index, Some(i));
         }
     }
@@ -368,7 +483,7 @@ mod tests {
     fn test_strict_mode_error_classification() {
         let diagnostics = vec![
             CompatibilityDiagnostic {
-                code: "W-DESC-EMPTY".to_string(),
+                code: diagnostic_code("W-DESC-EMPTY"),
                 severity: DiagnosticSeverity::Warning,
                 message: "warn".to_string(),
                 entry_index: Some(0),
@@ -377,7 +492,7 @@ mod tests {
                 span: None,
             },
             CompatibilityDiagnostic {
-                code: "I-TAGS-EMPTY".to_string(),
+                code: diagnostic_code("I-TAGS-EMPTY"),
                 severity: DiagnosticSeverity::Info,
                 message: "info".to_string(),
                 entry_index: Some(0),
@@ -394,7 +509,7 @@ mod tests {
 
         let mut diagnostics_with_error = diagnostics.clone();
         diagnostics_with_error.push(CompatibilityDiagnostic {
-            code: "E-CMD-EMPTY".to_string(),
+            code: diagnostic_code("E-CMD-EMPTY"),
             severity: DiagnosticSeverity::Error,
             message: "error".to_string(),
             entry_index: Some(1),
@@ -412,7 +527,7 @@ mod tests {
     fn test_diagnostic_bounded_message() {
         let long_message = "x".repeat(1000);
         let diag = CompatibilityDiagnostic {
-            code: "TEST".to_string(),
+            code: diagnostic_code("I-TEST"),
             severity: DiagnosticSeverity::Info,
             message: long_message.clone(),
             entry_index: None,
@@ -458,7 +573,7 @@ mod tests {
         report.imported = 3;
         report.skipped = 2;
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "W-DESC-EMPTY".to_string(),
+            code: diagnostic_code("W-DESC-EMPTY"),
             severity: DiagnosticSeverity::Warning,
             message: "Empty description".to_string(),
             entry_index: Some(0),
@@ -497,7 +612,7 @@ mod tests {
         let mut report = DoctorReport::new(false);
         report.source = Some("/tmp/pet.toml".to_string());
         report.diagnostics.push(CompatibilityDiagnostic {
-            code: "compat.sync.enabled".to_string(),
+            code: diagnostic_code("compat.sync.enabled"),
             entry_index: None,
             field: Some("sync".to_string()),
             severity: DiagnosticSeverity::Info,
@@ -520,5 +635,84 @@ mod tests {
             !json.contains("secret"),
             "Report JSON should not contain secret field"
         );
+    }
+
+    #[test]
+    fn test_diagnostic_code_grammar_accepts_emitted_codes() {
+        let validate_codes = [
+            "E-CMD-EMPTY",
+            "E-DUP-ID",
+            "E-FILE-READ",
+            "E-INDEX-MISSING-FILE",
+            "E-PRIMARY-MISSING",
+            "E-TOML-PARSE",
+            "I-FILE-EMPTY",
+            "W-CORRUPT-BAK",
+            "W-DESC-EMPTY",
+            "W-DUP-CHECK-SKIPPED",
+            "W-EXACT-DUP",
+            "W-ID-EMPTY",
+            "W-INSECURE-PERMS",
+            "W-LIB-INDEX-UNREADABLE",
+            "W-LIB-UNREADABLE",
+            "W-NO-PRIMARY",
+            "W-ORPHAN-FILE",
+            "W-SAME-ID-DIVERGENT",
+            "W-USAGE-ORPHAN",
+        ];
+        for code in validate_codes {
+            assert!(DiagnosticCode::new(code).is_ok(), "reject {code}");
+        }
+        assert!(DiagnosticCode::new("compat.sync.checked").is_ok());
+        assert!(DiagnosticCode::new("sync.attention.configuration").is_ok());
+        assert!(DiagnosticCode::new("sync.config_load_failed").is_ok());
+        assert!(DiagnosticCode::new("compat.shell.bash.ok").is_ok());
+    }
+
+    #[test]
+    fn test_diagnostic_code_rejects_malformed() {
+        assert!(DiagnosticCode::new("e-cmd-empty").is_err());
+        assert!(DiagnosticCode::new("x-unknown").is_err());
+        assert!(DiagnosticCode::new("E-").is_err());
+        assert!(DiagnosticCode::new("").is_err());
+        let err = DiagnosticCode::new("bad-code").unwrap_err().to_string();
+        assert!(err.contains("bad-code"));
+    }
+
+    #[test]
+    fn test_diagnostic_code_severity_mapping() {
+        assert_eq!(
+            diagnostic_code("E-CMD-EMPTY").severity(),
+            Some(DiagnosticSeverity::Error)
+        );
+        assert_eq!(
+            diagnostic_code("W-DESC-EMPTY").severity(),
+            Some(DiagnosticSeverity::Warning)
+        );
+        assert_eq!(
+            diagnostic_code("I-FILE-EMPTY").severity(),
+            Some(DiagnosticSeverity::Info)
+        );
+        assert_eq!(diagnostic_code("compat.sync.checked").severity(), None);
+    }
+
+    #[test]
+    fn test_diagnostic_code_serde_transparent() {
+        let code = diagnostic_code("W-DESC-EMPTY");
+        let json = serde_json::to_string(&code).unwrap();
+        assert_eq!(json, "\"W-DESC-EMPTY\"");
+        let back: DiagnosticCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, code);
+    }
+
+    #[test]
+    fn test_diagnostic_repairability_serde_names() {
+        for (value, name) in [
+            (DiagnosticRepairability::Auto, "\"Auto\""),
+            (DiagnosticRepairability::Manual, "\"Manual\""),
+            (DiagnosticRepairability::Unrepairable, "\"Unrepairable\""),
+        ] {
+            assert_eq!(serde_json::to_string(&value).unwrap(), name);
+        }
     }
 }

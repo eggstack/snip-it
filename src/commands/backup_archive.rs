@@ -190,30 +190,44 @@ impl BackupRelativePath {
     }
 }
 
-/// Read a file for backup snapshot, rejecting symlinks and non-regular files.
+/// Read a file for backup snapshot via the shared copy-source admission half.
+///
+/// Symlink / non-regular refusal lives in
+/// [`crate::utils::atomic::read_copy_source`]. Callers that also need
+/// containment under the config root should call
+/// [`validate_canonical_containment`] first.
+///
+/// Message wording stays compatible with existing backup tests that accept
+/// either "symlink" or "escapes config root".
 pub(crate) fn read_for_snapshot(path: &Path, label: &str) -> SnipResult<Vec<u8>> {
-    let meta = fs::symlink_metadata(path)
-        .map_err(|e| SnipError::io_error(&format!("stat {label} for snapshot"), path, e))?;
-    if meta.file_type().is_symlink() {
-        return Err(SnipError::runtime_error(
-            "Backup entry is a symlink",
-            Some(&format!(
-                "Refusing to back up symlink {} (could point outside config)",
-                path.display()
-            )),
-        ));
+    let options = crate::utils::atomic::CopyOptions {
+        source: crate::utils::atomic::CopySourcePolicy::RegularFileOnly,
+        durability: crate::utils::atomic::Durability::DurableUserData,
+    };
+    match crate::utils::atomic::read_copy_source(path, &options) {
+        Ok(bytes) => Ok(bytes),
+        Err(SnipError::Runtime { message, .. }) if message.contains("symlink") => {
+            Err(SnipError::runtime_error(
+                "Backup entry is a symlink",
+                Some(&format!(
+                    "Refusing to back up symlink {} (could point outside config)",
+                    path.display()
+                )),
+            ))
+        }
+        Err(SnipError::Runtime { message, .. })
+            if message.contains("regular file") || message.contains("not a regular") =>
+        {
+            Err(SnipError::runtime_error(
+                "Backup entry is not a regular file",
+                Some(&format!(
+                    "Expected regular file for {label}: {}",
+                    path.display()
+                )),
+            ))
+        }
+        Err(other) => Err(other),
     }
-    if !meta.is_file() {
-        return Err(SnipError::runtime_error(
-            "Backup entry is not a regular file",
-            Some(&format!(
-                "Expected regular file, got {:?}: {}",
-                meta.file_type(),
-                path.display()
-            )),
-        ));
-    }
-    fs::read(path).map_err(|e| SnipError::io_error(&format!("read {label} for snapshot"), path, e))
 }
 
 /// Compute the SHA-256 hex digest of a byte slice.

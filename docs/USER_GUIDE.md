@@ -589,6 +589,7 @@ auto_sync_failure = "warn"
 | `snp edit --output` | No | Output is local-only, not in sync protocol |
 | TUI delete | Yes | After tombstone persisted |
 | `snp delete` | Yes | Same tombstone and notification as the TUI delete |
+| `snp organize` | Yes | Local-only `favorite` and `folders` updates |
 | `snp import pet` (create/merge/replace) | Yes | Once per import, not per snippet |
 | `snp import pet --dry-run` | No | Read-only |
 | `snp library create` | Yes | |
@@ -901,6 +902,21 @@ deleted. Nothing is deleted unless exactly one snippet matches.
 `snp data delete` is the same command. A delete targets one snippet in one
 library, so `--library all` is refused. Add `--json` for a machine-readable
 result whose `status` is `deleted` or `already_deleted`.
+
+### Scripting with `snp organize`
+
+`snp organize` sets the local-only `favorite` flag and folder memberships on
+one snippet:
+
+```bash
+snp organize --id "$SNIPPET_ID" --favorite
+snp organize --id "$SNIPPET_ID" --add-folder work
+snp organize --query 'deploy staging' --unfavorite --json
+```
+
+It uses the same selector and ambiguity rules as `snp delete`. Re-applying the
+current state exits 0 with `status: "unchanged"` in `--json` mode and does not
+rewrite the library file. `snp data organize` mirrors the command.
 
 `snp cron` prints a cron entry and offers to copy it to the clipboard:
 
