@@ -18,8 +18,7 @@ Full templates live in `plans/subsystems/README.md`,
 the planning system and for starting a new workstream.
 
 > Registry truth: check `plans/registry.md` before assuming any roadmap state.
-> All currently registered milestones are `closed` with no open dependencies —
-> register new work only after handoff review per `003 §10`. One commit = one
+> Register new work only after handoff review per `003 §10`. One commit = one
 > status change; the closure record is the gate.
 
 ## When to use

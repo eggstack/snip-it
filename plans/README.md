@@ -63,10 +63,10 @@ Closure records and archive
 | CLI, library, selector, sync-policy consolidation | `subsystems/cli-library-sync-consolidation-roadmap.md` | M001-M005 (CLI, inspection, boundaries, parity, retry); M006 (search-parity verification corrective) | complete |
 | Local MCP integration | `subsystems/mcp-integration-roadmap.md` | M001 (server + registration) | closed |
 | Eggstack dependency refresh | `subsystems/eggstack-dependency-refresh-roadmap.md` | M001 (eggfetch/eggserve adoption and parity) | closed |
-| Maintenance and duplicate-policy consolidation | `subsystems/maintenance-consolidation-roadmap.md` | M001-M003 (dead subsystem removal, backup/snapshot policy, diagnostic vocabulary) | active |
+| Maintenance and duplicate-policy consolidation | `subsystems/maintenance-consolidation-roadmap.md` | M001-M003 (dead subsystem removal, backup/snapshot policy, diagnostic vocabulary) | closed |
 | Locking protocol and ordering convergence | `subsystems/locking-convergence-roadmap.md` | M001-M003 (owned-record protocol, kernel-lock protocol, ordering contract) | active |
 | Snippet CRUD surface | `subsystems/snippet-crud-surface-roadmap.md` | M001-M003 (non-interactive delete, folder/favorite write path, field update) | active |
-| Sync cursor protocol | `subsystems/sync-cursor-protocol-roadmap.md` | M001-M002 (monotonic sequence cursor, cursor-precision convergence) | active |
+| Sync cursor protocol | `subsystems/sync-cursor-protocol-roadmap.md` | M001-M002 (monotonic sequence cursor, cursor-precision convergence) | closed |
 
 Pre-convention flat-plan mapping: `000` → archived direction (superseded
 by canonical docs plus `distribution-release`/`mcp-integration`);

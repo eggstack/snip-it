@@ -1,6 +1,9 @@
 # Snippet CRUD Surface Milestone 003 — Non-interactive field update
 
-Status: ready
+Status: blocked
+
+> M002 is closed, but this draft still describes the pre-M002 write path.
+> Reconcile the dependency and current evidence before handoff.
 
 Repository baseline: `dca5d3136db8a216ba4fcf8bfddac9140d1029ff`
 
@@ -34,31 +37,16 @@ description, command, tags, and output. Its existing `--output` spelling, its
 preserved; the new field flags join them on the same command, the same selector
 contract, and the same mutation primitive.
 
-## 2. Why this milestone is ready
+## 2. Readiness
 
-- The hard dependency is closed. M001 landed the shared snippet-delete
-  primitive (`commands::delete_snippet`, `src/commands/mod.rs:744-826`); its
-  closure record is `plans/closure/snippet-crud-surface/001-status.md`.
-- The persisted fields already exist: `description`, `command`, `tags`, and
-  `output` are model fields with a serde representation
-  (`src/library/model.rs:33-47`). No schema change, no migration, no version
-  bump.
-- The write path to generalize already exists and is correct in its mechanics:
-  `snp edit --output` already mutates under the local-data lock, re-reads
-  inside the critical section, and advances `updated_at` with the same rule the
-  delete primitive uses (`src/commands/edit_cmd.rs:169`, `:217`, `:263`,
-  `:287`). What it lacks is coverage of the other three fields, an audit entry,
-  and an auto-sync notification.
-- No unresolved decision requires an ADR: the milestone adds flags to an
-  existing command over existing persisted fields, and leaves the merge order,
-  the conflict identity, the exit-code policy, and the MCP read-only boundary
-  untouched.
-- **Build-order dependency:** M002 introduces the shared snippet field-update
-  primitive (`commands::update_snippet_fields`) that this milestone extends with
-  the description / command / tags / output variants. If that primitive has not
-  landed, stop and report (§14) rather than adding a second primitive.
+Blocked pending reconciliation with M002. M002 introduced
+`commands::update_snippet_fields`; this draft still treats that primitive as
+future work. Refresh the dependency and current-evidence sections before
+handoff.
 
-## 3. Current implementation evidence
+## 3. Pre-M002 implementation evidence
+
+> This baseline predates M002 and must be refreshed before handoff.
 
 ### 3.1 The fields exist; three of the four are synced and one is local-only
 

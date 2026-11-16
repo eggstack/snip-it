@@ -278,8 +278,7 @@ the server lifetime wire-parity tests remain unchanged.
 
 Deferred work: ordering contract (M003).
 
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
+Implementation plan: `plans/implementation/locking-convergence/002-kernel-lock-protocol-convergence.md`
 
 Closure record: to be written at closure.
 
@@ -315,8 +314,7 @@ the architecture documents.
 
 Deferred work: none within this subsystem.
 
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
+Implementation plan: `plans/implementation/locking-convergence/003-lock-ordering-contract-and-static-guard.md`
 
 Closure record: to be written at closure.
 
@@ -416,5 +414,5 @@ finding remains.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | M001 owned-record lock protocol unification | closed | `plans/implementation/locking-convergence/001-owned-record-lock-protocol-unification.md` | `plans/closure/locking-convergence/001-status.md` | — |
-| M002 kernel-lock protocol convergence | not started | — | — | M001 closed |
-| M003 lock ordering contract + static guard | not started | — | — | M001 closed, M002 |
+| M002 kernel-lock protocol convergence | blocked | `plans/implementation/locking-convergence/002-kernel-lock-protocol-convergence.md` | — | Plan requires a new workspace crate; revise under the no-new-crates rule |
+| M003 lock ordering contract + static guard | blocked | `plans/implementation/locking-convergence/003-lock-ordering-contract-and-static-guard.md` | — | Hard dependency on M002; draft dependency disagrees with roadmap |

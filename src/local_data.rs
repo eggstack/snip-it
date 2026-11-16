@@ -186,9 +186,7 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
 ///
 /// Acquires the lock, runs the closure, and releases the lock on completion
 /// (or panic). Returns the closure's result.
-// Retained: closure-scoped wrapper over `acquire_local_data_lock`, exercised
-// by the local-data lock unit tests (the production paths acquire the lock
-// directly).
+// Test helper; production paths acquire the lock directly.
 #[allow(dead_code)]
 pub fn with_local_data_lock<T>(state_dir: &Path, f: impl FnOnce() -> T) -> SnipResult<T> {
     let _lock = acquire_local_data_lock(state_dir)?;

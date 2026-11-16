@@ -1,6 +1,9 @@
 # Locking Protocol and Ordering Convergence Milestone 003 — Lock ordering contract and static guard
 
-Status: ready
+Status: blocked
+
+> The roadmap makes M002 a hard dependency, while this draft treats it as
+> soft. Reconcile the dependency and refresh this plan after M002 closes.
 
 Repository baseline: `dca5d3136db8a216ba4fcf8bfddac9140d1029ff`
 
@@ -32,21 +35,11 @@ over the tiers and removes a dead tier. It also does not touch the
 kernel-lock protocol — M002 owns that
 (`plans/subsystems/locking-convergence/002-kernel-lock-protocol-convergence.md`).
 
-## 2. Why this milestone is ready
+## 2. Readiness
 
-- No hard dependencies. The roadmap records M003's dependency as "hard M001;
-  soft M002" (`plans/subsystems/locking-convergence-roadmap.md:320-321`).
-  M001 is closed (`plans/closure/locking-convergence/001-status.md`). M002 is
-  not started, so M003 must not depend on it: the ordering contract and the
-  `WorkerLock` retirement are independent of where the kernel primitive lives.
-- The acquisition sites and their nesting are already observable (§3), so the
-  order can be stated from the code rather than guessed.
-- The dead tier is already provably dead: `architecture/auto_sync.md:403`
-  records that "**No production path acquires it**", and the code agrees
-  (§3.3).
-- The static-guard pattern already exists: M001 added three source-scanning
-  guards to `tests/architecture.rs` (`:425`, `:438`, `:478`), each with a
-  synthetic-fixture test proving the detector can fail.
+Blocked on M002. The roadmap makes M002 a hard dependency, while this draft
+previously treated it as soft. Reconcile this section and refresh the plan
+after M002 closes; do not hand off from this draft.
 
 ## 3. Current implementation evidence
 

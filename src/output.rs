@@ -16,6 +16,7 @@ pub struct OutputPresentation<'a> {
     raw: &'a str,
 }
 
+// Some documented helpers are retained before production callers exist.
 impl<'a> OutputPresentation<'a> {
     /// Create a new presentation from the raw output string.
     pub fn new(raw: &'a str) -> Self {
@@ -23,24 +24,18 @@ impl<'a> OutputPresentation<'a> {
     }
 
     /// Whether the output field has content.
-    // Retained: part of the `OutputPresentation` API documented in
-    // `architecture/output.md`; no production caller yet.
     #[allow(dead_code)]
     pub fn is_present(&self) -> bool {
         !self.raw.is_empty()
     }
 
     /// The raw, unmodified output value.
-    // Retained: part of the `OutputPresentation` API documented in
-    // `architecture/output.md`; no production caller yet.
     #[allow(dead_code)]
     pub fn raw(&self) -> &'a str {
         self.raw
     }
 
     /// Line count of the output content.
-    // Retained: part of the `OutputPresentation` API documented in
-    // `architecture/output.md`; no production caller yet.
     #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         if self.raw.is_empty() {
@@ -75,8 +70,6 @@ impl<'a> OutputPresentation<'a> {
     }
 
     /// Content truncated to a bounded number of lines, with a note if truncated.
-    // Retained: part of the `OutputPresentation` API documented in
-    // `architecture/output.md`; no production caller yet.
     #[allow(dead_code)]
     pub fn display_bounded(&self, max_lines: usize) -> String {
         if self.raw.is_empty() {

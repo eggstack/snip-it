@@ -1,6 +1,6 @@
 # Sync Cursor Protocol Roadmap
 
-Status: active
+Status: closed
 
 > **2026-10-22 — M001 conditionally closed.** The milestone's implementation
 > plan (`plans/implementation/sync-cursor-protocol/001-monotonic-per-library-sequence-cursor.md`)

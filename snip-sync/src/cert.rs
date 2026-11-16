@@ -62,7 +62,6 @@ pub fn generate_dev_certs(force: bool, out_dir: Option<PathBuf>) -> Result<(), S
         return Err(format!("openssl failed: {}", stderr));
     }
 
-    // Set permissions on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

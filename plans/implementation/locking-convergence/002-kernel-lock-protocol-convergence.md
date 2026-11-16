@@ -1,6 +1,9 @@
 # Locking Protocol and Ordering Convergence Milestone 002 — Kernel-lock protocol convergence
 
-Status: ready
+Status: blocked
+
+> The proposal requires a new workspace crate, contrary to the repository's
+> no-new-crates rule. Revise the design before handoff.
 
 Repository baseline: `dca5d3136db8a216ba4fcf8bfddac9140d1029ff`
 

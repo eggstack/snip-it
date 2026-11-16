@@ -759,9 +759,7 @@ fn remove_terminal_journal(transaction_dir: &Path, transaction_id: &str) -> Snip
 /// Completes the pending sync intent and runs canonical cleanup.
 /// Both startup recovery and repair call this API. It affects no
 /// other journal. Acquires the transaction lock internally.
-// Retained: public transaction API — finalizes a committed-local journal.
-// The module is `pub` under `test-support`, so the item stays reachable even
-// though no in-crate caller sits outside this module.
+// Retained for the public test-support API.
 #[allow(dead_code)]
 pub fn finalize_committed_local_transaction(
     sync_state_dir: &Path,
@@ -1100,9 +1098,7 @@ pub fn advance_to_committing(
 ///
 /// `next_rollback_position` represents completed rollback actions in
 /// rollback order: positions `0..N` have been restored and verified.
-// Retained: public transaction API — advances a journal into the rolling-back
-// state. The module is `pub` under `test-support`, so the item stays
-// reachable even though no in-crate caller sits outside this module.
+// Retained for the public test-support API.
 #[allow(dead_code)]
 pub fn advance_to_rolling_back(
     state_dir: &Path,

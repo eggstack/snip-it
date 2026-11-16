@@ -87,16 +87,18 @@ transport, server runtime, or MCP registration.
 - No deletion of behavior that is reachable but undocumented; reachable
   behavior is documented, not removed, unless a milestone says otherwise.
 
-## 4. Current state
+## 4. Baseline before M001-M003
 
-All six previously registered subsystem roadmaps are closed. The repository is
-in a consolidation-saturated state: `plans/registry.md` records no pending
-handoff, and the recent history is a sequence of audit-driven corrective
-passes. That closure has left three structural gaps.
+> This section records the pre-implementation state; closure records for
+> M001-M003 in §12 document the outcomes.
+
+At that baseline, all six previously registered subsystem roadmaps were
+closed. The repository was in a consolidation-saturated state, and the
+remaining work was the three structural gaps below.
 
 **Unreachable policy retained behind lint suppressions.** `src/migration.rs`
-(711 lines) declares a schema-version migration framework. At the current
-baseline it has zero production callers: `MigrationPlan`,
+(711 lines) declares a schema-version migration framework. At that
+baseline it had zero production callers: `MigrationPlan`,
 `MigrationOperation`, `MigrationOutput`, `SchemaVersion`, `Migration`,
 `needs_migration`, `get_schema_version`, `write_schema_version`, and
 `run_migrations` are each referenced only from inside `src/migration.rs`
@@ -108,8 +110,8 @@ storage contract that does not exist. Two canonical documents nonetheless
 carry a durable rule about it — `AGENTS.md` and
 `plans/000-long-term-specification.md` §5 both require that
 `write_schema_version` use `toml::Table` rather than `toml::Value` to
-preserve array-of-tables — so the rule currently governs a function nothing
-calls.
+preserve array-of-tables — so the rule then governed a function nothing
+called.
 
 Smaller instances of the same pattern: `Durability::EphemeralCoordination`
 in `src/utils/atomic.rs` is documented as the "lock files" class but
@@ -247,10 +249,9 @@ restore-manifest and backup tests remain green.
 
 Deferred work: none within this subsystem.
 
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
+Implementation plan: `plans/implementation/maintenance-consolidation/002-backup-and-snapshot-policy-convergence.md`
 
-Closure record: to be written at closure.
+Closure record: `plans/closure/maintenance-consolidation/002-status.md` (closed).
 
 Predecessor flat plan: none.
 
@@ -281,10 +282,9 @@ spellings.
 
 Deferred work: none within this subsystem.
 
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
+Implementation plan: `plans/implementation/maintenance-consolidation/003-diagnostic-vocabulary-unification.md`
 
-Closure record: to be written at closure.
+Closure record: `plans/closure/maintenance-consolidation/003-status.md` (closed).
 
 Predecessor flat plan: none.
 

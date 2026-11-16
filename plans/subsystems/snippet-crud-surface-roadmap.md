@@ -250,11 +250,6 @@ the change on the next read; `bash scripts/check.sh` passes.
 
 Deferred work: non-interactive field update (M003).
 
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
-
-Closure record: to be written at closure.
-
 Predecessor flat plan: none.
 
 ### M003 — Non-interactive field update
@@ -264,7 +259,7 @@ Class: capability
 Objective: allow a snippet's description, command, and tags to be changed
 non-interactively, generalizing the existing `snp edit --output` path.
 
-Dependencies: hard M001 (shares the mutation primitive).
+Dependencies: hard M001 and M002; M002 provides the shared field-update primitive.
 
 Deliverable boundary: one update command that can set description, command,
 tags, and output; the existing `snp edit --output` behavior is either
@@ -284,11 +279,6 @@ records what changed; the update is atomic with respect to concurrent
 writers, re-reading under the lock; `bash scripts/check.sh` passes.
 
 Deferred work: none within this subsystem.
-
-Implementation plan: not yet written — authored when this milestone
-becomes dependency-ready.
-
-Closure record: to be written at closure.
 
 Predecessor flat plan: none.
 
@@ -396,4 +386,4 @@ and that no unresolved medium-or-higher finding remains.
 |---|---|---|---|---|
 | M001 non-interactive snippet delete | closed | `plans/implementation/snippet-crud-surface/001-non-interactive-snippet-delete.md` | `plans/closure/snippet-crud-surface/001-status.md` | — |
 | M002 folder and favorite write path | closed | `plans/implementation/snippet-crud-surface/002-folder-and-favorite-write-path.md` | `plans/closure/snippet-crud-surface/002-status.md` | — |
-| M003 non-interactive field update | not started | — | — | M001 closed |
+| M003 non-interactive field update | blocked | `plans/implementation/snippet-crud-surface/003-non-interactive-field-update.md` | — | Refresh the draft against M002's closed field-update primitive before handoff |
