@@ -26,7 +26,7 @@ On Windows, download and inspect `install.ps1`, then run it in PowerShell:
 ```powershell
 irm https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.ps1 -OutFile .\install-snip-it.ps1
 Get-Content .\install-snip-it.ps1
-. .\install-snip-it.ps1 -Component Snp
+& .\install-snip-it.ps1 -Component Snp
 ```
 
 The shorter `irm ... | iex` form is convenient but executes remote content

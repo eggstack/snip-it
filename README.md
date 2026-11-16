@@ -11,13 +11,13 @@ short scripts. Save commands as plain TOML, find them with fuzzy search, fill in
 variables at use time, and run, copy, inspect, or insert them from a
 keyboard-driven TUI.
 
-Inspired by [pet](https://github.com/knqyf263/pet) — same simple editable
-snippet format — with libraries, richer TUI navigation, shell integration,
-themes, and optional self-hosted encrypted sync.
+Inspired by [pet](https://github.com/knqyf263/pet) and its simple, editable
+snippet format, snip-it adds libraries, richer TUI navigation, shell
+integration, themes, and optional self-hosted encrypted sync.
 
 > Commands chosen with `snp run` are executed through your shell exactly as
 > stored after variable expansion. Snip-it is a snippet manager, not a sandbox or
-> secrets manager — only save and run commands you trust.
+> secrets manager. Only save and run commands you trust.
 
 ## Install
 
@@ -30,7 +30,7 @@ Windows (inspect before running):
 ```powershell
 irm https://raw.githubusercontent.com/eggstack/snip-it/main/packaging/install.ps1 -OutFile .\install-snip-it.ps1
 Get-Content .\install-snip-it.ps1
-. .\install-snip-it.ps1 -Component Snp
+& .\install-snip-it.ps1 -Component Snp
 ```
 
 Or from crates.io (needs Rust 1.94+):
@@ -88,8 +88,8 @@ kubectl config use-context <ctx=|_dev_||_prod_|>  # pet-compatible choice
 
 ## Scripting
 
-`snp get` retrieves a snippet deterministically — no TUI, no execution. Use it
-when a script needs a command:
+`snp get` retrieves a snippet deterministically without opening the TUI or
+executing it. Use it when a script needs a command:
 
 ```bash
 snp get --query 'push a branch' --field command
@@ -139,17 +139,19 @@ snp new 'kubectl get pods' --description 'Pods' --library work
 snp list --library work
 ```
 
-`--library all` targets every library at once. `all` is a reserved name and
-cannot be used as a library name. See
+Where supported, `--library all` targets every library at once. `all` is a
+reserved name and cannot be used as a library name. See
 [docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md).
 
 ## Shell integration
 
 `snp shell init` prints functions and widgets for bash, zsh, and fish. Inspect
-the output before sourcing it — it installs no key bindings by default.
+the output before sourcing it. It installs no key bindings by default.
 
 ```bash
-snp shell init bash >> ~/.bashrc
+snp shell init bash              # inspect the generated code
+# After review, add this line to ~/.bashrc:
+eval "$(snp shell init bash)"
 snp doctor --check-shell bash
 ```
 
@@ -167,8 +169,8 @@ snp doctor --check-shell bash
 
 Sync encrypts snippet content (description, command, tags) with AES-256-GCM
 before sending it, and the server stores only ciphertext for that content. Sync
-metadata — snippet IDs, timestamps, device ID, and deletion markers — travels
-in the clear, and the server sees your API key as a bearer token. See
+metadata, including snippet IDs, timestamps, device ID, and deletion markers,
+travels in the clear. The server also sees your API key as a bearer token. See
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the trust boundary.
 
 ## Configuration
@@ -197,20 +199,20 @@ Start with the [docs index](docs/README.md).
 | Document | Subject |
 |----------|---------|
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Task-oriented guide: libraries, variables, pet import, shell integration, themes, sync, auto-sync, recovery |
-| [docs/COMMANDS.md](docs/COMMANDS.md) | Every subcommand and its flags |
+| [docs/COMMANDS.md](docs/COMMANDS.md) | Command overview and common selection behavior |
 | [docs/EXIT_CODES.md](docs/EXIT_CODES.md) | Stable exit codes 0–10 and their meaning |
 | [docs/COMMAND_CONTRACTS.md](docs/COMMAND_CONTRACTS.md) | Per-command behavior, startup recovery, stdout/stderr split |
 | [docs/LIBRARY_SCOPE.md](docs/LIBRARY_SCOPE.md) | How `--library` resolves |
 | [docs/MCP.md](docs/MCP.md) | The read-only MCP server and its tools |
-| [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Behavioral matrix vs. `pet` import |
+| [docs/PET_COMPATIBILITY.md](docs/PET_COMPATIBILITY.md) | Pet file compatibility and migration |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Sync trust boundary and what is not encrypted |
 | [docs/IDENTITY_CONTRACT.md](docs/IDENTITY_CONTRACT.md) | How snippet IDs are derived |
 | [SECURITY.md](SECURITY.md) | Reporting a vulnerability and current posture |
 
 Contributors and reviewers should start with
-[architecture/overview.md](architecture/overview.md) — the module map, the
-cross-cutting invariants, and the index of 62 per-component deep dives.
+[architecture/overview.md](architecture/overview.md), which includes the module
+map, cross-cutting invariants, and an index of 62 per-component deep dives.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

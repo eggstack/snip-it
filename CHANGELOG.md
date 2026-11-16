@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--favorite`, `--unfavorite`, `--add-folder`, and `--remove-folder`, and emit
   `--json` with `status` `updated` or `unchanged`.
 
+### Documentation
+
+- Polished onboarding, command, and Pet migration guides; corrected installer and server setup examples and removed stale compatibility roadmap details.
+
 ### Changed
 
 - **Shared diagnostic vocabulary and library scan (behavior-preserving).**

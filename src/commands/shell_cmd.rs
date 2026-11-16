@@ -324,6 +324,8 @@ snp_new_previous() {
 # To bind, add to your .zshrc:
 #   bindkey '^O' snp_select_raw
 #   bindkey '^O^E' snp_select_expanded
+#   zle -N snp_new_current
+#   zle -N snp_new_previous
 #   bindkey '^N' snp_new_current
 #   bindkey '^P' snp_new_previous
 "#

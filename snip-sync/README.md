@@ -310,7 +310,7 @@ For contributors building from the repository:
 git clone https://github.com/eggstack/snip-it.git
 cd snip-it/snip-sync
 cargo build --release
-./target/release/snip-sync --help
+../target/release/snip-sync --help
 ```
 
 For a container image:
@@ -348,7 +348,7 @@ on a remote host.
 - **`TLS termination is required`**: use `SNIP_SYNC_ALLOW_HTTP=true` only for a local direct connection, or put a TLS proxy in front and set `TLS_ENABLED=true`.
 - **Client registration fails**: use `http://127.0.0.1:50051` for direct local serving and the proxy's `https://` URL for production.
 - **A second environment sees no libraries**: it was probably registered as a new account. Provision the first environment's API key instead.
-- **API key cannot be saved**: configure an OS keychain. On a deliberately headless machine, `SNP_ALLOW_PLAINTEXT_API_KEY=true snp register ...` opts into plaintext storage and should be protected with strict file permissions.
+- **API key cannot be saved**: configure a supported OS keychain. Snip-it refuses to write the API key as plaintext when the keychain is unavailable.
 - **Port in use**: run `snip-sync paths` and inspect the configured gRPC/HTTP ports.
 - **Health check fails**: request `curl http://127.0.0.1:50050/health` and inspect the server logs.
 - **Server will not stop**: use `snip-sync stop --force` only after confirming the PID with `snip-sync paths` and the process list.

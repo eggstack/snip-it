@@ -40,6 +40,10 @@ snp clip --library work
 snp edit --library work
 ```
 
+Run `snp edit` to open the primary library file in your editor, or pass
+`--library <NAME>` to choose another library. To update an individual snippet's
+output/notes field, use the options shown in [Editing output](#editing-output).
+
 In the snippet TUI opened by `snp run`, `snp clip`, or `snp search`, press `d`
 in normal mode to delete the selected snippet. (`snp select` is read-only and
 does not offer the shortcut.) The confirmation box requires `y` to proceed; any
@@ -108,65 +112,24 @@ snp import pet /path/to/pet-snippets.toml --library existing-lib --replace
 snp import pet /path/to/pet-snippets.toml --report json
 ```
 
-#### Pre-migration diagnostics
+#### Check and import a Pet file
 
-`snp doctor` has five modes:
-
-- **`--pet-file <path>`** — Analyze a pet snippet file for compatibility issues.
-  Reports TOML parse status, unknown fields, missing required fields, empty
-  commands, choice variables, duplicates, output fields, and normalization
-  previews. Suggests the exact import command to run based on findings.
-
-- **`--compatibility`** — Audit the installed snp environment. Checks binary
-  version, config directory, library directory, primary library, sync config,
-  shell availability (bash/zsh/fish), shell init syntax validation, editor
-  configuration, legacy paths, Release 1 `snp select` availability, Release 2
-  acquisition flags (`--command-stdin`, `--from-file`, `--editor`), and Release 3
-  choice-variable parser.
-
-- **`--library <name>`** — Analyze a specific library file (resolved from
-  `~/.config/snp/libraries/` or a literal path). Same analysis as `--pet-file`
-  but targets a snp library.
-
-- **`--sync`** — Report sync configuration and health: server URL reachability,
-  auto-sync policy, pending work, and last-attempt status. Read-only; it never
-  triggers a sync.
-
-- **`--check-shell <bash|zsh|fish>`** — Validate the syntax of `snp shell init`
-  output for the specified shell. Generates the init code, then runs the shell's
-  syntax checker (`bash -n`, `zsh -n`, or `fish --no-execute`).
-
-All modes support `--report human|json` for output format and `--strict` to
-treat warnings as errors. Diagnostics include `SourceSpan` byte-offset
-locations for precise positioning within the source file.
+`snp doctor --pet-file <path>` reports compatibility issues without changing
+the source. Preview, then import the file as a registered library:
 
 ```bash
 snp doctor --pet-file ~/.config/pet/snippets.toml
-snp doctor --pet-file snippets.toml --report json
-snp doctor --compatibility
-snp doctor --check-shell zsh
+snp import pet ~/.config/pet/snippets.toml --dry-run
+snp import pet ~/.config/pet/snippets.toml --library pet-snippets
 ```
 
-The source file is never modified. Merged and replaced libraries are backed up
-before overwrite.
-
-Alternatively, you can copy the file directly:
-
-```bash
-SNP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/snp"
-snp library create pet
-cp /path/to/pet-snippets.toml "$SNP_CONFIG_DIR/libraries/pet.toml"
-snp library set-primary pet
-```
-
-Copy the file only after `snp library create pet`, so the library metadata is
-registered.
-
-Snip-it also reads older `[[Snippets]]` files and capitalized aliases such as
-`Description`, `Command`, `Tag`, and `Output`. Snip-it adds optional metadata
-(`id`, `folders`, `favorite`, timestamps, and sync state); pet will ignore data
-it does not know about, so use a separate copy if you need to preserve that
-metadata while editing the same collection with both tools.
+Use `--merge` to add entries to an existing library, `--replace` to replace it
+(with a backup), `--report json` for machine-readable output, or `--strict` to
+treat warnings as errors. Unknown Pet-specific fields are reported but not
+preserved. Import assigns new snippet IDs and resets sync-only state. Review
+non-empty `output` values because snip-it uses them as stdout destination paths
+when running snippets. See [Pet file compatibility and migration](PET_COMPATIBILITY.md)
+for details.
 
 ## Agent / MCP integration
 
@@ -187,12 +150,12 @@ snp mcp instructions zed
 `snippets_list` enumerates metadata, `snippets_search` uses snip-it's canonical
 fuzzy ranking over description, command, and tags (with opt-in output/notes
 matching and an explicit `tags` filter), and `snippet_get` resolves an exact
-ID, unique exact description, or unique exact command — the same identity
-fields as `snp get`. Each result includes the command as text for the agent to use
-under its own execution and approval policy. `snp mcp install <client>` only
-uses official noninteractive client commands where their registration
-contract is stable; otherwise it prints a schema-specific configuration
-block without changing user files. See [MCP.md](MCP.md).
+ID, unique exact description, or unique exact command. These are the same
+identity fields as `snp get`. Each result includes the command as text for the
+agent to use under its own execution and approval policy. `snp mcp install <client>` uses
+noninteractive client commands where registration is stable. Otherwise, it
+prints a schema-specific configuration block without changing user files. See
+[MCP.md](MCP.md).
 
 ## Shell integration
 
@@ -205,13 +168,13 @@ cancellation.
 ### Setup
 
 ```bash
-# Bash — add to ~/.bashrc
+# Bash: add to ~/.bashrc
 eval "$(snp shell init bash)"
 
-# Zsh — add to ~/.zshrc
+# Zsh: add to ~/.zshrc
 eval "$(snp shell init zsh)"
 
-# Fish — add to ~/.config/fish/config.fish
+# Fish: add to ~/.config/fish/config.fish
 snp shell init fish | source
 ```
 
@@ -248,6 +211,8 @@ bind -x '"\C-n": snp_new_current'
 bind -x '"\C-p": snp_new_previous'
 
 # Zsh
+zle -N snp_new_current
+zle -N snp_new_previous
 bindkey '^N' snp_new_current
 bindkey '^P' snp_new_previous
 
@@ -264,13 +229,10 @@ snp_new_current --description 'Current deployment command' --tags deploy,work
 snp_new_previous --description 'Last accepted command' --library work
 ```
 
-The binary receives the command through `snp new --command-stdin`. It stores
-valid UTF-8 exactly, including zero or more supplied trailing newlines; it does
-not trim, normalize, evaluate, execute, or log the command body. The stdin
-ingestion limit is 16 MiB, and invalid UTF-8 or NUL bytes are rejected before
-the library is changed. `--description` is required in this mode; omit
-`--tags` or pass an explicit comma/space-separated value rather than using the
-interactive tag prompt.
+The helpers pass the command to `snp new --command-stdin`. This mode accepts
+UTF-8 input up to 16 MiB and rejects NUL bytes. `--description` is required;
+pass `--tags` explicitly if you do not want an interactive tag prompt. The
+command is saved as data and is not executed.
 
 ### File and editor creation
 
@@ -285,34 +247,17 @@ snp new --from-file ./deploy.sh --description 'Deploy service'
 snp new --editor --description 'Complex pipeline'
 ```
 
-`--from-file` reads the specified file as exact UTF-8 command data. It rejects
-invalid UTF-8, NUL bytes, files larger than 16 MiB, and non-regular files
-(directories, FIFOs, sockets, device nodes, broken symlinks). Symlinks to
-regular files are followed. The file content is stored verbatim — no trimming,
-evaluation, or execution.
+`--from-file` reads a UTF-8 file of up to 16 MiB and stores its contents as the
+command. `--editor` opens `$VISUAL`, then `$EDITOR`, then `vim`; editor arguments
+such as `code --wait` are supported without invoking a shell. Both modes store
+the command without executing it. Since they do not use stdin, the description
+is optional and tags can be entered interactively.
 
-`--editor` opens `$VISUAL` (if set), then `$EDITOR`, falling back to `vim`, with
-a temporary file. The temp file is created atomically in the OS temp directory
-with `0600` permissions and cleaned up automatically after the editor exits.
-Editor command specifications support arguments — values like `code --wait`,
-`nvim -f`, or `"/path with spaces/bin/code" --wait` are parsed with shell-word
-semantics and passed through to the editor directly; no shell is invoked. After
-the editor exits, empty content or a failed invocation returns an error.
-Non-empty content is stored verbatim.
-
-Both modes do not consume stdin, so `--description` is optional and tags can be
-prompted interactively.
-
-The Bash and Zsh previous helpers use their native history APIs and avoid
-self-capture when invoked as ordinary functions or widgets. Fish uses its
-native history search API. No helper reads `.bash_history`, `.zsh_history`, or
-Fish history files, and none prints the captured command as a status message.
-The Bash current-buffer widget requires a Bash Readline with `READLINE_LINE`
-(Bash 4+); the macOS system Bash 3.2 can still use the generated history
-helper, but cannot expose the active buffer to this widget.
-Shell history may contain credentials, access tokens, private URLs, or other
-secrets; inspect a command before saving it and avoid putting secrets in
-history in the first place.
+The history helpers use each shell's history API rather than reading history
+files. The Bash current-buffer helper requires Bash 4 or later; macOS's system
+Bash 3.2 supports the previous-history helper but not current-buffer capture.
+Shell history can contain credentials or other secrets, so review a command
+before saving it.
 
 ### Binding keys
 
@@ -320,44 +265,28 @@ No keybindings are installed by default. After sourcing the generated
 code, bind your preferred keys:
 
 ```bash
-# Bash — in ~/.bashrc after the eval
+# Bash: in ~/.bashrc after the eval
 bind -x '"\C-o": snp_select_raw'
 bind -x '"\C-o\C-e": snp_select_expanded'
 
-# Zsh — in ~/.zshrc after the eval
+# Zsh: in ~/.zshrc after the eval
 bindkey '^O' snp_select_raw
 bindkey '^O^E' snp_select_expanded
 
-# Fish — in ~/.config/fish/config.fish after the source
+# Fish: in ~/.config/fish/config.fish after the source
 bind \co snp_select_raw
 bind \co\e snp_select_expanded
 ```
 
-These are shell-side bindings. The snippet TUI has its own keys — selector
-mode, theme picker, and the variable prompt — and `snp keybindings` prints
-the complete TUI reference.
+These are shell-side bindings. The TUI has separate key maps for the selector,
+theme picker, and variable prompts. Run `snp keybindings` for the complete TUI
+reference.
 
-### How it works
+### Selection and cancellation
 
-1. The shell function reads the current command buffer.
-2. It writes a temp file path and calls `snp select --query <buffer> --raw`
-   (or `--expanded`) with `--output-file <tmpfile>`.
-3. On success the temp file contents replace the buffer; on cancellation
-   (exit code 4) the original buffer is restored exactly.
-4. The temp file is removed immediately after reading.
-
-The temp-file transport is lossless: multiline snippets, quotes, backslashes,
-Unicode, and shell metacharacters are preserved byte-for-byte. The generated
-code never uses `eval` on selected content.
-
-### Cancellation and errors
-
-- **User cancels** (Esc/Ctrl-C in the TUI): exit code 4, original buffer
-  restored, no output printed.
-- **Operational failure** (snp not found, library missing, etc.): stderr
-  diagnostic shown, original buffer restored, non-zero exit code.
-- **Success**: the selected command replaces the buffer; cursor moves to the
-  end. The user presses Enter explicitly to execute.
+The selected command replaces the current buffer only after a successful
+selection. Cancelling restores the original buffer. Selection never executes
+the command; press Enter when you are ready to run it.
 
 ### Pet migration
 
@@ -374,30 +303,33 @@ stdout only.
 
 ## TUI key bindings
 
-The selector starts in **insert mode** — typing filters the list. Press `Esc`
-to reach **normal mode**, where the navigation keys live.
+The selector starts in **insert mode**, where typing filters the list. Press
+`Esc` to reach **normal mode** and use the navigation keys.
 
 | Key | Normal mode | Insert mode |
 |-----|-------------|-------------|
 | `j` / `k` or `↓` / `↑` | Move down / up | `j` and `k` are literal characters |
-| `h` / `l` or `←` / `→` | Move left / right | — |
-| `gg` / `G` | Jump to top / bottom | — |
-| `Ctrl+f` / `Ctrl+b` | Page down / up | — |
-| `Ctrl+d` / `Ctrl+u` | Page down / up (helix bindings) | — |
-| `v` / `V` | Visual mode (character / line) | — |
-| `Enter` | Select and execute | Select and execute |
+| `h` / `l` or `←` / `→` | Move left / right | n/a |
+| `gg` / `G` | Jump to top / bottom | n/a |
+| `Ctrl+f` / `Ctrl+b` | Page down / up | n/a |
+| `Ctrl+d` / `Ctrl+u` | Page down / up (helix bindings) | n/a |
+| `v` / `V` | Visual mode (character / line) | n/a |
+| `Enter` | Accept the selected snippet's action | Accept the selected snippet's action |
 | `Esc` | No-op (use `q` to quit) | Return to normal mode |
 | `/` | Search | Start a search |
-| `i` | Insert mode | — |
-| `y` | Copy the snippet and quit | — |
-| `d` | Delete the snippet (confirm with `y`) | — |
-| `e` | Open the theme picker | — |
-| `q` | Quit | — |
-| `t` | Toggle the tag filter | — |
-| `n` / `o` / `a` / `z` | Sort by newest / oldest / a-z / z-a | — |
-| `x` / `c` | Clear the filter | — |
+| `i` | Insert mode | n/a |
+| `y` | Copy the snippet and quit | n/a |
+| `d` | Delete the snippet (confirm with `y`) | n/a |
+| `e` | Open the theme picker | n/a |
+| `q` | Quit | n/a |
+| `t` | Toggle the tag filter | n/a |
+| `n` / `o` / `a` / `z` | Sort by newest / oldest / a-z / z-a | n/a |
+| `x` / `c` | Clear the filter | n/a |
 | `Tab` | Toggle list display mode (command only / description + command) | Same |
-| `Ctrl+g` | First theme (in the picker) | — |
+| `Ctrl+g` | First theme (in the picker) | n/a |
+
+The selected action depends on the command: `run` executes, `clip` copies, and
+`search` displays snippet details.
 
 The theme picker (`e`) filters with `i`, moves with `j`/`k`, pages with
 `Ctrl+d`/`Ctrl+u`, and saves with `Enter`. `e` or `q` cancels and reverts to the
@@ -407,12 +339,12 @@ Variable prompts are modal: `Enter` saves the values, `q` returns to the
 snippet selector (it does not quit), and `Ctrl+c` exits. `d` toggles the
 default-value hint.
 
-Run `snp keybindings` to print the complete, always-current reference.
+Run `snp keybindings` for the complete, current reference.
 
 ## Themes
 
-Snip-it accepts Halloy color-theme files. Copy a Halloy theme file—not the
-Halloy application config—into:
+Snip-it accepts Halloy color-theme files. Copy a theme file, not the Halloy
+application config, into:
 
 ```text
 $XDG_CONFIG_HOME/snp/themes/<name>.toml
@@ -486,13 +418,12 @@ With that setting, plain `snp sync` merges local and remote changes.
 
 ### Conflict behavior
 
-Shared fields use last-write-wins ordering by `(updated_at, device_id,
-SHA-256(synced fields))` — never role-dependent server-wins: equal
-timestamps break by `device_id`, then content fingerprint. Deletion beats
-live content even with an older timestamp (no resurrection). Local-only
-fields such as `output`, `folders`, and `favorite` are not synchronized
-and are preserved locally when a remote version replaces the shared fields.
-Deleted snippets are retained as tombstones so a later sync can converge.
+Client merges order shared fields by `(updated_at, device_id, SHA-256 of the
+synced fields)`. A deletion wins over live content in a client merge, even if
+the deletion has an older timestamp. The server uses a separate
+`updated_at`-based upsert, so a newer live row can replace a server tombstone.
+Local-only fields such as `output`, `folders`, and `favorite` are not synced
+and stay local when remote shared fields are applied.
 
 ### Delta cursor
 
@@ -500,9 +431,8 @@ The server assigns every write a strictly increasing per-library sequence, and
 the client stores that cursor next to `last_sync`, so a pull returns exactly
 the rows written since the last sync instead of everything newer than a
 second-granular timestamp. The cursor is additive: a client that talks to an
-older server keeps using the timestamp cursor. `libraries.toml` records which
-cursor the server is serving in the `sync_cursor_kind` field — `unknown`,
-`timestamp`, or `sequence`.
+older server keeps using the timestamp cursor. `libraries.toml` records the
+cursor type in `sync_cursor_kind`: `unknown`, `timestamp`, or `sequence`.
 
 ## Syncing one account across environments
 
@@ -510,7 +440,7 @@ The server authenticates a collection by API key. Every successful
 `snp register` call mints a **new** account and API key on the server; it never
 joins an existing account. If the environment already has a device ID,
 `snp register` prints `Already registered!` and exits without contacting the
-server — pass `--force` to register again. Therefore:
+server. Pass `--force` to create a new account and key. To share one account:
 
 1. Register one environment against the remote HTTPS endpoint.
 2. Use `snp sync run --push-only` there to create and seed the server libraries.
@@ -535,30 +465,27 @@ On an additional environment, the settings have this shape:
 [settings.sync]
 enabled = true
 server_url = "https://sync.example.com"
-api_key = "<the same API key as the first environment>"
+api_key = "@keychain"
 device_id = "<a unique ID for this environment>"
 sync_interval_minutes = 30
 auto_sync = false
 sync_direction = "Bidirectional"
 ```
 
-The API key is normally represented as `@keychain` after snp stores it in the
-OS keychain. On a headless environment, write the key into the platform's
-secret store yourself and set `device_id` in `sync.toml` — do **not** run
-`snp register` there, because it mints a fresh key and would overwrite the
-provisioned one. Note that snp **refuses** to save a plaintext key rather than
-falling back: if the keychain is unavailable the write fails with
-`keychain unavailable: <reason>; refusing plaintext API-key storage`. Do not
-commit `sync.toml` either way. See
+The API key is normally represented as `@keychain` in `sync.toml`; the secret
+itself stays in the OS keychain. Moving the config directory or changing
+`XDG_CONFIG_HOME` does not remove the keychain entry. On a headless environment,
+provision the same key in the supported OS keychain and set a unique
+`device_id` in `sync.toml`. Do not run `snp register` there because it creates
+a new account and key. Snip-it refuses to save the key as plaintext if the
+keychain is unavailable. Do not commit `sync.toml`. See
 [THREAT_MODEL.md](THREAT_MODEL.md) for the credential-handling contract.
 
 ## Auto-sync
 
-Auto-sync is disabled by default. When enabled, mutation commands spawn a
-**detached one-shot worker** (`snp auto-sync-worker`) that performs the remote
-sync after the local change is committed. The worker is fully detached from
-the parent process — it runs in its own session (`setsid` on Unix) with no
-controlling terminal, and the parent returns immediately to the user.
+Auto-sync is disabled by default. When enabled, snippet changes schedule a
+separate background worker after the local save. The command returns without
+waiting for the remote sync to finish.
 
 ### Configuration
 
@@ -600,15 +527,10 @@ auto_sync_failure = "warn"
 
 ### Behavior
 
-- Local mutations always succeed before any remote work begins.
-- A failed auto-sync never rolls back or corrupts a successful local save.
-- The parent spawns the worker and returns immediately — no in-process debounce delay.
-- The detached worker invokes `run_sync` directly (no descendant executor process) with bounded timeouts; one `snp auto-sync-worker` invocation attempts one sync, bounded by `sync_timeout` (default 30s).
-- All sync operations (worker, manual `snp sync`, explicit `--sync`, cron) share a single `SyncExecutionLock`. The worker owns this lock for the entire detached cycle.
-- A durable pending marker (`auto-sync-pending.toml`) records the latest mutation generation with CRC32 integrity; only the worker that observes its own generation may clear it.
-- PID+nonce worker lock (`auto-sync-worker.lock`) with `kill -0` liveness detection prevents concurrent worker executions across processes.
-- Sync-merge writes never recursively trigger auto-sync.
-- Worker creates its own Tokio runtime internally — the parent does not pass one.
+- The local change is saved before sync starts. A sync failure never rolls back a successful local change.
+- A separate worker handles sync, so the command does not wait for the debounce period.
+- Manual and automatic sync runs are serialized to prevent overlapping requests.
+- Pending work is retained when it cannot be completed, and sync-merge writes do not schedule another sync.
 
 ### Failure modes
 
@@ -618,11 +540,10 @@ auto_sync_failure = "warn"
 | `warn` (default) | The scheduling failure is logged at warn level. |
 | `error` | The scheduling failure is logged at error level. |
 
-The mode selects the log level only. In every mode the mutating command still
-prints a `warning:` line to stderr when the worker cannot be scheduled, and the
-local mutation stays committed — no mode turns a scheduling failure into a
-nonzero exit code. Worker-side failures are logged to `~/.config/snp/logs/`
-and are visible via `snp doctor`.
+The setting controls the log level only. If the worker cannot be scheduled,
+the mutating command prints a warning to stderr. The local change remains
+saved, and scheduling failures do not change the command's exit status. Worker
+failures appear in `~/.config/snp/logs/` and in `snp doctor`.
 
 ## Premade libraries
 
@@ -669,8 +590,8 @@ can be combined with any `--sort` value.
 
 Successful `run` and `clip` operations record usage metadata locally:
 
-- `use_count` — incremented on each successful operation
-- `last_used_at` — set to the current Unix timestamp
+- `use_count`: incremented on each successful operation
+- `last_used_at`: set to the current Unix timestamp
 
 Usage data is stored in `~/.config/snp/usage.toml`, separate from snippet
 libraries. It is never synced, never written into library TOML files, and never
@@ -697,8 +618,8 @@ The TUI shows the active sort mode in the status bar:
 Press `n` to toggle sort-by-newest, `o` for sort-by-oldest, `a` for
 description A→Z, and `z` for description Z→A. Each key toggles its own mode
 rather than cycling through a list. There is no interactive favorites-first
-toggle — pass `--favorites-first` instead. `[used]` and `[freq]` are reachable
-only via `--sort last-used` and `--sort most-used`; no key selects them.
+toggle, so pass `--favorites-first` instead. `[used]` and `[freq]` are only
+available through `--sort last-used` and `--sort most-used`; no key selects them.
 
 ### Machine output ordering
 
@@ -716,14 +637,14 @@ description, and original index.
 ### Output / notes metadata
 
 Each snippet can store descriptive metadata in the `output` field (also
-called "notes"). This field is preserved during import, sync, and backup.
+called "notes"). The field is preserved during Pet import and backup, but it is
+local-only and is not synced.
 
 The field doubles as a stdout redirect target. When `output` is non-empty,
 `snp run` writes the snippet's stdout to the file named by `output`, resolved
-relative to the current working directory. The file is created fresh on every
-run — an existing file makes the run fail — and a path that resolves outside
-the working directory is refused. Only stdout is redirected; stderr still
-goes to the terminal. The pet difference is tabulated in
+relative to the current working directory. The output file must not already
+exist, and paths outside the working directory are refused. Only stdout is
+redirected; stderr still goes to the terminal. The Pet difference is covered in
 [PET_COMPATIBILITY.md](PET_COMPATIBILITY.md).
 
 In the TUI preview, output appears below the command separated by
@@ -810,7 +731,7 @@ When the snippet is executed or copied, a list selector is shown with the
 available choices. The first choice is the default. Use arrow keys (or `j`/`k`
 in normal mode) to select, then press Enter.
 
-The raw command text is preserved in storage — choices are only expanded
+The raw command text stays unchanged in storage. Choices are expanded only
 during interactive prompting.
 
 Shell expressions such as `$HOME` or `$(date)` are passed to the selected
@@ -873,8 +794,8 @@ three surfaces.
 
 ### Scripting with `snp get`
 
-`snp get` is the deterministic, non-TUI entry point for scripts — it never
-opens a selector and never executes a command:
+`snp get` is a deterministic, non-TUI lookup for scripts. It never opens a
+selector or executes a command:
 
 ```bash
 snp get --query 'push a branch' --field command   # print the command
@@ -977,9 +898,9 @@ snp update --dry-run   # report the available version and how it would install
 snp update             # install using the detected installation method
 ```
 
-`snp update` detects how the binary was installed — Cargo, Homebrew, or a
-direct executable download — and follows that method. A Homebrew-managed
-`snp` stays owned by Homebrew.
+`snp update` detects whether the binary was installed with Cargo, Homebrew, or
+a direct download, then follows that method. A Homebrew-managed `snp` stays
+owned by Homebrew.
 
 ## Troubleshooting and recovery
 
@@ -1004,7 +925,7 @@ PID paths.
 | `snp repair` | Inspect and repair config, library, and interrupted-transaction state (`--dry-run`, `--apply`, `--library`, `--json`) |
 
 `snp status` is read-only and never starts a sync, so it is safe to run at
-any time. `snp validate` only reports — it never writes.
+any time. `snp validate` only reports findings and never writes.
 
 `snp backup` writes a timestamped snapshot directory under `backups/`
 containing `manifest.toml` plus the library files, each entry recorded with a
@@ -1023,10 +944,10 @@ and takes a pre-restore backup of the config directory first. Every restore
 runs inside a transaction, so a failure rolls back.
 
 `snp repair` reports problems without changing anything until `--apply` is
-passed, and it creates a backup before applying safe repairs. Each finding is
-labelled `[auto]` when it can be applied mechanically, or `[manual]` when it
-needs an operator decision. `[manual]` findings are never applied
-automatically — they are reported with a `Fix:` line instead.
+passed. It creates a backup before applying safe repairs. Findings are labelled
+`[auto]` when they can be fixed mechanically or `[manual]` when they need an
+operator decision. Manual findings are reported with a `Fix:` line and are
+never applied automatically.
 
 Exit codes follow the findings:
 
