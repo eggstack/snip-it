@@ -304,9 +304,9 @@ fn never_called() {}
 }
 
 /// Plan 017 adopted the lean `standard-http1 + redirects` profile on
-/// `eggfetch-core =0.2.0`; the Eggstack dependency-refresh M001 later moved
-/// the pin to `=0.2.2`. Either way the `snp` updater must stay on the lean
-/// profile, delegate redirect traversal to `RedirectPolicy::strict`, and
+/// `eggfetch-core =0.2.0`; a later dependency refresh moved the exact pin
+/// from `=0.2.2` to `=0.3.0`. The `snp` updater must stay on the lean profile,
+/// delegate redirect traversal to `RedirectPolicy::strict`, and
 /// delegate the logical request/body deadline to native `Timeout.total`.
 /// The superseded Plan 014/015 machinery — the manual redirect loop and the
 /// duplicate outer Tokio timeout — must not return.
@@ -317,8 +317,8 @@ fn snp_updater_pins_lean_eggfetch_profile() {
     let source = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
     assert!(
-        source.contains("eggfetch-core = { version = \"=0.2.2\""),
-        "snp updater must pin eggfetch-core =0.2.2"
+        source.contains("eggfetch-core = { version = \"=0.3.0\""),
+        "snp updater must pin eggfetch-core =0.3.0"
     );
     assert!(
         source.contains("\"standard-http1\""),
