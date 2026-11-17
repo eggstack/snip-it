@@ -10,25 +10,18 @@ Source subsystem roadmap:
 
 - `plans/subsystems/security-assurance-roadmap.md#milestone-002--ci-advisory-gates-and-action-pinning`
 
-Repository baseline reviewed: `0f3bc98` (`chore/prune-comments-and-plans`);
-implementation is uncommitted, so no CI run exists for it yet.
+Implementation commit reviewed: `49115c3` (`feat(security): add assurance controls and v2 reads`), in [PR #69](https://github.com/eggstack/snip-it/pull/69). GitHub Actions run [44191381652](https://github.com/eggstack/snip-it/actions/runs/44191381652) and Markdown link-check run [44191381677](https://github.com/eggstack/snip-it/actions/runs/44191381677) completed on 2026-11-17.
 
 Implementation commits or pull requests:
 
-- Uncommitted working tree — `.github/workflows/ci.yml` (new `advisory-gate`
-  job), SHA pins in `ci.yml`, `release-binaries.yml`,
-  `distribution-consumer-smoke.yml`, `link-check.yml`.
+- Commit `49115c3` in [PR #69](https://github.com/eggstack/snip-it/pull/69): `.github/workflows/ci.yml` (new `advisory-gate` job) and SHA pins in `ci.yml`, `release-binaries.yml`, `distribution-consumer-smoke.yml`, and `link-check.yml`.
 
 Primary class: infrastructure. **Roadmap authorization:** the source plan's M002
 entry is the revision under which `plans/README.md` permits this CI hardening.
 
 ## 1. Executive finding
 
-The gate is wired and every mutable action reference is pinned. What cannot be
-proven from this environment is the CI evidence itself: a green `advisory-gate`
-run, a red run on a deliberately unsuppressed branch, and a Dependabot
-`github-actions` update against a pinned SHA. Those require the branch to reach
-GitHub. The milestone is therefore conditionally closed with that evidence named.
+The gate is wired and every mutable action reference is pinned. PR #69 now has a green GitHub Actions run, including the `advisory-gate` job. A deliberately unsuppressed red run and a post-pin Dependabot `github-actions` update remain unverified, so the milestone stays conditionally closed with those two evidence items named.
 
 ## 2. Requirement-to-evidence matrix
 
@@ -44,8 +37,8 @@ GitHub. The milestone is therefore conditionally closed with that evidence named
 | `dtolnay/rust-toolchain` no longer a moving branch | pinned to the `stable` branch commit `39008827…` with `toolchain: "1.94"` still explicit | pass | Comment records what the ref meant when pinned |
 | Least privilege preserved | workflow `permissions: contents: read`; new job repeats it | pass | `release-binaries.yml`'s narrow `contents: write` on the attach job untouched |
 | Workflows still valid | YAML parse of all four workflow files | pass | `ci.yml` jobs: `advisory-gate`, `linux-correctness`, `platform-smoke` |
-| Green CI run recorded | — | not run | Requires GitHub Actions; see § 10 |
-| Red run on an unsuppressed branch recorded | — | not run | Same |
+| Green CI run recorded | [run 44191381652](https://github.com/eggstack/snip-it/actions/runs/44191381652) | pass | Advisory/license gate, Linux correctness, and macOS/Windows platform smoke passed; Markdown link check also passed in [run 44191381677](https://github.com/eggstack/snip-it/actions/runs/44191381677) |
+| Red run on an unsuppressed branch recorded | — | not run | A deliberately unsuppressed branch has not been tested |
 | Dependabot still updates pins | `.github/dependabot.yml` already tracks `github-actions` | not verified | Needs one Dependabot cycle after the branch lands |
 
 ## 3. Production implementation evidence
@@ -74,9 +67,7 @@ grep -rE "uses: [^ ]+@(stable|master|main)$" .github/workflows/ || echo "no muta
 python3 -c 'import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob(".github/workflows/*.yml")]'
 ```
 
-Results: the script passes; both greps return nothing; all four workflow files
-parse. `gh workflow view` and any real run were not executed: `gh` has no
-authenticated context for this worktree and the branch has not been pushed.
+Local results: the script passes, both greps return nothing, and all four workflow files parse. GitHub Actions run [44191381652](https://github.com/eggstack/snip-it/actions/runs/44191381652) passed the advisory/license gate, Linux correctness, and macOS/Windows platform smoke; Markdown link-check run [44191381677](https://github.com/eggstack/snip-it/actions/runs/44191381677) also passed. `gh pr checks 69 --watch` exited 0 after all five checks completed.
 
 ## 5. Invariant review
 
@@ -120,15 +111,13 @@ reviewed SHA.
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| medium | No CI run evidence for the new job | The job's real behaviour on `ubuntu-latest` is unproven | After push: record a green `advisory-gate` run id and a red run id from a branch with one suppression removed |
+| medium | No deliberately unsuppressed red run is recorded | The job's failure behavior on `ubuntu-latest` has not been exercised through GitHub Actions | Run a controlled branch with one suppression removed and record the failed run id |
 | low | Dependabot's SHA-update behaviour after pinning is unverified | Pins could stale silently until the next manual bump | Confirm the first `github-actions` PR after landing; if none appears, add the minimal config it needs — do not remove pinning |
 | low | `taiki-e/install-action` is a new third-party dependency in the build path | A compromised action could alter the job | It is SHA-pinned and runs only in the read-only advisory job; review its bumps like any other dependency |
 
 ## 11. Roadmap disposition
 
-Milestone conditionally closed: production implementation complete, named
-operational evidence outstanding (CI run ids and one Dependabot cycle). M006 is
-unaffected by this condition; M005 may proceed.
+Milestone conditionally closed: production implementation complete, green CI evidence is recorded, and the deliberately unsuppressed red run plus one Dependabot cycle remain outstanding. M006 is unaffected by this condition; M005 may proceed.
 
 ## 12. Registry updates
 
