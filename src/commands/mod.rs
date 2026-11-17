@@ -788,7 +788,7 @@ pub fn update_snippet_fields(
                 Some("The snippet already matches the requested state"),
             ));
         }
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         target.updated_at = target.updated_at.max(now).saturating_add(1);
         updated = Some(target.clone());
         Ok(())
@@ -934,7 +934,7 @@ pub fn delete_snippet(
         };
         let target = &mut current.snippets[index];
         target.deleted = true;
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         target.updated_at = target.updated_at.max(now).saturating_add(1);
         deleted = Some(target.clone());
         Ok(())
@@ -1036,7 +1036,7 @@ fn mark_snippet_deleted(
     })?;
 
     snippet.deleted = true;
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
     Ok(snippet.clone())
 }

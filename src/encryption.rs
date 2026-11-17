@@ -12,6 +12,28 @@
 //! - **Key Derivation**: Argon2id from API key + random salt
 //! - **Nonce**: Random 12-byte nonce per encryption (stored with ciphertext)
 //!
+//! # Payload version contract
+//!
+//! Three layouts are readable, and only version 1 is written:
+//!
+//! | Version | Layout | Identity binding |
+//! |---------|--------|------------------|
+//! | 0 | legacy: `salt ‖ nonce ‖ ciphertext` | none |
+//! | 1 | `magic ‖ 1 ‖ salt ‖ nonce ‖ ciphertext` | none |
+//! | 2 | same header, version `2` | AAD over the snippet id |
+//!
+//! Version 2 authenticates the snippet id as associated data, so a ciphertext
+//! sealed for one snippet fails the tag check under a different id. It is read
+//! but never written by this build: switching the write path is a separate,
+//! release-gated step (see
+//! `plans/subsystems/security-assurance-roadmap.md` M006), because a client
+//! that only understands version 1 would skip every version-2 payload.
+//!
+//! [`decrypt`] therefore rejects version 2 explicitly: it cannot supply the
+//! identity the tag was computed over, and silently decrypting without AAD
+//! would void the binding. Callers that hold the snippet id use
+//! [`decrypt_for_snippet`].
+//!
 //! # Example
 //!
 //! ```text
@@ -21,7 +43,7 @@
 
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, Generate, KeyInit},
+    aead::{Aead, Generate, KeyInit, Payload},
 };
 use argon2::Argon2;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -148,6 +170,30 @@ const PAYLOAD_VERSION: u8 = 1;
 /// Version of the pre-magic (unversioned) payload layout.
 const PAYLOAD_VERSION_LEGACY: u8 = 0;
 
+/// Version whose tag is computed over associated data derived from the snippet
+/// id. Read-only in this build; see the module-level payload version contract.
+const PAYLOAD_VERSION_V2: u8 = 2;
+
+/// Domain separation tag for the version-2 associated data.
+///
+/// The tag keeps this AAD from colliding with any future use of the same
+/// primitive, and the length prefix removes concatenation ambiguity if a
+/// second field is ever appended (`id="ab", x="c"` must not hash like
+/// `id="a", x="bc"`). ADR-0002 is normative if this construction and the ADR
+/// ever disagree.
+const PAYLOAD_AAD_DOMAIN: &[u8] = b"snip-payload-v2\0";
+
+/// Build the version-2 associated data for a snippet id.
+///
+/// AAD is public data: it adds no key material and is never logged.
+fn payload_aad(snippet_id: &str) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(PAYLOAD_AAD_DOMAIN.len() + 4 + snippet_id.len());
+    aad.extend_from_slice(PAYLOAD_AAD_DOMAIN);
+    aad.extend_from_slice(&(snippet_id.len() as u32).to_le_bytes());
+    aad.extend_from_slice(snippet_id.as_bytes());
+    aad
+}
+
 /// Encrypted data container with version, salt, nonce, and ciphertext.
 ///
 /// The salt and nonce are stored alongside the ciphertext to enable
@@ -187,7 +233,7 @@ impl EncryptedPayload {
         let header = PAYLOAD_MAGIC.len() + 1;
         if combined.len() >= header && combined[..PAYLOAD_MAGIC.len()] == PAYLOAD_MAGIC {
             let version = combined[PAYLOAD_MAGIC.len()];
-            if version != PAYLOAD_VERSION {
+            if version != PAYLOAD_VERSION && version != PAYLOAD_VERSION_V2 {
                 return Err(CryptoError::InvalidData(format!(
                     "Unsupported payload version {version}"
                 )));
@@ -229,12 +275,12 @@ impl EncryptedPayload {
 
 /// Argon2id parameters for a payload version.
 ///
-/// Version 0 (the legacy unversioned layout) and version 1 use the same
-/// parameters. A parameter change must introduce a new version: changing
-/// these in place would make every stored payload undecryptable.
+/// Versions 0 (legacy unversioned), 1, and 2 use the same parameters; only the
+/// associated data differs. A parameter change must introduce a new version:
+/// changing these in place would make every stored payload undecryptable.
 fn argon2_params_for_version(version: u8) -> Option<(u32, u32, u32)> {
     match version {
-        PAYLOAD_VERSION_LEGACY | PAYLOAD_VERSION => {
+        PAYLOAD_VERSION_LEGACY | PAYLOAD_VERSION | PAYLOAD_VERSION_V2 => {
             Some((ARGON2_MEMORY_COST_KIB, ARGON2_TIME_COST, ARGON2_PARALLELISM))
         }
         _ => None,
@@ -318,7 +364,23 @@ pub fn encrypt_with_salt(
     plaintext: &str,
     salt: &[u8; SALT_SIZE],
 ) -> CryptoResult<String> {
-    let mut key = derive_key(api_key, salt, PAYLOAD_VERSION)?;
+    // Version 1 carries no associated data, so the seal is byte-identical to
+    // what earlier builds produced.
+    seal_with_salt(api_key, plaintext, salt, PAYLOAD_VERSION, b"")
+}
+
+/// The single sealing path shared by every payload version.
+///
+/// `aad` is empty for versions 0 and 1. AES-GCM treats an empty AAD exactly as
+/// "no AAD", so version-1 output stays byte-compatible.
+fn seal_with_salt(
+    api_key: &str,
+    plaintext: &str,
+    salt: &[u8; SALT_SIZE],
+    version: u8,
+    aad: &[u8],
+) -> CryptoResult<String> {
+    let mut key = derive_key(api_key, salt, version)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(format!("Key init failed: {e}")))?;
@@ -326,13 +388,19 @@ pub fn encrypt_with_salt(
     let nonce = Nonce::generate();
 
     let ciphertext = cipher
-        .encrypt(&nonce, plaintext.as_bytes())
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad,
+            },
+        )
         .map_err(|e| CryptoError::EncryptionFailed(format!("Encryption failed: {e}")))?;
 
     key.zeroize();
 
     let payload = EncryptedPayload {
-        version: PAYLOAD_VERSION,
+        version,
         salt: salt.to_vec(),
         nonce: nonce.to_vec(),
         ciphertext,
@@ -341,9 +409,59 @@ pub fn encrypt_with_salt(
     Ok(payload.to_base64())
 }
 
+/// Decrypt a payload that carries no snippet identity.
+///
+/// Version 2 payloads are rejected here on purpose: their tag is computed over
+/// the snippet id, and there is no safe value to supply from this entry point.
+/// Use [`decrypt_for_snippet`] when the id is known.
+///
+/// This entry point is compiled only for tests. No production caller can hold a
+/// payload without its identity (the sync path always has the proto row's id),
+/// so keeping it out of production builds turns "decrypt without the binding"
+/// into a compile error rather than a runtime one. The runtime rejection is
+/// still exercised by the unit tests, which is where the fail-loud contract is
+/// pinned.
+#[cfg(any(test, feature = "test-support"))]
 pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     let payload = EncryptedPayload::from_base64(encrypted_data)?;
+    let aad = associated_data(&payload, "")?;
+    open_payload(api_key, &payload, &aad)
+}
 
+/// Decrypt a payload, verifying the snippet identity for version 2.
+///
+/// Version 0/1 payloads carry no identity binding and decrypt exactly as they
+/// always did; `snippet_id` is ignored for them.
+pub(crate) fn decrypt_for_snippet(
+    api_key: &str,
+    encrypted_data: &str,
+    snippet_id: &str,
+) -> CryptoResult<String> {
+    let payload = EncryptedPayload::from_base64(encrypted_data)?;
+    let aad = associated_data(&payload, snippet_id)?;
+    open_payload(api_key, &payload, &aad)
+}
+
+/// The associated data a payload's tag was computed over.
+fn associated_data(payload: &EncryptedPayload, snippet_id: &str) -> CryptoResult<Vec<u8>> {
+    match payload.version {
+        PAYLOAD_VERSION_V2 => {
+            if snippet_id.is_empty() {
+                // A version-2 payload sealed with an empty id would authenticate
+                // any id-less reader; the seal path rejects empty ids, so this
+                // is a malformed row rather than a valid binding.
+                return Err(CryptoError::InvalidData(
+                    "payload version 2 requires snippet identity".to_string(),
+                ));
+            }
+            Ok(payload_aad(snippet_id))
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The single opening path shared by every payload version.
+fn open_payload(api_key: &str, payload: &EncryptedPayload, aad: &[u8]) -> CryptoResult<String> {
     let mut key = derive_key(api_key, &payload.salt, payload.version)?;
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice())
@@ -353,7 +471,15 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
         .map_err(|_| CryptoError::InvalidData("Invalid nonce length".to_string()))?;
 
     let plaintext = cipher
-        .decrypt(&nonce, payload.ciphertext.as_ref())
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: payload.ciphertext.as_ref(),
+                aad,
+            },
+        )
+        // A wrong id and a wrong key both surface as a tag mismatch, so the
+        // error is not an oracle for which one was wrong.
         .map_err(|e| CryptoError::DecryptionFailed(format!("Decryption failed: {e}")))?;
 
     drop(std::mem::take(&mut key));
@@ -366,6 +492,33 @@ pub fn decrypt(api_key: &str, encrypted_data: &str) -> CryptoResult<String> {
     std::str::from_utf8(plaintext.as_slice())
         .map(str::to_owned)
         .map_err(|e| CryptoError::DecryptionFailed(format!("UTF-8 conversion failed: {e}")))
+}
+
+/// Seal a version-2 payload bound to `snippet_id`.
+///
+/// Test- and integration-only: no production path writes version 2 until the
+/// release-gated write switch lands. It reuses the production cipher and AAD
+/// construction rather than carrying a second implementation.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn seal_v2_for_test(
+    api_key: &str,
+    plaintext: &str,
+    snippet_id: &str,
+    salt: &[u8; SALT_SIZE],
+) -> CryptoResult<String> {
+    if snippet_id.is_empty() {
+        return Err(CryptoError::InvalidData(
+            "payload version 2 requires snippet identity".to_string(),
+        ));
+    }
+    seal_with_salt(
+        api_key,
+        plaintext,
+        salt,
+        PAYLOAD_VERSION_V2,
+        &payload_aad(snippet_id),
+    )
 }
 
 #[cfg(test)]
@@ -530,13 +683,150 @@ mod tests {
         let api_key = "test-key";
         let encrypted = encrypt(api_key, "sensitive data").unwrap();
         let mut payload = EncryptedPayload::from_base64(&encrypted).unwrap();
-        payload.version = PAYLOAD_VERSION + 1;
+        // One past the highest version this build understands.
+        payload.version = PAYLOAD_VERSION_V2 + 1;
         let future = payload.to_base64();
+        let err = match EncryptedPayload::from_base64(&future) {
+            Ok(_) => panic!("parsing a future payload version must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("Unsupported payload version"),
+            "unexpected error: {err}"
+        );
         let err = decrypt(api_key, &future).unwrap_err();
         assert!(
             err.to_string().contains("Unsupported payload version"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn v2_roundtrip_with_the_correct_id() {
+        let api_key = "test-key";
+        let plaintext = r#"{"description":"d","command":"echo hi","tags":[]}"#;
+        let salt = generate_salt();
+        let sealed = seal_v2_for_test(api_key, plaintext, "snippet-a", &salt).unwrap();
+
+        let payload = EncryptedPayload::from_base64(&sealed).unwrap();
+        assert_eq!(payload.version, PAYLOAD_VERSION_V2);
+
+        assert_eq!(
+            decrypt_for_snippet(api_key, &sealed, "snippet-a").unwrap(),
+            plaintext
+        );
+    }
+
+    #[test]
+    fn v2_fails_with_a_different_id() {
+        let api_key = "test-key";
+        let salt = generate_salt();
+        let sealed = seal_v2_for_test(api_key, "secret", "snippet-a", &salt).unwrap();
+
+        let err = decrypt_for_snippet(api_key, &sealed, "snippet-b").unwrap_err();
+        // A wrong id is a tag mismatch: the same class of error as a wrong key,
+        // so it does not reveal which of the two was wrong.
+        assert!(
+            matches!(err, CryptoError::DecryptionFailed(_)),
+            "expected a tag failure, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn v2_without_identity_is_rejected_loudly() {
+        let api_key = "test-key";
+        let salt = generate_salt();
+        let sealed = seal_v2_for_test(api_key, "secret", "snippet-a", &salt).unwrap();
+
+        // The id-less entry point cannot authenticate the AAD, so it must
+        // refuse rather than decrypt without it.
+        let err = decrypt(api_key, &sealed).unwrap_err();
+        assert!(
+            err.to_string().contains("requires snippet identity"),
+            "unexpected error: {err}"
+        );
+
+        // The same refusal applies to an empty id supplied through the
+        // identity-aware entry point.
+        let err = decrypt_for_snippet(api_key, &sealed, "").unwrap_err();
+        assert!(
+            err.to_string().contains("requires snippet identity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn v2_seal_rejects_an_empty_id() {
+        let salt = generate_salt();
+        let err = seal_v2_for_test("test-key", "secret", "", &salt).unwrap_err();
+        assert!(
+            err.to_string().contains("requires snippet identity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn v1_payloads_still_decrypt_through_both_entry_points() {
+        let api_key = "test-key";
+        let plaintext = "legacy content";
+        let encrypted = encrypt_with_salt(api_key, plaintext, &generate_salt()).unwrap();
+
+        // Version 1 carries no identity binding, so the id is irrelevant and
+        // both entry points must succeed.
+        assert_eq!(decrypt(api_key, &encrypted).unwrap(), plaintext);
+        assert_eq!(
+            decrypt_for_snippet(api_key, &encrypted, "any-id").unwrap(),
+            plaintext
+        );
+    }
+
+    #[test]
+    fn legacy_unversioned_payloads_still_decrypt_through_both_entry_points() {
+        let api_key = "test-key";
+        let plaintext = "ancient content";
+        let encrypted = encrypt_with_salt(api_key, plaintext, &generate_salt()).unwrap();
+        let payload = EncryptedPayload::from_base64(&encrypted).unwrap();
+
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&payload.salt);
+        legacy.extend_from_slice(&payload.nonce);
+        legacy.extend_from_slice(&payload.ciphertext);
+        let legacy_b64 = BASE64.encode(&legacy);
+
+        assert_eq!(decrypt(api_key, &legacy_b64).unwrap(), plaintext);
+        assert_eq!(
+            decrypt_for_snippet(api_key, &legacy_b64, "any-id").unwrap(),
+            plaintext
+        );
+    }
+
+    #[test]
+    fn v2_tampered_ciphertext_still_fails_the_tag() {
+        let api_key = "test-key";
+        let salt = generate_salt();
+        let sealed = seal_v2_for_test(api_key, "secret", "snippet-a", &salt).unwrap();
+
+        let mut payload = EncryptedPayload::from_base64(&sealed).unwrap();
+        payload.ciphertext[0] ^= 0xFF;
+        let tampered = payload.to_base64();
+
+        assert!(
+            decrypt_for_snippet(api_key, &tampered, "snippet-a").is_err(),
+            "a tampered v2 ciphertext must not decrypt"
+        );
+    }
+
+    #[test]
+    fn aad_construction_is_unambiguous() {
+        // The length prefix means two different id splits cannot collide.
+        let a = payload_aad("ab");
+        let mut b = PAYLOAD_AAD_DOMAIN.to_vec();
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(b"a");
+        b.extend_from_slice(b"b");
+        assert_ne!(a, b, "concatenation must not be ambiguous");
+        assert_eq!(a, payload_aad("ab"), "the construction is deterministic");
+        assert_ne!(a, payload_aad("ac"));
     }
 
     #[test]

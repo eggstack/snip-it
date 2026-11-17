@@ -1,5 +1,9 @@
 name: Release binaries
 
+# Action pinning policy: third-party actions are pinned to full commit SHAs with
+# a trailing `# vX.Y.Z` comment so Dependabot can keep them current. See
+# `plans/implementation/security-assurance/002-ci-advisory-gates-and-action-pinning.md`.
+
 on:
   push:
     tags:
@@ -45,7 +49,7 @@ jobs:
       mode: ${{ steps.validate.outputs.mode }}
     steps:
       - name: Check out the requested tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # For workflow_dispatch, github.ref is the branch containing this
           # workflow, so the explicit tag input must take precedence.
@@ -140,13 +144,13 @@ jobs:
 
     steps:
       - name: Check out the validated tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
 
       - name: Install Rust toolchain and target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch as of 2026-11-17
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
@@ -161,7 +165,7 @@ jobs:
 
       - name: Install pinned Zig
         if: runner.os == 'Linux'
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
 
@@ -415,7 +419,7 @@ jobs:
           }
 
       - name: Upload verified staged artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ matrix.target }}
           path: dist/
@@ -428,7 +432,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download staged artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           path: dist
@@ -469,7 +473,7 @@ jobs:
           fi
 
       - name: Preserve verified asset set for optional attachment
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-aggregate
           path: dist/
@@ -485,7 +489,7 @@ jobs:
       contents: write
     steps:
       - name: Download verified aggregate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-aggregate
           path: dist

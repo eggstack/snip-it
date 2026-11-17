@@ -52,7 +52,11 @@ pub fn run(
     let canonical_config = config_dir
         .canonicalize()
         .map_err(|e| SnipError::io_error("canonicalize config directory", config_dir.clone(), e))?;
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::macros::format_description!(
+            "[year][month][day]_[hour][minute][second]"
+        ))
+        .map_err(|e| SnipError::runtime_error("format backup timestamp", Some(&e.to_string())))?;
     let final_backup_dir = match output {
         Some(ref path) => path.clone(),
         None => config_dir.join("backups").join(&timestamp),
@@ -74,7 +78,9 @@ pub fn run(
     let generation_before = read_library_generation(&config_dir)?;
     let mut manifest = BackupManifest {
         schema: 1,
-        created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
+        created_at_unix_ms: (time::OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .div_euclid(1_000_000)) as i64,
         snip_it_version: crate::diagnostics::version().to_string(),
         layout: "directory".to_string(),
         files: Vec::new(),

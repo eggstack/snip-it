@@ -45,7 +45,7 @@ The `data` spelling is an alias, not a separate command: `DataCommands::Backup(B
 
 1. **Config directory must exist.** A missing config directory is a hard error (`src/commands/backup_cmd.rs:45-51`) — backup does not create the config tree.
 2. **Canonicalize the config directory** (`:52-54`). This becomes the containment root for every source file.
-3. **Compute the timestamp and destination** (`:55-59`): `chrono::Utc::now().format("%Y%m%d_%H%M%S")`.
+3. **Compute the timestamp and destination** (`:55-59`): `time::OffsetDateTime::now_utc().format("[year][month][day]_[hour][minute][second]")`.
 4. **Build the staging directory** (`:60-67`): `final_backup_dir.with_extension("<existing-extension>.staging.<uuid>")`. Because `with_extension` *replaces* the last extension, `…/20260101_120000` becomes `…/20260101_120000.staging.<uuid>`, while `…/backup.tar.gz` becomes `…/backup.tar.staging.<uuid>`. The final directory only appears via an atomic rename at the end.
 5. **Acquire the local-data lock** (`:72-73`):
 

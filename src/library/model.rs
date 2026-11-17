@@ -341,7 +341,7 @@ impl Snippet {
                 Some("Snippet description cannot be empty"),
             ));
         }
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         Ok(Self {
             id: String::new(),
             description,

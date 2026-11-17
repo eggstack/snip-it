@@ -1,6 +1,6 @@
 [package]
 name = "snip-sync"
-version = "0.1.8"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.94"
 description = "gRPC sync server for snp snippet manager"
@@ -38,9 +38,9 @@ test-helpers = []
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 eggserve-server = { version = "=0.5.0", default-features = false }
 eggserve-primitives = { version = "=0.2.3", default-features = false }
-sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio", "chrono"] }
+sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio"] }
 uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
+time = ">=0.3.36, <0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }

@@ -892,7 +892,7 @@ The `snip-it` crate pulls `snip-sync` in as a dev-dependency with the feature
 already on (`Cargo.toml:166`):
 
 ```toml
-snip-sync = { version = "0.1.8", path = "snip-sync", features = ["test-helpers"] }
+snip-sync = { version = "0.2.0", path = "snip-sync", features = ["test-helpers"] }
 ```
 
 ### Production Seam Proof

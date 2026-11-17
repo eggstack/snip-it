@@ -1,0 +1,16 @@
+# cargo-audit configuration.
+#
+# This file exists so `cargo audit` and `cargo deny check advisories` reach the
+# same verdict. It mirrors `deny.toml`'s `[advisories].ignore` list exactly;
+# `scripts/check-advisories.sh` fails if the two sets differ.
+#
+# Policy and rationale: `deny.toml` (the normative source) and
+# `plans/adrs/ADR-0003-advisory-remediation-and-suppression-policy.md`.
+# Remove an entry here in the same change that adopts the fixed release.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0459",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]

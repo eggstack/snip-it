@@ -3,14 +3,75 @@
 # use the [output] section to control severity, and the [advisories]
 # table only needs `ignore` for explicit suppressions.
 #
-# RUSTSEC-2024-0437: uncontrolled recursion / stack overflow in
-# `protobuf` 2.28.0, pulled in transitively by `prometheus` 0.13.x.
-# The server does not parse untrusted protobuf data on this code path
-# (snip-sync only uses prometheus's text encoder for /metrics, and
-# protobuf is in the build graph only for `prometheus` itself), so this
-# advisory is not exploitable in the snip-it / snip-sync build.
-# Track removal once `prometheus` upgrades to `protobuf >= 3.7.2`.
-ignore = []
+# Suppression policy: `plans/adrs/ADR-0003-advisory-remediation-and-suppression-policy.md`.
+# Every entry is an advisory ID only (never a crate name, version, or wildcard),
+# carries the six fields below, and is mirrored in SECURITY.md
+# § Advisory Exceptions. `scripts/check-advisories.sh` fails if the two lists
+# diverge. Remove an entry in the same change that adopts the fixed release.
+#
+# There is deliberately no global lint relaxation here (`unmaintained =
+# "workspace"` and friends are prohibited): the gate must keep failing on
+# anything new.
+ignore = [
+    # ID:          RUSTSEC-2026-0459
+    # Scope:       bundled SQLite (< 3.54.0) compiled into the `snip-sync`
+    #              server binary through `sqlx` -> `libsqlite3-sys 0.37.0`.
+    #              The `snp` client is not affected; its only `sqlx` edge is a
+    #              dev-dependency, so the bundled C library is absent there.
+    # Why:         Local vector. It requires an attacker who can already write a
+    #              database file and a sibling `-wal` file with a mismatched page
+    #              size next to the victim's server data; the only gain is
+    #              disclosure of uninitialized page-cache memory. The server data
+    #              directory is `0o700` with `0o600` files on Unix, so an
+    #              unprivileged local user cannot satisfy the precondition, and a
+    #              privileged local user is outside the threat model. There is no
+    #              network-reachable path: no client-supplied database file is
+    #              ever opened by the server.
+    # Added:       2026-11-17
+    # Review by:   2027-02-15
+    # Remove when: `sqlx` publishes a release that accepts `libsqlite3-sys
+    #              >=0.39.0` (the widening is merged upstream but unreleased);
+    #              cargo tree -i libsqlite3-sys then shows >=0.39.0.
+    "RUSTSEC-2026-0459",
+
+    # ID:          RUSTSEC-2026-0370
+    # Scope:       `zvariant 5.15.1`, reached only through the Linux keyring
+    #              chain (`keyring` -> `zbus-secret-service-keyring-store` ->
+    #              `secret-service` -> `zbus`). Not compiled on macOS or Windows.
+    # Why:         Unmaintained, not a vulnerability: no CVE, no known defect.
+    #              The crate was folded into `zbus 6.x`; there is no fixed
+    #              standalone release, so "upgrade" means a keyring-major
+    #              migration. It parses only D-Bus traffic from the local
+    #              Secret Service, which is a trusted, same-session peer.
+    # Added:       2026-11-17
+    # Review by:   2027-02-15
+    # Remove when: `keyring` ships a release backed by `zbus 6.x` (or another
+    #              maintained Secret Service backend) and the lockfile no longer
+    #              contains `zvariant`.
+    "RUSTSEC-2026-0370",
+
+    # ID:          RUSTSEC-2026-0371
+    # Scope:       `zbus_names 4.3.5`, same Linux keyring chain as
+    #              RUSTSEC-2026-0370.
+    # Why:         Unmaintained, not a vulnerability. Same trusted-peer
+    #              reasoning: D-Bus name validation on the local session bus.
+    # Added:       2026-11-17
+    # Review by:   2027-02-15
+    # Remove when: the same keyring/`zbus 6.x` migration as RUSTSEC-2026-0370
+    #              removes `zbus_names` from the lockfile.
+    "RUSTSEC-2026-0371",
+
+    # ID:          RUSTSEC-2026-0372
+    # Scope:       `zvariant_derive 5.15.1`, derive macros for the same Linux
+    #              keyring chain.
+    # Why:         Unmaintained, not a vulnerability. It is a compile-time
+    #              macro crate: it cannot execute in the shipped binary.
+    # Added:       2026-11-17
+    # Review by:   2027-02-15
+    # Remove when: the same keyring/`zbus 6.x` migration as RUSTSEC-2026-0370
+    #              removes `zvariant_derive` from the lockfile.
+    "RUSTSEC-2026-0372",
+]
 
 [licenses]
 # In cargo-deny 0.19+, the global `unlicensed` key was removed; the
@@ -19,6 +80,11 @@ ignore = []
 allow = [
     "MIT",
     "Apache-2.0",
+    # Retained by policy, not by need: no crate in the current graph is
+    # BSD-2-Clause, so `cargo deny` reports it as `license-not-encountered`.
+    # Kept because the allowlist is a pre-approved policy set for permissive
+    # licenses, and re-admitting it under time pressure is the worse trade.
+    # This warning is not a gate.
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -27,6 +93,10 @@ allow = [
     "0BSD",
     "MPL-2.0",
     "BSL-1.0",
+    # Certificate-root data bundle (`webpki-roots`, both the 0.26 and 1.0
+    # lines). Permissive data license: it covers a list of root certificates,
+    # not code that runs.
+    "CDLA-Permissive-2.0",
 ]
 
 # r-efi is dual-licensed MIT/Apache-2.0/LGPL-2.1-or-later but only

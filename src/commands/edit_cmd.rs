@@ -213,7 +213,7 @@ pub fn run_edit_output(
 
         let snippet = &mut snippets.snippets[idx];
         snippet.output = new_output.clone().unwrap_or_default();
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
         desc = snippet.description.clone();
         is_empty = snippet.output.is_empty();
@@ -283,7 +283,7 @@ pub fn run_edit_output_by_id(
 
         let snippet = &mut snippets.snippets[idx];
         snippet.output = new_output.clone().unwrap_or_default();
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         snippet.updated_at = snippet.updated_at.max(now).saturating_add(1);
         desc = snippet.description.clone();
         is_empty = snippet.output.is_empty();

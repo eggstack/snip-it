@@ -962,7 +962,9 @@ pub fn acquire_transaction_lock(state_dir: &Path, operation: &str) -> SnipResult
 
     let lock_path = state_dir.join("transaction.lock");
     let nonce = uuid::Uuid::new_v4().to_string();
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = (time::OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000)) as i64;
     let identity = current_process_identity();
 
     let info = TransactionLockInfo {
@@ -1007,7 +1009,9 @@ pub fn begin_transaction(
 ) -> SnipResult<TransactionJournal> {
     create_private_dir(state_dir)?;
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = (time::OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000)) as i64;
 
     let staged_files: Vec<StagedFile> = affected_files
         .iter()

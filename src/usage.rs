@@ -81,7 +81,7 @@ impl UsageIndex {
     /// Unix timestamp.  If no entry exists for `snippet_id` a new one
     /// is created.
     pub fn record_use(&mut self, snippet_id: &str) {
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         if let Some(entry) = self.entries.iter_mut().find(|e| e.id == snippet_id) {
             entry.use_count = entry.use_count.saturating_add(1);
             entry.last_used_at = Some(now);
@@ -197,9 +197,9 @@ mod tests {
     #[test]
     fn record_use_sets_timestamp() {
         let mut idx = UsageIndex::default();
-        let before = chrono::Utc::now().timestamp();
+        let before = time::OffsetDateTime::now_utc().unix_timestamp();
         idx.record_use("abc-123");
-        let after = chrono::Utc::now().timestamp();
+        let after = time::OffsetDateTime::now_utc().unix_timestamp();
 
         let usage = idx.get_usage("abc-123");
         assert!(usage.last_used_at.is_some());

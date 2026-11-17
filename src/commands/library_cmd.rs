@@ -90,8 +90,14 @@ pub fn run_show(name: Option<String>) -> SnipResult<()> {
             if let Some(ts) = lib.last_sync {
                 println!(
                     "  Last sync: {}",
-                    chrono::DateTime::from_timestamp(ts, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    time::OffsetDateTime::from_unix_timestamp(ts)
+                        .ok()
+                        .and_then(|dt| {
+                            dt.format(&time::macros::format_description!(
+                                "[year]-[month]-[day] [hour]:[minute]"
+                            ))
+                            .ok()
+                        })
                         .unwrap_or_else(|| "unknown".to_string())
                 );
             }

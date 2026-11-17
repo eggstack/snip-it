@@ -27,6 +27,15 @@ use snip_proto::{
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tonic::Code;
+
+/// Test-only: seal a version-2 payload bound to a snippet id.
+///
+/// Re-exported so integration tests can build a mixed-version library without
+/// a production writer for version 2. Compiled out unless `test-support` is
+/// enabled, and never part of the supported API.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use crate::encryption::seal_v2_for_test;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Uri};
 use zeroize::Zeroizing;
 
@@ -1267,7 +1276,7 @@ impl SyncClient {
             Ok(Library {
                 id: response.library_id,
                 name: name_str,
-                created_at: chrono::Utc::now().timestamp(),
+                created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
                 snippet_count: 0,
             })
         } else {
@@ -1619,6 +1628,11 @@ fn encrypt_snippets_with(
 }
 
 /// Decrypts a snippet's encrypted fields received from the sync server.
+///
+/// The snippet id is passed into the cipher because payload version 2
+/// authenticates it as associated data: a ciphertext moved to a different row
+/// fails the tag check instead of decrypting into the wrong snippet. Version 0
+/// and 1 payloads ignore it.
 pub fn decrypt_snippet(
     api_key: &str,
     snippet: &crate::proto::Snippet,
@@ -1627,7 +1641,7 @@ pub fn decrypt_snippet(
         return Ok(snippet.clone());
     }
 
-    let decrypted = encryption::decrypt(api_key, &snippet.command)?;
+    let decrypted = encryption::decrypt_for_snippet(api_key, &snippet.command, &snippet.id)?;
 
     let data: EncryptedSnippetData = serde_json::from_str(&decrypted).map_err(|e| {
         SnipError::sync_failure(
@@ -2864,7 +2878,7 @@ mod tests {
 
         // Seed the server with some snippets via a normal sync.
         let mut setup_client = build_sync_client(&server_url, &api_key).await;
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let seed_snippets: Vec<crate::proto::Snippet> = (0..5)
             .map(|i| crate::proto::Snippet {
                 id: format!("remote-{i}"),
@@ -3091,7 +3105,7 @@ mod tests {
             .expect("register should succeed");
         let mut client = build_sync_client(&server_url, &api_key).await;
 
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let local_snippets: Vec<crate::proto::Snippet> = (0..3)
             .map(|index| crate::proto::Snippet {
                 id: format!("shared-{index}"),

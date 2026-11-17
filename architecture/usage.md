@@ -107,7 +107,7 @@ last_used_at = 1700000000
 | `entries` | array of tables | The single top-level key; `#[serde(default)]`, so an empty file deserializes to an empty index |
 | `id` | string | The snippet's deterministic ID — `legacy-<sha256 hex>`, **not** a UUID (`docs/IDENTITY_CONTRACT.md`) |
 | `use_count` | integer | `u64`, incremented with `saturating_add` (`src/usage.rs:86`) |
-| `last_used_at` | integer or absent | Unix epoch **seconds** (`i64`), from `chrono::Utc::now().timestamp()` (`src/usage.rs:84`) |
+| `last_used_at` | integer or absent | Unix epoch **seconds** (`i64`), from `time::OffsetDateTime::now_utc().unix_timestamp()` (`src/usage.rs:84`) |
 
 > The module doc comment at `src/usage.rs:10-17` matches this format: it shows
 > `[[entries]]` with `id = "legacy-<sha256-hex>"`. There is no serde rename on

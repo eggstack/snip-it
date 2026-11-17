@@ -146,6 +146,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn server_budgets_do_not_consume_each_others_keys() {
+        // The metrics failure budget, the global registration budget, and the
+        // per-peer registration budget are deliberately separate namespaces.
+        // Exhausting one must not deny another: otherwise a metrics guesser
+        // could stop account creation, or a registration flood could block the
+        // operator's own scrape.
+        let limiter = RateLimiter::new();
+        for _ in 0..2 {
+            assert!(
+                limiter
+                    .allow("metrics-auth", 2, Duration::from_secs(60))
+                    .await
+            );
+        }
+        assert!(
+            !limiter
+                .allow("metrics-auth", 2, Duration::from_secs(60))
+                .await
+        );
+
+        assert!(
+            limiter
+                .allow("register-global", 2, Duration::from_secs(60))
+                .await,
+            "an exhausted metrics budget must not affect registration"
+        );
+        assert!(
+            limiter
+                .allow("register:203.0.113.7", 2, Duration::from_secs(60))
+                .await,
+            "a peer-address budget is a separate key from the global budget"
+        );
+
+        // And the reverse direction: the global budget does not gate metrics.
+        assert!(
+            limiter
+                .allow("register-global", 2, Duration::from_secs(60))
+                .await
+        );
+        assert!(
+            !limiter
+                .allow("register-global", 2, Duration::from_secs(60))
+                .await,
+            "the global registration budget is bounded"
+        );
+        assert!(
+            limiter
+                .allow("metrics-auth-other", 1, Duration::from_secs(60))
+                .await,
+            "unrelated buckets remain usable"
+        );
+    }
+
+    #[tokio::test]
     async fn test_window_expiry_resets_count() {
         let limiter = RateLimiter::new();
         for _ in 0..2 {

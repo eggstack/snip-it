@@ -41,25 +41,32 @@ panic = "abort"
 ## cargo-deny Configuration
 
 The project uses `cargo-deny` (configuration in `deny.toml` at the workspace root)
-as a **local supply-chain gate** — it is not a CI step. See
-[CI Verification Commands](#ci-verification-commands).
+for advisories, licenses, bans, and sources, plus `cargo-audit` with the mirror
+configuration in `.cargo/audit.toml`. Both run through
+`scripts/check-advisories.sh`, which is a **blocking CI step**
+(`.github/workflows/ci.yml`, job `advisory-gate`). The policy for suppressions is
+[ADR-0003](../plans/adrs/ADR-0003-advisory-remediation-and-suppression-policy.md).
 
 ### Advisory Settings
 
-```toml
-[advisories]
-ignore = []
-```
+`deny.toml` carries one `ignore` list of bare advisory IDs. Each entry is
+preceded by a comment block with `ID`, `Scope`, `Why`, `Added`, `Review by`, and
+`Remove when`; `scripts/check-advisories.sh` fails if a field is missing, if an
+entry is not a bare `RUSTSEC-*` ID, or if `.cargo/audit.toml` and
+`SECURITY.md`'s `advisory-ignore-ids` marker disagree with it.
 
-The advisory ignore list is empty — no advisory is suppressed, so any advisory that
-`cargo deny check advisories` reports is a hard failure of the local gate. **The
-gate does not currently pass**: `cargo deny check` reports open advisories against
-`rustls`, `rustls-webpki`, `webpki-roots`, and the unmaintained `zbus_names`,
-`zvariant`, and `zvariant_derive` crates. See
-[Known Gaps](#cargo-deny-check-currently-fails). If a future advisory cannot be
-immediately resolved (e.g., transitive dependency lag), it must be documented with
-a rationale, owner, and review date (see
-[Advisory Exception Format](#advisory-exception-format)).
+Current suppressions (all mitigated, none a permanent destination):
+
+| Advisory | Crate | Removal condition |
+| -------- | ----- | ----------------- |
+| `RUSTSEC-2026-0459` | `libsqlite3-sys` (bundled SQLite, server only) | `sqlx` accepts `libsqlite3-sys >= 0.39.0` |
+| `RUSTSEC-2026-0370` | `zvariant` | Linux keyring chain moves to `zbus 6.x` |
+| `RUSTSEC-2026-0371` | `zbus_names` | Linux keyring chain moves to `zbus 6.x` |
+| `RUSTSEC-2026-0372` | `zvariant_derive` | Linux keyring chain moves to `zbus 6.x` |
+
+Global lint-level relaxation is prohibited: `unmaintained` advisories must be
+listed individually so a **new** unmaintained or vulnerable crate still fails the
+gate.
 
 ### License Settings
 
@@ -76,6 +83,7 @@ allow = [
     "0BSD",
     "MPL-2.0",
     "BSL-1.0",
+    "CDLA-Permissive-2.0",
 ]
 ```
 
@@ -120,17 +128,15 @@ The following licenses are approved for use in the snip-it workspace:
 | 0BSD | `0BSD` | Zero-clause BSD; minimal restrictions |
 | Mozilla Public License 2.0 | `MPL-2.0` | File-level copyleft; compatible with MIT |
 | Boost Software License 1.0 | `BSL-1.0` | Permissive; Rust's Boost Software License, used by `clipboard-win` and `error-code` |
+| Community Data License Agreement – Permissive 2.0 | `CDLA-Permissive-2.0` | Permissive **data** license; covers certificate-root bundles (`webpki-roots`), not executable code |
 
 Licenses not on this list will cause `cargo deny check licenses` to fail unless
 explicitly added to the allow list. The list is a policy ceiling, not a snapshot
 of the resolved graph: `BSD-2-Clause` is currently allowed but not reached by any
 crate in the resolved graph, and `cargo deny` reports it as an unmatched
-allowance.
-
-The allow list also does not cover every license present in `Cargo.lock`:
-`webpki-roots` (pulled in by `eggfetch-core`) is `CDLA-Permissive-2.0`, which is
-not on the list and therefore fails the license check. See
-[Known Gaps](#cargo-deny-check-currently-fails).
+allowance. That warning is not a gate and the entry is retained deliberately, so
+the next crate that needs it does not require a policy change under time
+pressure.
 
 ---
 
@@ -192,7 +198,7 @@ All dependencies must come from crates.io (the only allowed registry). Git depen
 |-------|---------|-------------|
 | `snip-it` | 1.4.1 | Main binary crate (`snp`). CLI, TUI, sync client, encryption, auto-sync. |
 | `snip-proto` | 0.1.4 | Protobuf definitions and tonic-generated gRPC code. |
-| `snip-sync` | 0.1.8 | gRPC sync server (EggServe HTTP leaf + tonic gRPC, SQLite storage). |
+| `snip-sync` | 0.2.0 | gRPC sync server (EggServe HTTP leaf + tonic gRPC, SQLite storage). |
 
 All three crates share the same license (MIT), Rust edition (2024), and minimum supported Rust version (1.94).
 
@@ -220,63 +226,69 @@ Other notable dependencies include `serde`/`toml` for configuration persistence,
 
 ## CI Verification Commands
 
-Linux CI runs `bash scripts/check.sh`: installer contract, `cargo fmt --all -- --check`,
-`cargo clippy --workspace --all-targets -- -D warnings` (NOT `--all-features`),
-`cargo test --workspace --lib`, plus focused integration targets with
-`--features test-support` (see `AGENTS.md`). `cargo deny check` is a local
-supply-chain gate via `deny.toml`, not a CI step.
+Linux CI runs two independent jobs in `.github/workflows/ci.yml`:
+
+- `advisory-gate` — `bash scripts/check-advisories.sh`, with `cargo-audit` and
+  `cargo-deny` installed at exact pinned versions. It fails on an unexpected
+  advisory, a missing rationale field, or a suppression-list mismatch.
+- `linux-correctness` — `bash scripts/check.sh`: installer contract,
+  `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings` (NOT `--all-features`),
+  `cargo test --workspace --lib`, plus focused integration targets with
+  `--features test-support` (see `AGENTS.md`).
+
+`macos-latest` and `windows-latest` run `cargo check --workspace --all-targets`
+and `platform_smoke`; Windows additionally runs the PowerShell installer contract.
+
+Locally, `bash scripts/check-advisories.sh --self-test` additionally proves the
+gate still fails with one suppression removed.
 
 ---
 
 ## Advisory Exception Format
 
-If a security advisory must be temporarily ignored (e.g., waiting for an upstream fix), the following metadata is required in `deny.toml`:
+If a security advisory cannot be resolved immediately (for example, a transitive
+dependency has not widened its version bound yet), it is suppressed by **bare
+advisory ID** in `deny.toml`, with a comment block immediately above it:
 
 ```toml
-[advisories]
-ignore = [
-    {
-        id = "RUSTSEC-YYYY-NNNN",
-        reason = "Short description of why this advisory is not exploitable or is safe to ignore",
-        owner = "GitHub username or team responsible",
-        review_date = "YYYY-MM-DD"
-    }
-]
+    # ID:          RUSTSEC-YYYY-NNNN
+    # Scope:       which crate and which build unit is affected
+    # Why:         exploitability analysis (attack vector, preconditions, blast radius)
+    # Added:       YYYY-MM-DD
+    # Review by:   YYYY-MM-DD (<= 90 days)
+    # Remove when: the concrete upstream condition that ends the exception
+    "RUSTSEC-YYYY-NNNN",
 ```
 
-Each entry must include:
+Every entry must supply all six fields. `scripts/check-advisories.sh` enforces
+their presence and rejects anything that is not a bare advisory ID — crate names,
+version ranges, and wildcards are not permitted, because those would silently
+cover future unrelated findings. The same ID must appear in
+`.cargo/audit.toml` and in `SECURITY.md`'s `advisory-ignore-ids` marker.
 
-- **id:** The RUSTSEC advisory identifier.
-- **reason:** A clear explanation of why the advisory does not affect this project (e.g., the vulnerable code path is not reachable, the dependency is not used in production, or an upgrade is in progress).
-- **owner:** The person or team responsible for resolving or re-evaluating the exception.
-- **review_date:** The date by which the exception must be re-evaluated.
-
-Exceptions without all four fields are not accepted.
+`cargo-deny` does not accept structured tables inside `ignore`; the rationale
+lives in comments by design. An exception is removed in the same change that
+adopts the fixed release, without waiting for its review date.
 
 ---
 
 ## Known Gaps
 
-### `cargo deny check` Currently Fails
+### Advisory Suppressions Awaiting Upstream
 
-The local supply-chain gate does not currently pass. As of the last review,
-`cargo deny check` reports:
+`cargo audit` and `cargo deny check` pass, but only because four advisory IDs are
+suppressed with named removal conditions (see
+[Advisory Settings](#advisory-settings)). The accepted residual risk is the
+bundled SQLite vulnerability in the `snip-sync` server binary; its local attack
+vector is blocked by owner-only server data permissions on Unix. The actual
+findings, rationale, and review dates are in `deny.toml` and
+`SECURITY.md` § Advisory Exceptions — this document does not duplicate them, so
+it cannot drift.
 
-- **Advisories (9 open):** `rustls 0.23.43`
-  (RUSTSEC-2026-0285, RUSTSEC-2026-0346, RUSTSEC-2026-0348, RUSTSEC-2026-0349),
-  `rustls-webpki 0.103.14` (RUSTSEC-2026-0382), `webpki-roots 1.0.9`
-  (RUSTSEC-2026-0381), and the unmaintained crates `zbus_names`
-  (RUSTSEC-2026-0371), `zvariant` (RUSTSEC-2026-0370), and `zvariant_derive`
-  (RUSTSEC-2026-0372).
-- **Licenses:** `webpki-roots` is `CDLA-Permissive-2.0`, which is not on the
-  license allow list (it reaches the workspace through `eggfetch-core`).
-
-`bans` and `sources` pass. Because `cargo deny` is a local gate and not a CI
-step, this failure does not block a merge — it is a standing gap, not a
-regression detector. Resolve it by upgrading the affected crates, by extending
-the license allow list with a documented rationale, or by adding an explicit
-advisory exception with an owner and review date (see
-[Advisory Exception Format](#advisory-exception-format)).
+The removal conditions are upstream facts. If `sqlx` publishes a release that
+accepts `libsqlite3-sys >= 0.39.0`, or the `keyring` chain adopts `zbus 6.x`,
+the corresponding entries are deleted rather than re-reviewed.
 
 ### No SBOM Generation
 

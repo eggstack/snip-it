@@ -398,7 +398,13 @@ pub fn backup_library(path: &Path) -> SnipResult<Option<PathBuf>> {
     // Clean up old backups (keep at most 10 per library)
     cleanup_old_backups(&backup_dir, path)?;
 
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::macros::format_description!(
+            "[year][month][day]_[hour][minute][second]_[subsecond digits:9]"
+        ))
+        .map_err(|e| {
+            SnipError::runtime_error("format library backup timestamp", Some(&e.to_string()))
+        })?;
     let file_stem = path.file_stem().ok_or_else(|| {
         SnipError::runtime_error(
             "backup path has no file stem",

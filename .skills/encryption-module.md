@@ -18,7 +18,7 @@ const ARGON2_PARALLELISM: u32 = 4; // 4 threads — matches typical desktop CPU 
 
 Memory cost is `1 << 14` (16 MiB), time cost 3, parallelism 4 (`src/encryption.rs:37-39`).
 
-**WARNING**: Changing Argon2 parameters is a **breaking change**. All existing encrypted snippets will fail to decrypt because the same salt + different parameters produces a different derived key. If changing, add parameter versioning to `EncryptedPayload` (1-byte version header) and support decrypting with old parameters for backward compatibility.
+**WARNING**: Changing Argon2 parameters is a **breaking change**. All existing encrypted snippets would fail to decrypt because the same salt + different parameters produces a different derived key. The payload already carries a 1-byte version header that selects the parameters (`argon2_params_for_version`), so a parameter change must introduce a **new version** with the old parameters retained for reading — never retune an existing version in place. See [`architecture/encryption.md`](../architecture/encryption.md) § Versioning Constraint.
 
 ## Key Derivation
 
@@ -121,9 +121,12 @@ Derived keys are cached per-session to avoid re-running Argon2id for the same (a
 ## Known Limitations
 
 1. Key material persists in AES-GCM cipher key schedule (not zeroized)
-2. No parameter versioning — changing Argon2 constants breaks all stored data
+2. Retuning an existing payload version's Argon2 parameters breaks all stored
+   data — a parameter change needs a new version instead
 3. `DerivedKey` implements `Zeroize` but the copy inside `Aes256Gcm` is not zeroized
 4. No streaming API — entire plaintext/ciphertext must fit in memory
+5. Payload version 2 (id-bound AAD) is **read-only** in this build; the write
+   switch is release-gated. Do not document it as an active protection.
 
 ## Tests
 

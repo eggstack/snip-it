@@ -121,6 +121,14 @@ pub const DEFAULT_MAX_API_KEY_LENGTH: usize = 512;
 pub const DEFAULT_MAX_SYNC_SNIPPETS: usize = 10000;
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 120;
+/// Global ceiling on successful account creations per minute, independent of
+/// the caller's address. The per-peer `register:<peer>` budget alone lets an
+/// attacker with many addresses grow the user table without bound.
+pub const DEFAULT_REGISTER_PER_MINUTE: u32 = 10;
+/// Global ceiling on **failed** `/metrics` authentications per minute. Correct
+/// credentials never consume it, so an attacker cannot deny the operator their
+/// own scrape by burning the budget.
+pub const DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE: u32 = 10;
 /// Multiplier applied to the per-peer budget for requests that have **not**
 /// yet authenticated. The pre-authentication budget only has to bound the cost
 /// of an API-key lookup, so it is generous by design: an unauthenticated
@@ -229,6 +237,10 @@ pub struct LimitsConfig {
 #[derive(Deserialize, Default)]
 pub struct RateLimitConfig {
     pub requests_per_minute: Option<u32>,
+    /// Global per-minute ceiling on account creation (all peers combined).
+    pub register_per_minute: Option<u32>,
+    /// Global per-minute ceiling on failed `/metrics` authentications.
+    pub metrics_auth_failures_per_minute: Option<u32>,
     pub trusted_proxies: Option<Vec<String>>,
 }
 
@@ -263,6 +275,10 @@ pub struct Config {
     pub request_timeout_secs: u64,
     pub grpc_max_message_size: u32,
     pub rate_limit_per_minute: u32,
+    /// Global per-minute ceiling on account creation, across all peers.
+    pub register_per_minute: u32,
+    /// Global per-minute ceiling on failed `/metrics` authentications.
+    pub metrics_auth_failures_per_minute: u32,
     pub trusted_proxies: Vec<String>,
     pub metrics_username: Option<String>,
     pub metrics_password: Option<String>,
@@ -485,6 +501,18 @@ impl Config {
                     .as_ref()
                     .and_then(|r| r.requests_per_minute))
                 .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE),
+            register_per_minute: parse_env(env, "REGISTER_PER_MINUTE")?
+                .or(server
+                    .rate_limit
+                    .as_ref()
+                    .and_then(|r| r.register_per_minute))
+                .unwrap_or(DEFAULT_REGISTER_PER_MINUTE),
+            metrics_auth_failures_per_minute: parse_env(env, "METRICS_AUTH_FAILURES_PER_MINUTE")?
+                .or(server
+                    .rate_limit
+                    .as_ref()
+                    .and_then(|r| r.metrics_auth_failures_per_minute))
+                .unwrap_or(DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE),
             trusted_proxies: env("TRUSTED_PROXIES")
                 .map(|v| {
                     v.split(',')
@@ -613,6 +641,24 @@ impl Config {
                 reason: "must be nonzero".into(),
             });
         }
+        // Zero is a hard error, not "unlimited": a zero registration budget
+        // makes account creation impossible, and a zero metrics-failure budget
+        // makes the second failed scrape return 429 forever. Both are almost
+        // certainly operator mistakes.
+        if self.register_per_minute == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "REGISTER_PER_MINUTE",
+                value: self.register_per_minute.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
+        if self.metrics_auth_failures_per_minute == 0 {
+            return Err(ConfigLoadError::InvalidRange {
+                name: "METRICS_AUTH_FAILURES_PER_MINUTE",
+                value: self.metrics_auth_failures_per_minute.to_string(),
+                reason: "must be nonzero".into(),
+            });
+        }
         Ok(())
     }
 
@@ -628,6 +674,10 @@ pub struct AppState {
     pub config: Config,
     pub metrics: Metrics,
     pub db: Arc<Database>,
+    /// The same process-local limiter the gRPC service uses. Sharing it keeps
+    /// one bounded structure (and one `MAX_ENTRIES` budget) for both listeners
+    /// instead of inventing a second one for the HTTP leaf.
+    pub rate_limiter: Arc<RateLimiter>,
 }
 
 pub struct SnipSyncService {
@@ -986,7 +1036,7 @@ impl SnipSyncService {
 
         // Sample server time once to avoid micro-boundary disagreement
         // between consecutive timestamp checks.
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let tolerance = 300; // 5 minutes
 
         if snippet.updated_at > now + tolerance {
@@ -1078,6 +1128,32 @@ impl SnippetSync for SnipSyncService {
             self.record_request_finished("register", false);
             return Err(Status::resource_exhausted(
                 "Rate limit exceeded for registration",
+            ));
+        }
+
+        // Per-peer budgets do not bound a caller that rotates addresses, and
+        // every registration inserts a user plus a default library. The global
+        // budget is deliberately a separate key so a legitimate caller is not
+        // charged for an attacker's traffic on another address: it caps total
+        // account creation, not per-caller fairness.
+        if !self
+            .rate_limiter
+            .allow(
+                "register-global",
+                self.config.register_per_minute as usize,
+                Duration::from_secs(60),
+            )
+            .await
+        {
+            self.record_rate_limit();
+            self.record_request_duration("register", start);
+            self.record_request_finished("register", false);
+            tracing::warn!(
+                request_id = %request_id,
+                "Rejected registration: global per-minute ceiling reached"
+            );
+            return Err(Status::resource_exhausted(
+                "Registration is temporarily unavailable: global account-creation limit reached",
             ));
         }
 
@@ -2128,6 +2204,8 @@ mod tests {
             request_timeout_secs: 30,
             grpc_max_message_size: 4 * 1024 * 1024,
             rate_limit_per_minute,
+            register_per_minute: DEFAULT_REGISTER_PER_MINUTE,
+            metrics_auth_failures_per_minute: DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE,
             trusted_proxies: vec![],
             metrics_username: None,
             metrics_password: None,
@@ -2346,7 +2424,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_snippet_future_timestamp() {
         let service = setup_test_service().await;
-        let future = chrono::Utc::now().timestamp() + 600;
+        let future = time::OffsetDateTime::now_utc().unix_timestamp() + 600;
         let snippet = ProtoSnippet {
             id: "test-id".to_string(),
             description: "test".to_string(),
@@ -2389,7 +2467,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_snippet_clock_skew_reports_magnitude() {
         let service = setup_test_service().await;
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let snippet = ProtoSnippet {
             id: "skew-id".to_string(),
             description: "test".to_string(),
@@ -2417,7 +2495,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_snippet_created_ahead_reports_skew() {
         let service = setup_test_service().await;
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let snippet = ProtoSnippet {
             id: "skew-created".to_string(),
             description: "test".to_string(),
@@ -2461,7 +2539,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_snippet_valid() {
         let service = setup_test_service().await;
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let snippet = ProtoSnippet {
             id: "test-id".to_string(),
             description: "test".to_string(),
@@ -2559,8 +2637,8 @@ mod tests {
             description: "git status".to_string(),
             command: "git status".to_string(),
             tags: vec![],
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
+            created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+            updated_at: time::OffsetDateTime::now_utc().unix_timestamp(),
             device_id: "device-1".to_string(),
             deleted: false,
             encrypted: false,
@@ -2620,8 +2698,8 @@ mod tests {
                     description: "git status".to_string(),
                     command: "git status".to_string(),
                     tags: vec![],
-                    created_at: chrono::Utc::now().timestamp(),
-                    updated_at: chrono::Utc::now().timestamp(),
+                    created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+                    updated_at: time::OffsetDateTime::now_utc().unix_timestamp(),
                     device_id: "device-1".to_string(),
                     deleted: false,
                     encrypted: false,
@@ -2659,7 +2737,7 @@ mod tests {
             .into_inner()
             .library_id;
 
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let newer = ProtoSnippet {
             id: "snippet-1".to_string(),
             description: "newer".to_string(),
@@ -2854,8 +2932,8 @@ mod tests {
             description: "Test snippet".to_string(),
             command: "echo hello".to_string(),
             tags: vec!["test".to_string()],
-            created_at: chrono::Utc::now().timestamp(),
-            updated_at: chrono::Utc::now().timestamp(),
+            created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+            updated_at: time::OffsetDateTime::now_utc().unix_timestamp(),
             device_id: "device-1".to_string(),
             deleted: false,
             encrypted: false,
@@ -3420,6 +3498,121 @@ mod tests {
             ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "REQUEST_TIMEOUT_SECS"),
             other => panic!("expected InvalidRange, got: {other}"),
         }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_register_per_minute() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.rate_limit]\nregister_per_minute = 0\n").unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => assert_eq!(name, "REGISTER_PER_MINUTE"),
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_validate_rejects_zero_metrics_auth_failures_per_minute() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[server.rate_limit]\nmetrics_auth_failures_per_minute = 0\n",
+        )
+        .unwrap();
+        let err = Config::load_from(&path, &|_| None).unwrap_err();
+        match err {
+            ConfigLoadError::InvalidRange { name, .. } => {
+                assert_eq!(name, "METRICS_AUTH_FAILURES_PER_MINUTE")
+            }
+            other => panic!("expected InvalidRange, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn config_defaults_new_rate_limit_keys_when_absent() {
+        // An existing config that predates the keys must keep loading, and the
+        // defaults must be documented values rather than zero.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server.rate_limit]\nrequests_per_minute = 60\n").unwrap();
+        let config = Config::load_from(&path, &|_| None).unwrap();
+        assert_eq!(config.rate_limit_per_minute, 60);
+        assert_eq!(config.register_per_minute, DEFAULT_REGISTER_PER_MINUTE);
+        assert_eq!(
+            config.metrics_auth_failures_per_minute,
+            DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE
+        );
+    }
+
+    #[test]
+    fn config_reads_new_rate_limit_keys_from_file_and_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[server.rate_limit]\nregister_per_minute = 3\nmetrics_auth_failures_per_minute = 4\n",
+        )
+        .unwrap();
+        let config = Config::load_from(&path, &|_| None).unwrap();
+        assert_eq!(config.register_per_minute, 3);
+        assert_eq!(config.metrics_auth_failures_per_minute, 4);
+
+        // Environment overrides win over the file.
+        let env = |name: &str| match name {
+            "REGISTER_PER_MINUTE" => Some("7".to_string()),
+            "METRICS_AUTH_FAILURES_PER_MINUTE" => Some("8".to_string()),
+            _ => None,
+        };
+        let config = Config::load_from(&path, &env).unwrap();
+        assert_eq!(config.register_per_minute, 7);
+        assert_eq!(config.metrics_auth_failures_per_minute, 8);
+    }
+
+    #[tokio::test]
+    async fn register_global_budget_rejects_without_writing_rows() {
+        let mut service = setup_test_service().await;
+        service.config.register_per_minute = 2;
+
+        let count_users = |db: Arc<Database>| async move {
+            let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+                .fetch_one(db.pool())
+                .await
+                .expect("counting users must succeed");
+            count
+        };
+
+        for attempt in 1..=2 {
+            let response = service
+                .register(Request::new(RegisterRequest {
+                    device_id: String::new(),
+                }))
+                .await
+                .unwrap_or_else(|status| {
+                    panic!("registration {attempt} should succeed, got {status:?}")
+                });
+            assert!(response.get_ref().success);
+        }
+        assert_eq!(count_users(service.db.clone()).await, 2);
+
+        let rejection = service
+            .register(Request::new(RegisterRequest {
+                device_id: String::new(),
+            }))
+            .await
+            .expect_err("the third registration must exceed the global budget");
+        assert_eq!(rejection.code(), tonic::Code::ResourceExhausted);
+        assert!(
+            rejection.message().contains("global"),
+            "the rejection must be distinguishable from the per-peer budget: {}",
+            rejection.message()
+        );
+        assert_eq!(
+            count_users(service.db.clone()).await,
+            2,
+            "a rejected registration must not insert a user row"
+        );
     }
 
     #[test]

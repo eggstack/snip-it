@@ -141,7 +141,6 @@ fuzzy-matcher = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "env-filter"] }
 tracing-appender = "0.2"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 uuid = { version = "1", features = ["v4"] }
@@ -157,7 +156,7 @@ zeroize = { version = "1", features = ["derive"] }
 keyring = "4"
 crc32fast = "1.4"
 sha2 = "0.11"
-time = ">=0.3.36, <0.4"
+time = { version = ">=0.3.36, <0.4", features = ["formatting", "macros", "local-offset"] }
 unicode-width = "0.2"
 shell-words = "1.1"
 tempfile = "3.10"
@@ -173,7 +172,7 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 [dev-dependencies]
 tempfile = "3.10"
 subtle = "2"
-snip-sync = { version = "0.1.8", path = "snip-sync", features = ["test-helpers"] }
+snip-sync = { version = "0.2.0", path = "snip-sync", features = ["test-helpers"] }
 portable-pty = "0.9"
 libc = "0.2"
 crc32fast = "1.4"

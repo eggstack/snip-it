@@ -219,6 +219,9 @@ async fn serve_inner(config: snip_sync::Config) -> Result<(), Box<dyn std::error
         config: config.clone(),
         metrics: metrics.clone(),
         db: db.clone(),
+        // One limiter for both listeners: the HTTP leaf's metrics-failure
+        // budget shares this structure and its `MAX_ENTRIES` bound.
+        rate_limiter: rate_limiter.clone(),
     };
 
     let grpc_max_message_size = config.grpc_max_message_size;

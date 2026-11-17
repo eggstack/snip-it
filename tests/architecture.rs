@@ -910,3 +910,117 @@ fn diagnostic_modules_reject_free_form_code_string_fields() {
         violations.join("\n")
     );
 }
+
+// --- Published security claims ---------------------------------------------
+//
+// `SECURITY.md` and `docs/THREAT_MODEL.md` are the operator-facing contract for
+// what the sync encryption actually guarantees. Two sentences in them were
+// false in opposite directions and are pinned here so they cannot come back:
+//
+//   * "a compromised server cannot read snippet content" — the client sends the
+//     API key as a bearer token on every request, so a server (or a proxy, or a
+//     request log) that observes it can derive the same key. The protection is
+//     transport confidentiality and at-rest obfuscation, not server-blindness.
+//   * "It cannot forge content: the GCM tag rejects it" — a party that holds the
+//     key can seal any plaintext. The tag rejects forgery only by parties
+//     without the key.
+//
+// These are deliberately exact-string checks: the guard covers these two
+// historical defects, not general prose quality.
+const FORBIDDEN_SECURITY_CLAIMS: &[&str] =
+    &["cannot read snippet content", "It cannot forge content"];
+
+/// The body of one level-two Markdown section, without its heading line.
+fn markdown_section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let Some(start) = text.find(heading) else {
+        return "";
+    };
+    let rest = &text[start + heading.len()..];
+    match rest.find("\n## ") {
+        Some(end) => &rest[..end],
+        None => rest,
+    }
+}
+
+/// The retracted claims that still appear in `text`.
+fn forbidden_security_claims(text: &str) -> Vec<&'static str> {
+    FORBIDDEN_SECURITY_CLAIMS
+        .iter()
+        .copied()
+        .filter(|claim| text.contains(claim))
+        .collect()
+}
+
+#[test]
+fn published_security_claims_match_the_implementation() {
+    let security = include_str!("../SECURITY.md");
+    let threat_model = include_str!("../docs/THREAT_MODEL.md");
+
+    let mut violations = Vec::new();
+
+    for claim in forbidden_security_claims(security) {
+        violations.push(format!(
+            "SECURITY.md contains the retracted claim {claim:?}; the bearer key \
+             lets the server derive the encryption key"
+        ));
+    }
+    for claim in forbidden_security_claims(threat_model) {
+        violations.push(format!(
+            "docs/THREAT_MODEL.md contains the retracted claim {claim:?}; a key \
+             holder can forge valid ciphertext"
+        ));
+    }
+
+    // Removing the false sentence is not enough: the correction is the point.
+    if !security.contains("not server-blindness") {
+        violations.push(
+            "SECURITY.md must state that the design provides transport \
+             confidentiality, not server-blindness"
+                .to_string(),
+        );
+    }
+
+    // A support table that omits the shipped version tells users an unsupported
+    // release is supported (or vice versa).
+    let version = env!("CARGO_PKG_VERSION");
+    let major_minor = version.split('.').take(2).collect::<Vec<_>>().join(".");
+    let supported = markdown_section(security, "## Supported Versions");
+    if supported.is_empty() {
+        violations.push("SECURITY.md has no '## Supported Versions' section".to_string());
+    } else if !supported.contains(&format!("{major_minor}.x")) {
+        violations.push(format!(
+            "SECURITY.md § Supported Versions does not list {major_minor}.x, but \
+             Cargo.toml is {version}"
+        ));
+    }
+
+    assert!(
+        violations.is_empty(),
+        "published security claims do not match the implementation:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn forbidden_security_claim_detector_reports_the_retracted_sentences() {
+    // A guard that cannot fail proves nothing: exercise the detector against the
+    // exact sentences that were retracted, and against their corrected form.
+    let false_confidentiality =
+        "So a compromised server cannot read snippet content, but it can see ids.";
+    let false_integrity = "It cannot forge content: the GCM tag rejects it.";
+
+    assert_eq!(
+        forbidden_security_claims(false_confidentiality),
+        vec!["cannot read snippet content"]
+    );
+    assert_eq!(
+        forbidden_security_claims(false_integrity),
+        vec!["It cannot forge content"]
+    );
+
+    let corrected = "the guarantee is transport confidentiality, not server-blindness";
+    assert!(
+        forbidden_security_claims(corrected).is_empty(),
+        "the corrected wording must not trip the detector"
+    );
+}
