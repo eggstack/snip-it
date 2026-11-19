@@ -122,7 +122,9 @@ fn handle_library_not_found(
                 .map(|lib| lib.library_id.clone())
                 .unwrap_or_default(),
             server_library_id: None,
-            created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
+            created_at_unix_ms: (time::OffsetDateTime::now_utc()
+                .unix_timestamp_nanos()
+                .div_euclid(1_000_000)) as i64,
             phase: RecoveryPhase::Creating,
         },
         Err(error) => {

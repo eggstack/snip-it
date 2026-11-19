@@ -8,6 +8,9 @@
 # But allow committing .cargo/config.toml (needed for Windows stack size, etc.)
 !/.cargo/config.toml
 !/.cargo/config
+# cargo-audit reads this so its verdict matches `cargo deny check`; the advisory
+# gate is only reproducible if the suppression list is committed.
+!/.cargo/audit.toml
 
 # Rust documentation files
 **/*.html

@@ -43,6 +43,7 @@ Planning-convention migration: pre-convention plans 000–020 were promoted to
 | Locking protocol and ordering convergence | active | `plans/subsystems/locking-convergence-roadmap.md` | M001 closed; M002–M003 blocked | M002 design conflicts with the no-new-crates rule; M003 depends on M002 |
 | Snippet CRUD surface | active | `plans/subsystems/snippet-crud-surface-roadmap.md` | M001–M002 closed; M003 blocked | Refresh the M003 handoff against M002's field-update primitive |
 | Sync cursor protocol | closed | `plans/subsystems/sync-cursor-protocol-roadmap.md` | M001 condition discharged by M002; M002 closed | None |
+| Security assurance | active | `plans/subsystems/security-assurance-roadmap.md` | M001–M005 closed (M002 conditionally); M006 blocked | M002 needs CI run evidence; M006 needs a published client that reads payload v2 |
 
 ## Open implementation plans
 
@@ -51,6 +52,14 @@ Planning-convention migration: pre-convention plans 000–020 were promoted to
 | `plans/implementation/locking-convergence/002-kernel-lock-protocol-convergence.md` | blocked | Revise the new-crate proposal to comply with the no-new-crates rule |
 | `plans/implementation/locking-convergence/003-lock-ordering-contract-and-static-guard.md` | blocked | Hard dependency on M002; reconcile the draft's soft-dependency claim |
 | `plans/implementation/snippet-crud-surface/003-non-interactive-field-update.md` | blocked | Refresh stale implementation evidence against M002's closed field-update primitive |
+| `plans/implementation/security-assurance/002-ci-advisory-gates-and-action-pinning.md` | conditionally closed | CI run evidence (green job, red unsuppressed branch) must be recorded from GitHub Actions |
+| `plans/implementation/security-assurance/006-enable-v2-payload-writes.md` | blocked | One published client release that reads payload v2, plus the minimum-client-version statement |
+
+The security-assurance plan set responds to the 2026-11-17 security audit; the
+audit's evidence and residual-risk dispositions remain in
+`plans/subsystems/security-assurance-roadmap.md` § 4 and the closure records.
+M001, M003, M004, and M005 are closed and therefore no longer listed above;
+their evidence is in `plans/closure/security-assurance/`.
 
 Register new work here only after dependency and handoff review per
 `plans/003-planning-process.md` §10.

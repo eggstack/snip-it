@@ -52,6 +52,8 @@ async fn build_file_service(db_path: &str) -> SnipSyncService {
         request_timeout_secs: 30,
         grpc_max_message_size: 4 * 1024 * 1024,
         rate_limit_per_minute: 120,
+        register_per_minute: snip_sync::DEFAULT_REGISTER_PER_MINUTE,
+        metrics_auth_failures_per_minute: snip_sync::DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE,
         trusted_proxies: vec![],
         metrics_username: None,
         metrics_password: None,
@@ -86,7 +88,7 @@ async fn test_encrypted_sync_uploads_all_snippets_in_multiple_batches() {
 
     let mut client = build_sync_client(&server_url, &api_key).await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippets: Vec<Snippet> = (0..MULTI_BATCH_COUNT)
         .map(|i| Snippet {
             id: format!("mb-{i:04}", i = i),
@@ -174,7 +176,7 @@ async fn test_sync_convergence_after_partial_upload() {
 
     let mut client = build_sync_client(&server_url, &api_key).await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
     let midpoint = MULTI_BATCH_COUNT / 2;
     let small_batch: Vec<Snippet> = (0..midpoint)
@@ -263,7 +265,7 @@ async fn test_partial_failure_convergence() {
 
     let mut client = build_sync_client(&server_url, &api_key).await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippets: Vec<Snippet> = (0..MULTI_BATCH_COUNT)
         .map(|i| Snippet {
             id: format!("pf-{i:04}", i = i),
@@ -438,7 +440,7 @@ async fn test_zero_batch_pull_only_seeded_remote() {
 
     // Seed the server with some snippets via a normal sync.
     let mut setup_client = build_sync_client(&server_url, &api_key).await;
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let seed_snippets: Vec<Snippet> = (0..10)
         .map(|i| Snippet {
             id: format!("seed-{i:02}"),
@@ -499,7 +501,7 @@ async fn test_zero_batch_pagination() {
 
     // Seed 20 snippets via a normal sync (small enough to fit in one batch).
     let mut setup_client = build_sync_client(&server_url, &api_key).await;
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let seed_snippets: Vec<Snippet> = (0..20)
         .map(|i| Snippet {
             id: format!("page-{i:02}"),

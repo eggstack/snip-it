@@ -51,10 +51,21 @@ grpc_max_message_size = 4194304
 [server.rate_limit]
 # Number of requests allowed per minute per API key
 requests_per_minute = 120
+# Global ceiling on account creation per minute, across all caller addresses.
+# Registration is unauthenticated; this bounds total table growth when a caller
+# rotates addresses. Raise it for a deployment that legitimately registers more
+# than ten devices per minute. Zero is rejected as a configuration error.
+# Environment override: REGISTER_PER_MINUTE
+register_per_minute = 10
+# Global ceiling on FAILED /metrics authentications per minute. Correct
+# credentials never consume it, so an operator's own scrape is never throttled.
+# Once exhausted, further failed attempts get 429 with Retry-After: 60.
+# Environment override: METRICS_AUTH_FAILURES_PER_MINUTE
+metrics_auth_failures_per_minute = 10
 # Accept forwarded client IPs only when the immediate peer is listed here.
 # trusted_proxies = ["127.0.0.1"]
-# Persist rate-limit counters across restarts.
-# persist = false
+# Rate-limit counters are process-local and reset on restart; no state is
+# persisted.
 
 [server.metrics]
 # Basic auth credentials for metrics endpoint

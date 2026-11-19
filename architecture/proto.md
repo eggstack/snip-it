@@ -477,7 +477,7 @@ snip-proto  →  snip-sync  →  snip-it
 | Crate | Version | Path dependency |
 |-------|---------|-----------------|
 | `snip-proto` | 0.1.4 | — |
-| `snip-sync` | 0.1.8 | `snip-proto = { version = "0.1.4", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
+| `snip-sync` | 0.2.0 | `snip-proto = { version = "0.1.4", path = "../snip-proto" }` (`snip-sync/Cargo.toml:58`) |
 | `snip-it` | 1.4.1 | `snip-proto = { version = "0.1.4", path = "snip-proto" }` (`Cargo.toml:140`) |
 
 **A proto change requires bumping `snip-proto`'s version in both

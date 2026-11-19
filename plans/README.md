@@ -67,6 +67,7 @@ Closure records and archive
 | Locking protocol and ordering convergence | `subsystems/locking-convergence-roadmap.md` | M001-M003 (owned-record protocol, kernel-lock protocol, ordering contract) | active |
 | Snippet CRUD surface | `subsystems/snippet-crud-surface-roadmap.md` | M001-M003 (non-interactive delete, folder/favorite write path, field update) | active |
 | Sync cursor protocol | `subsystems/sync-cursor-protocol-roadmap.md` | M001-M002 (monotonic sequence cursor, cursor-precision convergence) | closed |
+| Security assurance | `subsystems/security-assurance-roadmap.md` | M001-M006 (advisory posture, CI gates, claim reconciliation, server hardening, payload v2 read/write) | proposed |
 
 Pre-convention flat-plan mapping: `000` → archived direction (superseded
 by canonical docs plus `distribution-release`/`mcp-integration`);

@@ -134,7 +134,9 @@ pub fn acquire_local_data_lock(state_dir: &Path) -> SnipResult<LocalDataLock> {
 
     let lock_path = state_dir.join("local-data.lock");
     let nonce = uuid::Uuid::new_v4().to_string();
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = (time::OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000)) as i64;
     let identity = ProcessIdentity::current();
 
     let info = LocalDataLockInfo {

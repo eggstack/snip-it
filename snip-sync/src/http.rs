@@ -21,6 +21,15 @@
 
 use crate::AppState;
 use eggserve_primitives::{HeaderBlock, RequestHead, Response, ResponseBody, StatusCode};
+use std::time::Duration;
+
+/// Window for the `/metrics` authentication failure budget. One minute matches
+/// the gRPC limiter's window so operators have one mental model.
+const METRICS_AUTH_WINDOW: Duration = Duration::from_secs(60);
+
+/// `Retry-After` value advertised with `429`. The budget window is one minute,
+/// so this is the maximum time a client must wait for a fresh window.
+const METRICS_AUTH_RETRY_AFTER_SECS: &str = "60";
 
 /// Historical CORS cache-key token: the only `Vary` value the pre-migration
 /// server ever emitted. Allow-all responses omit `Vary` entirely.
@@ -96,7 +105,7 @@ async fn handle_request(
             (status, Some((body, "application/json")))
         }
         ("GET" | "HEAD", "/metrics") => {
-            let (status, body, content_type) = metrics_response(&state, request_headers);
+            let (status, body, content_type) = metrics_response(&state, request_headers).await;
             (status, Some((body, content_type)))
         }
         (_, "/health" | "/metrics") => (405, None),
@@ -124,6 +133,12 @@ async fn handle_request(
             "Basic realm=\"metrics\", charset=\"UTF-8\"".to_owned(),
         ));
     }
+    // RFC 9110 §15.5.30: a 429 MAY advertise how long to wait. Deliberately no
+    // `WWW-Authenticate` here — challenging a throttled caller would invite
+    // exactly the retry the budget exists to bound.
+    if status == 429 {
+        response_headers.push(("retry-after", METRICS_AUTH_RETRY_AFTER_SECS.to_owned()));
+    }
     if let Some(origin) = get_header(request_headers, "origin")
         && origin_allowed(&cors, &origin)
     {
@@ -143,7 +158,7 @@ async fn handle_request(
     Ok(make_response(status, body, content_type, response_headers))
 }
 
-fn metrics_response(
+async fn metrics_response(
     state: &AppState,
     request_headers: &HeaderBlock,
 ) -> (u16, Vec<u8>, &'static str) {
@@ -179,6 +194,29 @@ fn metrics_response(
         // (`SnippetSyncService::record_auth_failure`). Without it the metric
         // could never observe HTTP brute force.
         state.metrics.auth_failures.inc();
+
+        // Bound password guessing. The budget is global and failure-only:
+        // correct credentials never reach this branch, so an attacker cannot
+        // lock the operator out of their own scrape by burning it. The leaf's
+        // `RequestHead` carries no peer address, so a per-caller budget is not
+        // available here; a global failure budget is the bounded design that
+        // the current handler shape supports.
+        let within_budget = state
+            .rate_limiter
+            .allow(
+                "metrics-auth",
+                state.config.metrics_auth_failures_per_minute as usize,
+                METRICS_AUTH_WINDOW,
+            )
+            .await;
+        if !within_budget {
+            state.metrics.rate_limit_hits.inc();
+            return (
+                429,
+                b"Too many failed authentication attempts".to_vec(),
+                "text/plain; charset=utf-8",
+            );
+        }
         return (
             401,
             b"Authentication required".to_vec(),

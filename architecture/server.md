@@ -489,7 +489,8 @@ so a legitimate second library can collide with the first.
   `max_encrypted_payload_length` 1 MiB, `max_description_length` 1024,
   `max_tags` 50, `max_tag_length` 100, `max_id_length` 128,
   `max_device_id_length` 128, `max_api_key_length` 512,
-  `rate_limit_per_minute` 120, `db_max_connections` 5,
+  `rate_limit_per_minute` 120, `register_per_minute` 10,
+  `metrics_auth_failures_per_minute` 10, `db_max_connections` 5,
   `grpc_max_message_size` 4 MiB, `request_timeout_secs` 30.
   Plaintext snippets require a non-blank command and are capped by
   `max_command_length`. Encrypted snippets require a non-blank payload but
@@ -637,9 +638,19 @@ leaf service built with `eggserve_server::service_fn_head`; only
 - HTTP auth failures increment the same
   `snip_sync_auth_failures_total` counter as the gRPC path, so a
   password-protected `/metrics` is observable under brute force
-  (`snip-sync/src/http.rs:176-187`).
+  (`snip-sync/src/http.rs`).
+- Failed authentications are also **budgeted**
+  (`metrics_auth_failures_per_minute`, default 10). Once the budget is
+  exhausted, further failures return `429` with `Retry-After: 60` and
+  increment `snip_sync_rate_limit_hits_total`. A `429` deliberately carries
+  no `WWW-Authenticate` (challenging a throttled caller invites the retry the
+  budget exists to bound). Correct credentials never consult the budget, so an
+  attacker cannot deny the operator their own scrape.
+- The budget is **global**, not per address: the EggServe HTTP leaf receives
+  only `RequestHead`, which carries no peer address, so a per-caller budget is
+  not expressible in the current handler shape.
 - Disabled metrics is a `404` from the application, not the router
-  (`snip-sync/src/http.rs:150-156`).
+  (`snip-sync/src/http.rs`).
 
 ### CORS and security headers
 
@@ -708,7 +719,9 @@ spend the budget of a legitimate one:
 |--------|-----|-------|----------|
 | pre-auth | `pre-auth:<peer>` | `rate_limit_per_minute` × `PRE_AUTH_RATE_LIMIT_MULTIPLIER` (10) | before the API-key lookup |
 | authenticated | `<peer>` | `rate_limit_per_minute` | after a **valid** API key was accepted |
-| registration | `register:<peer>` | `rate_limit_per_minute` | `register` only (unauthenticated by nature) |
+| registration (per peer) | `register:<peer>` | `rate_limit_per_minute` | `register` only (unauthenticated by nature) |
+| registration (global) | `register-global` | `register_per_minute` (10) | `register` only, after the per-peer bucket |
+| metrics authentication | `metrics-auth` | `metrics_auth_failures_per_minute` (10) | failed `/metrics` Basic auth only |
 
 The pre-auth bucket only has to bound the cost of the key lookup, so it is
 generous by design. The authenticated bucket is the per-caller ceiling: only
@@ -717,8 +730,19 @@ never lock out a legitimate caller behind the same peer address.
 `register` gets its own bucket for the same reason — it is unauthenticated
 and must not consume the authenticated budget.
 
-Over-limit calls return `Status::resource_exhausted` and increment
-`snip_sync_rate_limit_hits_total`.
+The two global buckets exist because a per-peer budget cannot bound a caller
+that rotates addresses. `register-global` caps total account creation (each
+successful call inserts a user plus a default library); `metrics-auth` caps
+password guessing on the HTTP leaf, which has no peer address available. Both
+are separate keys on purpose: exhausting one never denies another, and
+`metrics-auth` is failure-only so a valid scrape is never throttled.
+
+The gRPC service and the HTTP leaf share **one** `Arc<RateLimiter>` through
+`AppState`, so `MAX_ENTRIES` and its eviction remain a single process-wide
+bound.
+
+Over-limit calls return `Status::resource_exhausted` (gRPC) or `429` (HTTP) and
+increment `snip_sync_rate_limit_hits_total`.
 
 ### Trusted proxies and `x-forwarded-for`
 

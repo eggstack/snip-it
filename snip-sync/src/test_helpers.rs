@@ -49,6 +49,8 @@ pub async fn build_test_service_with_observer(
         request_timeout_secs: 30,
         grpc_max_message_size: 4 * 1024 * 1024,
         rate_limit_per_minute: 120,
+        register_per_minute: crate::DEFAULT_REGISTER_PER_MINUTE,
+        metrics_auth_failures_per_minute: crate::DEFAULT_METRICS_AUTH_FAILURES_PER_MINUTE,
         trusted_proxies: vec![],
         metrics_username: None,
         metrics_password: None,

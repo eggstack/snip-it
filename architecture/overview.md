@@ -42,11 +42,11 @@ variable expansion, an AI-agent (MCP) surface, and optional encrypted
 multi-device sync against a self-hosted server.
 
 > **On "end-to-end encryption":** snippet *bodies* are encrypted with
-> AES-256-GCM under an Argon2id-derived key, and the server stores only
-> ciphertext it cannot read. But the API key is sent as a `Bearer` token on
-> every request (`src/sync.rs:306-314`), so anything that observes that token
-> can re-derive the key. The guarantee is transport + at-rest protection, not
-> server-blindness. See [encryption.md](encryption.md).
+> AES-256-GCM under an Argon2id-derived key, and the server stores and relays
+> only ciphertext. But the API key is sent as a `Bearer` token on every request
+> (`src/sync.rs`), so the server — or any proxy or log that observes that token
+> — can re-derive the key and decrypt. The guarantee is transport + at-rest
+> protection, not server-blindness. See [encryption.md](encryption.md).
 
 Four things make it unusual, and they are where most of the engineering
 complexity lives:

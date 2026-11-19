@@ -145,7 +145,7 @@ fn convert_entry(
     snippet.id = uuid::Uuid::new_v4().to_string();
 
     // Ensure timestamps are set
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     if snippet.created_at == 0 {
         snippet.created_at = now;
     }

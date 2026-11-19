@@ -30,7 +30,7 @@ async fn test_sync_client_sends_bearer_token_in_authorization_metadata() {
     // Send one snippet through the encrypted sync path. The server
     // side records the first authenticated request's `authorization`
     // header into `captured.1`; we assert it after the call completes.
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippet = Snippet {
         id: "integration-snippet-1".to_string(),
         description: "integration snippet".to_string(),
@@ -80,7 +80,7 @@ async fn test_sync_client_round_trip_encrypts_and_decrypts_snippets() {
 
     let mut client = build_sync_client(&server_url, &api_key).await;
 
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let original_command = "echo round-trip-works";
     let snippet = Snippet {
         id: "rt-1".to_string(),
@@ -129,7 +129,7 @@ async fn test_captured_authorization_metadata_is_first_wins() {
     let mut client = build_sync_client(&server_url, &api_key).await;
 
     // Issue two sync calls back-to-back.
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let make_snippet = |id: &str| Snippet {
         id: id.to_string(),
         description: "x".to_string(),
@@ -179,7 +179,7 @@ async fn test_sync_accepts_encrypted_payload_near_command_length_limit() {
     // it will be substantially larger than 1024 bytes (JSON envelope +
     // AES-GCM tag + salt + nonce + base64 expansion).
     let plaintext_command = "x".repeat(snip_sync::DEFAULT_MAX_COMMAND_LENGTH);
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippet = Snippet {
         id: "near-limit".to_string(),
         description: "d".to_string(),
@@ -358,7 +358,7 @@ async fn test_a_cursorless_request_bootstraps_the_sequence_watermark() {
         .create_library("bootstrap")
         .await
         .expect("library creation must succeed");
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let make = |id: &str| Snippet {
         id: id.to_string(),
         description: format!("bootstrap {id}"),
@@ -410,7 +410,7 @@ async fn test_a_bootstrapped_client_sends_a_non_zero_sequence_cursor() {
         .create_library("cursor-path")
         .await
         .expect("library creation must succeed");
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippet = Snippet {
         id: "cursor-1".to_string(),
         description: "cursor snippet".to_string(),
@@ -477,7 +477,7 @@ async fn test_a_timestamp_only_request_is_answered_with_no_sequence() {
         .create_library("timestamp-only")
         .await
         .expect("library creation must succeed");
-    let now = chrono::Utc::now().timestamp();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let snippet = Snippet {
         id: "ts-1".to_string(),
         description: "timestamp snippet".to_string(),
@@ -506,6 +506,186 @@ async fn test_a_timestamp_only_request_is_answered_with_no_sequence() {
         delta.server_sequence, 0,
         "a timestamp-only request must be answered with no sequence"
     );
+
+    captured.2.abort();
+}
+
+#[cfg(feature = "test-support")]
+/// Push raw records through the generated client, bypassing `SyncClient`'s
+/// encryption step. This is how an integration test seeds payloads in a
+/// version the production write path does not emit.
+async fn push_raw_snippets(server_url: &str, api_key: &str, snippets: Vec<Snippet>) {
+    use snip_proto::PushSnippetsRequest;
+    use snip_proto::snippet_sync_client::SnippetSyncClient;
+
+    let mut client = SnippetSyncClient::connect(server_url.to_string())
+        .await
+        .expect("raw gRPC client should connect to the loopback server");
+    let mut request = tonic::Request::new(PushSnippetsRequest {
+        api_key: String::new(),
+        library_id: String::new(),
+        snippets,
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {api_key}")
+            .parse()
+            .expect("a bearer token is valid metadata"),
+    );
+    let response = client
+        .push_snippets(request)
+        .await
+        .expect("raw push should succeed")
+        .into_inner();
+    assert!(response.success, "raw push failed: {}", response.message);
+}
+
+#[cfg(feature = "test-support")]
+/// Build an encrypted proto snippet around an already-sealed payload.
+fn sealed_snippet(id: &str, payload: String, now: i64, device_id: &str) -> Snippet {
+    Snippet {
+        id: id.to_string(),
+        description: String::new(),
+        command: payload,
+        tags: Vec::new(),
+        created_at: now,
+        updated_at: now,
+        device_id: device_id.to_string(),
+        deleted: false,
+        encrypted: true,
+    }
+}
+
+#[cfg(feature = "test-support")]
+/// A library holding one version-1 and one version-2 payload must sync with
+/// both rows decrypted and their ids preserved. A version-2 payload moved to a
+/// different row must fail its tag check and be skipped, leaving the rest of
+/// the library intact.
+#[tokio::test(flavor = "multi_thread")]
+async fn mixed_v1_and_v2_payloads_sync_and_a_substituted_v2_row_is_skipped() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    // Version 1: produced by the production write path.
+    let v1_plaintext = Snippet {
+        id: "v1-row".to_string(),
+        description: "version one".to_string(),
+        command: "echo v1".to_string(),
+        tags: vec!["v1".to_string()],
+        created_at: now,
+        updated_at: now,
+        device_id: device_id.clone(),
+        deleted: false,
+        encrypted: false,
+    };
+    let v1 = snip_it::sync::encrypt_snippet(&api_key, &v1_plaintext)
+        .expect("v1 encryption should succeed");
+
+    // Version 2: sealed for its own id, which only a future writer produces.
+    let salt = [7u8; 16];
+    let v2_json = serde_json::json!({
+        "description": "version two",
+        "command": "echo v2",
+        "tags": ["v2"],
+    })
+    .to_string();
+    let v2_payload =
+        snip_it::sync::seal_v2_for_test(&api_key, &v2_json, "v2-row", &salt).expect("v2 seal");
+    let v2 = sealed_snippet("v2-row", v2_payload, now, &device_id);
+
+    // A version-2 payload sealed for `v2-row` but stored under another id: the
+    // key-blind substitution this binding exists to stop.
+    let substituted_payload =
+        snip_it::sync::seal_v2_for_test(&api_key, &v2_json, "v2-row", &salt).expect("v2 seal");
+    let substituted = sealed_snippet("v2-substituted", substituted_payload, now, &device_id);
+
+    push_raw_snippets(&server_url, &api_key, vec![v1, v2, substituted.clone()]).await;
+
+    let mut client = build_sync_client(&server_url, &api_key).await;
+    let response = client
+        .sync_encrypted(vec![], 0, "")
+        .await
+        .expect("pull should succeed");
+
+    // The two authentic rows land with their ids and content preserved.
+    let v1_returned = response
+        .snippets
+        .iter()
+        .find(|s| s.id == "v1-row")
+        .expect("the version-1 row should sync");
+    assert_eq!(v1_returned.command, "echo v1");
+    assert_eq!(v1_returned.description, "version one");
+
+    let v2_returned = response
+        .snippets
+        .iter()
+        .find(|s| s.id == "v2-row")
+        .expect("the version-2 row should sync");
+    assert_eq!(
+        v2_returned.command, "echo v2",
+        "the id-bound payload must decrypt under its own id"
+    );
+    assert_eq!(v2_returned.description, "version two");
+
+    // The substituted row fails the tag check and is reported as skipped
+    // rather than silently accepted under the wrong id.
+    assert!(
+        response.skipped_ids.iter().any(|id| id == "v2-substituted"),
+        "a substituted v2 payload must be skipped, got skipped_ids={:?}",
+        response.skipped_ids
+    );
+    assert!(
+        !response.snippets.iter().any(|s| s.id == "v2-substituted"),
+        "a substituted v2 payload must not appear as accepted content"
+    );
+    assert!(
+        response.success,
+        "one bad row must not abort the rest of the library: {}",
+        response.message
+    );
+
+    captured.2.abort();
+}
+
+#[cfg(feature = "test-support")]
+/// A library containing only version-1 payloads syncs exactly as before the
+/// version-2 read path existed.
+#[tokio::test(flavor = "multi_thread")]
+async fn v1_only_library_still_syncs_unchanged() {
+    let (api_key, device_id, captured) = boot_server_and_register().await;
+    let server_url = captured.0.clone();
+    let mut client = build_sync_client(&server_url, &api_key).await;
+
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let snippet = Snippet {
+        id: "v1-only".to_string(),
+        description: "unchanged".to_string(),
+        command: "echo unchanged".to_string(),
+        tags: vec![],
+        created_at: now,
+        updated_at: now,
+        device_id,
+        deleted: false,
+        encrypted: false,
+    };
+
+    let response = client
+        .sync_encrypted(vec![snippet], 0, "")
+        .await
+        .expect("v1-only sync should succeed");
+    assert!(response.success);
+    assert!(
+        response.skipped_ids.is_empty(),
+        "{:?}",
+        response.skipped_ids
+    );
+    let returned = response
+        .snippets
+        .iter()
+        .find(|s| s.id == "v1-only")
+        .expect("the row should round-trip");
+    assert_eq!(returned.command, "echo unchanged");
 
     captured.2.abort();
 }

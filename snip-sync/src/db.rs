@@ -3,14 +3,14 @@ use argon2::{
     password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use base64::Engine;
-use chrono::Utc;
 use sha2::{Digest, Sha256};
 use sqlx::AssertSqlSafe;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 const ARGON2_MEMORY_KIB: u32 = 1 << 14; // 16 MiB — OWASP minimum for Argon2id
@@ -313,6 +313,104 @@ async fn bump_library_sequence(
     Ok(sequence)
 }
 
+/// Create (or tighten) the directory that holds the SQLite database so that it
+/// is reachable only by the service account on Unix.
+///
+/// A newly created directory is created *with* `0o700` as part of the creation
+/// call, so there is no window in which it exists with a broader mode. A
+/// pre-existing directory may predate this policy: it is tightened when
+/// possible, and a failure is a warning naming the observed mode rather than a
+/// startup abort, because a read-only or administrator-managed deployment can
+/// legitimately refuse the change.
+#[cfg(unix)]
+fn prepare_data_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let existed = path.exists();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+
+    if existed {
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)) {
+                Ok(()) => tracing::info!(
+                    "Tightened server data directory {} from mode {:#05o} to 0o700",
+                    path.display(),
+                    mode
+                ),
+                Err(error) => tracing::warn!(
+                    "Server data directory {} is accessible to other local users \
+                     (mode {:#05o}) and could not be tightened to 0o700: {}",
+                    path.display(),
+                    mode,
+                    error
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn prepare_data_directory(path: &Path) -> std::io::Result<()> {
+    // Windows ACL enforcement is out of scope; the directory is still created.
+    std::fs::create_dir_all(path)
+}
+
+/// Restrict the database file and its WAL/shared-memory siblings to `0o600`.
+///
+/// The siblings are created by SQLite on first write, so this runs after the
+/// schema has been touched. Contents are ciphertext, but metadata and Argon2id
+/// hashes are readable by any local user who can open the file.
+#[cfg(unix)]
+fn restrict_database_files(filename: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut targets = vec![filename.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut sibling = filename.as_os_str().to_owned();
+        sibling.push(suffix);
+        targets.push(PathBuf::from(sibling));
+    }
+
+    for target in targets {
+        let mode = match std::fs::metadata(&target) {
+            Ok(metadata) => metadata.permissions().mode() & 0o777,
+            // A missing `-wal`/`-shm` is normal: SQLite may not have created it
+            // yet, or may have removed it on a clean checkpoint.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                tracing::debug!(
+                    "Unable to inspect database file {}: {}",
+                    target.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        if mode & 0o077 == 0 {
+            continue;
+        }
+        if let Err(error) =
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!(
+                "Database file {} is accessible to other local users (mode {:#05o}) \
+                 and could not be tightened to 0o600: {}",
+                target.display(),
+                mode,
+                error
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_database_files(_filename: &Path) {}
+
 impl Database {
     pub async fn connect(url: &str, max_connections: u32) -> DbResult<Self> {
         // The public configuration uses a SQLite file path for convenience,
@@ -328,12 +426,12 @@ impl Database {
         .create_if_missing(true)
         .busy_timeout(Duration::from_secs(5));
 
-        let filename = options.get_filename();
+        let filename = options.get_filename().to_path_buf();
         if filename != Path::new(":memory:")
             && let Some(parent) = filename.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent).map_err(|e| {
+            prepare_data_directory(parent).map_err(|e| {
                 DbError::Internal(format!(
                     "Failed to create database directory {}: {}",
                     parent.display(),
@@ -472,6 +570,9 @@ impl Database {
         let db = Self { pool };
         db.migrate_snippet_sequence().await?;
 
+        // Runs after the schema writes so SQLite has created `-wal`/`-shm`.
+        restrict_database_files(&filename);
+
         Ok(db)
     }
 
@@ -486,7 +587,7 @@ impl Database {
 
     pub async fn create_user(&self, api_key: &str) -> DbResult<String> {
         let user_id = Uuid::new_v4().to_string();
-        let now = Utc::now().timestamp();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
         let api_key_hash = hash_api_key(api_key)?;
         let api_key_prefix = compute_api_key_prefix(api_key);
 
@@ -560,7 +661,7 @@ impl Database {
         }
 
         let lib_id = Uuid::new_v4().to_string();
-        let now = Utc::now().timestamp();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
 
         let result = sqlx::query(
             "INSERT OR IGNORE INTO libraries (id, user_id, name, created_at) VALUES (?, ?, ?, ?)",
@@ -623,7 +724,7 @@ impl Database {
     }
 
     pub async fn delete_library(&self, user_id: &str, library_id: &str) -> DbResult<()> {
-        let now = Utc::now().timestamp();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut tx = self.pool.begin().await?;
 
         let result = sqlx::query(
@@ -1136,6 +1237,76 @@ mod tests {
         assert!(path.exists());
     }
 
+    /// The server's data directory holds ciphertext, but also metadata and
+    /// Argon2id hashes. On Unix no other local user may traverse or read it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn data_directory_is_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("server-data");
+        let path = dir.join("snippets.db");
+
+        let _db = Database::connect(path.to_str().unwrap(), 1).await.unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "the data directory must be created owner-only, got {mode:#05o}"
+        );
+    }
+
+    /// A database file that already exists with a broader mode is tightened in
+    /// place; the contents are never rewritten by the permission change.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn database_file_is_restricted_to_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("server-data");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("snippets.db");
+        // Simulate a pre-existing world-readable database.
+        std::fs::write(&path, b"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let _db = Database::connect(path.to_str().unwrap(), 1).await.unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "the database file must not be group/world accessible, got {mode:#05o}"
+        );
+    }
+
+    /// A pre-existing broader directory is tightened rather than abandoned.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preexisting_broad_directory_is_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("server-data");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join("snippets.db");
+
+        let _db = Database::connect(path.to_str().unwrap(), 1).await.unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "an existing broad mode must be tightened");
+    }
+
+    /// The in-memory database has no filesystem path and must not trip the
+    /// permission helpers.
+    #[tokio::test]
+    async fn memory_database_skips_file_permission_handling() {
+        let _db = setup_db().await;
+    }
+
     #[tokio::test]
     async fn test_create_and_verify_user() {
         let db = setup_db().await;
@@ -1502,7 +1673,7 @@ mod tests {
         let db = setup_db().await;
         let user_id = db.create_user("key").await.unwrap();
         let library_id = db.create_library(&user_id, "future-delete").await.unwrap();
-        let future_timestamp = Utc::now().timestamp() + 100;
+        let future_timestamp = OffsetDateTime::now_utc().unix_timestamp() + 100;
 
         let snippet = Snippet {
             id: "future-snippet".to_string(),
@@ -1691,7 +1862,7 @@ mod tests {
     async fn test_migrate_plaintext_api_keys() {
         let db = setup_db().await;
         let user_id = Uuid::new_v4().to_string();
-        let now = Utc::now().timestamp();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
 
         // Insert a plaintext API key directly (simulating old schema)
         sqlx::query("INSERT INTO users (id, api_key, created_at, updated_at) VALUES (?, ?, ?, ?)")

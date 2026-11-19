@@ -140,6 +140,24 @@ fn start_server_on_ports_with_http_config(
     expose_metrics: bool,
     allow_all_origins: bool,
 ) -> (std::process::Child, SocketAddr) {
+    start_server_on_ports_with_http_config_and_budget(
+        tmp,
+        grpc_port,
+        http_port,
+        expose_metrics,
+        allow_all_origins,
+        None,
+    )
+}
+
+fn start_server_on_ports_with_http_config_and_budget(
+    tmp: &tempfile::TempDir,
+    grpc_port: u16,
+    http_port: u16,
+    expose_metrics: bool,
+    allow_all_origins: bool,
+    metrics_auth_failures_per_minute: Option<u32>,
+) -> (std::process::Child, SocketAddr) {
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
     let state_dir = tmp.path().join("state");
@@ -181,6 +199,9 @@ fn start_server_on_ports_with_http_config(
     if expose_metrics {
         command.env("METRICS_USERNAME", "user");
         command.env("METRICS_PASSWORD", "pass");
+    }
+    if let Some(budget) = metrics_auth_failures_per_minute {
+        command.env("METRICS_AUTH_FAILURES_PER_MINUTE", budget.to_string());
     }
     let mut child = command.spawn().expect("failed to spawn snip-sync serve");
 
@@ -431,6 +452,73 @@ fn http_metrics_auth_and_cors_preflight_contract() {
     assert!(
         preflight.contains("access-control-allow-headers: content-type,authorization"),
         "{preflight}"
+    );
+
+    stop_server(&mut child);
+    let status = wait_for_exit(&mut child, Duration::from_secs(15));
+    assert!(status.success(), "server should exit normally: {status:?}");
+}
+
+#[test]
+fn http_metrics_auth_failures_are_rate_limited() {
+    let tmp = tempfile::tempdir().unwrap();
+    let grpc_port = reserve_port();
+    let http_port = reserve_port();
+    let (mut child, http_addr) = start_server_on_ports_with_http_config_and_budget(
+        &tmp,
+        grpc_port,
+        http_port,
+        true,
+        false,
+        Some(2),
+    );
+
+    let unauthorized = "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    // The first failures fit the budget and keep the ordinary 401 challenge.
+    for attempt in 1..=2 {
+        let response = http_response(http_addr, unauthorized);
+        assert!(
+            response.starts_with("HTTP/1.1 401"),
+            "attempt {attempt} should be 401: {response}"
+        );
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("www-authenticate: basic realm=\"metrics\""),
+            "attempt {attempt} should still carry the challenge: {response}"
+        );
+    }
+
+    // The next failure exceeds the failure budget.
+    let throttled = http_response(http_addr, unauthorized);
+    assert!(
+        throttled.starts_with("HTTP/1.1 429"),
+        "the budget must throttle further guesses: {throttled}"
+    );
+    assert!(
+        throttled.to_ascii_lowercase().contains("retry-after: 60"),
+        "a 429 must advertise the window: {throttled}"
+    );
+    assert!(
+        !throttled.to_ascii_lowercase().contains("www-authenticate"),
+        "a throttled response must not invite another credential attempt: {throttled}"
+    );
+    assert_security_headers_present(&throttled);
+
+    // Correct credentials never consult the failure budget, so an attacker
+    // cannot deny the operator their own scrape.
+    let authorized = http_response(
+        http_addr,
+        "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic dXNlcjpwYXNz\r\nConnection: close\r\n\r\n",
+    );
+    assert!(
+        authorized.starts_with("HTTP/1.1 200"),
+        "a valid scrape must still succeed after the budget is exhausted: {authorized}"
+    );
+    assert!(
+        authorized.contains("snip_sync_auth_failures_total"),
+        "{authorized}"
     );
 
     stop_server(&mut child);

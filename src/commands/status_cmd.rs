@@ -1,7 +1,7 @@
 use crate::error::SnipResult;
 use crate::status_snapshot::{TopLevelSyncState, capture_snapshot};
-use chrono::{Local, TimeZone, Utc};
 use std::io::{self, Write};
+use time::{OffsetDateTime, UtcOffset};
 
 /// Canonical Clap arguments for `snp status` and `snp data status`.
 ///
@@ -53,10 +53,7 @@ pub fn run(json: bool, sync_only: bool) -> SnipResult<()> {
     }
 
     if snapshot.attempt.last_attempt_at_unix_ms > 0 {
-        let dt = Utc
-            .timestamp_millis_opt(snapshot.attempt.last_attempt_at_unix_ms as i64)
-            .single()
-            .map(|dt: chrono::DateTime<Utc>| dt.with_timezone(&Local));
+        let dt = local_datetime(snapshot.attempt.last_attempt_at_unix_ms);
         if let Some(local_dt) = dt {
             let class = if snapshot.attempt.last_failure_class.is_empty() {
                 "unknown".to_string()
@@ -73,10 +70,7 @@ pub fn run(json: bool, sync_only: bool) -> SnipResult<()> {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         if snapshot.attempt.next_attempt_at_unix_ms > now_ms {
-            let dt = Utc
-                .timestamp_millis_opt(snapshot.attempt.next_attempt_at_unix_ms as i64)
-                .single()
-                .map(|dt: chrono::DateTime<Utc>| dt.with_timezone(&Local));
+            let dt = local_datetime(snapshot.attempt.next_attempt_at_unix_ms);
             if let Some(local_dt) = dt {
                 out.push_str(&format!("Next retry: {local_dt}\n"));
             }
@@ -122,10 +116,7 @@ fn format_action(top: &TopLevelSyncState) -> Option<String> {
         TopLevelSyncState::PendingRetryBackoff {
             next_attempt_at_unix_ms,
         } => {
-            let dt = Utc
-                .timestamp_millis_opt(*next_attempt_at_unix_ms as i64)
-                .single()
-                .map(|dt: chrono::DateTime<Utc>| dt.with_timezone(&Local));
+            let dt = local_datetime(*next_attempt_at_unix_ms);
             dt.map(|local_dt| format!("Action: retry eligible at {local_dt}"))
         }
         TopLevelSyncState::CorruptOrInaccessible => {
@@ -133,4 +124,10 @@ fn format_action(top: &TopLevelSyncState) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn local_datetime(unix_ms: u64) -> Option<OffsetDateTime> {
+    let utc = OffsetDateTime::from_unix_timestamp_nanos(i128::from(unix_ms) * 1_000_000).ok()?;
+    let offset = UtcOffset::local_offset_at(utc).ok()?;
+    Some(utc.to_offset(offset))
 }

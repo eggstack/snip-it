@@ -2740,7 +2740,7 @@ fn test_golden_corpus_sync_round_trip_preserves_command() {
             .expect("SyncClient::create should succeed");
 
         // Push a multiline snippet with trailing newline
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let original_command = "if true; then\n  echo yes\nelse\n  echo no\nfi\n";
         let snippet = snip_proto::Snippet {
             id: "sync-golden-1".to_string(),

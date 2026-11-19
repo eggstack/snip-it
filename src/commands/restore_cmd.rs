@@ -758,7 +758,13 @@ fn create_pre_restore_backup(config_dir: &Path) -> SnipResult<Option<PathBuf>> {
         return Ok(None);
     }
 
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::macros::format_description!(
+            "[year][month][day]_[hour][minute][second]"
+        ))
+        .map_err(|e| {
+            SnipError::runtime_error("format restore backup timestamp", Some(&e.to_string()))
+        })?;
     // The UUID suffix keeps two restores in the same second from resolving to
     // the same directory: the second restore's snapshot would otherwise
     // overwrite the first restore's pre-restore state.

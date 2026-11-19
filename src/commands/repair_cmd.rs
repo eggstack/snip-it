@@ -960,13 +960,21 @@ fn create_repair_backup() -> SnipResult<PathBuf> {
     fs::create_dir_all(&backup_root)
         .map_err(|e| SnipError::io_error("create backup directory", backup_root.clone(), e))?;
 
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::macros::format_description!(
+            "[year][month][day]_[hour][minute][second]"
+        ))
+        .map_err(|e| {
+            SnipError::runtime_error("format repair backup timestamp", Some(&e.to_string()))
+        })?;
     let backup_dir = backup_root.join(format!("repair-{timestamp}-{}", uuid::Uuid::new_v4()));
     let staging_dir = backup_dir.with_extension(format!("staging.{}", uuid::Uuid::new_v4()));
 
     let mut manifest = BackupManifest {
         schema: 1,
-        created_at_unix_ms: chrono::Utc::now().timestamp_millis(),
+        created_at_unix_ms: (time::OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .div_euclid(1_000_000)) as i64,
         snip_it_version: crate::diagnostics::version().to_string(),
         layout: "directory".to_string(),
         files: Vec::new(),

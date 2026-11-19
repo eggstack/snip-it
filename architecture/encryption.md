@@ -68,7 +68,7 @@ ARGON2_TIME_COST, ARGON2_PARALLELISM, Some(32))` with
 ```
 
 ```rust
-// src/encryption.rs:142-150
+// src/encryption.rs
 pub struct EncryptedPayload {
     pub version: u8,         // payload layout version (0 = legacy, unversioned)
     pub salt: Vec<u8>,       // 16 bytes
@@ -76,8 +76,8 @@ pub struct EncryptedPayload {
     pub ciphertext: Vec<u8>, // AES-GCM output + auth tag
 }
 impl EncryptedPayload {
-    pub fn to_base64(&self) -> String;                        // src/encryption.rs:155
-    pub fn from_base64(data: &str) -> CryptoResult<Self>;     // src/encryption.rs:165
+    pub fn to_base64(&self) -> String;
+    pub fn from_base64(data: &str) -> CryptoResult<Self>;
 }
 ```
 
@@ -85,34 +85,73 @@ impl EncryptedPayload {
 8-byte magic (`SNIP-PAY`) is long enough that a legacy payload — whose first
 bytes are random salt — cannot be mistaken for a versioned one.
 
-`from_base64` accepts **both** layouts: a payload that starts with the magic
-is parsed as versioned (and an unknown version is rejected with
-`InvalidData("Unsupported payload version …")`), anything else is parsed as
-the legacy unversioned layout. It rejects payloads shorter than 28 bytes
-(`SALT_SIZE + NONCE_SIZE`) with `InvalidData("Data too short")`, and
-non-base64 input with `InvalidData("Failed to decode base64: …")`.
+`from_base64` accepts **all three** layouts: a payload that starts with the
+magic is parsed as versioned (versions 1 and 2 are accepted; an unknown version
+is rejected with `InvalidData("Unsupported payload version …")`), anything else
+is parsed as the legacy unversioned layout (version 0). It rejects payloads
+shorter than 28 bytes (`SALT_SIZE + NONCE_SIZE`) with
+`InvalidData("Data too short")`, and non-base64 input with
+`InvalidData("Failed to decode base64: …")`.
 
-## Key Derivation — `src/encryption.rs:178-227`
+### Payload versions and identity binding
+
+| Version | Header | AAD | Written by this build | Read by this build |
+|---------|--------|-----|-----------------------|--------------------|
+| 0 | none (`salt ‖ nonce ‖ ct`) | none | no | yes |
+| 1 | `magic ‖ 1` | none | **yes** | yes |
+| 2 | `magic ‖ 2` | snippet id | no | yes |
+
+Version 2 authenticates the snippet id as AES-GCM associated data
+([ADR-0002](../plans/adrs/ADR-0002-encryption-payload-identity-binding.md)):
+
+```text
+AAD = b"snip-payload-v2\0" ‖ u32_le(id.len()) ‖ id.as_bytes()
+```
+
+The domain tag separates this use from any future AAD use, and the length
+prefix removes concatenation ambiguity (`("ab", "c")` must not hash like
+`("a", "bc")`). AAD is public data: it adds no key material and is never
+logged.
+
+Because the AAD is authenticated, a ciphertext sealed for one snippet fails the
+tag check when presented under another id. The failure is a plain
+`DecryptionFailed` — the same shape as a wrong key — so the error does not
+reveal which of the two was wrong. The sync pull path
+(`decrypt_snippet`, `src/sync.rs`) supplies the proto row's `id`, and a
+substituted row is counted in `server_decrypt_failed_count` and reported in
+`skipped_ids` rather than aborting the library.
+
+**Write path.** This build writes version 1 only. Version 2 read support is the
+first phase of a two-phase rollout; the write switch is a separate,
+release-gated milestone, because a client that only understands version 1 skips
+every version-2 payload. `decrypt` (the identity-less entry point) is compiled
+for test builds only and rejects version 2 explicitly, so no production caller
+can decrypt a bound payload without supplying its identity.
+
+The key cache is keyed by `(hashed api_key, base64(salt), version)`, so the
+version-2 read path does not disturb version-1 caching or add KDF work: AAD
+does not affect key derivation.
+
+## Key Derivation
 
 ```rust
 fn derive_key(api_key: &str, salt: &[u8], version: u8) -> CryptoResult<DerivedKey>
 ```
 
 1. Select the Argon2id parameters for the payload version
-   (`argon2_params_for_version`); an unknown version is an error.
+   (`argon2_params_for_version`); an unknown version is an error. Versions 0, 1,
+   and 2 all use the same parameters — only the AAD differs.
 2. Build the cache key `(SHA-256(api_key) hex, base64(salt), version)`; return
-   a clone on a hit (`hash_api_key`, `src/encryption.rs:49-58`). The version is
-   part of the key because two versions may use the same salt with different
-   KDF parameters.
-2. Run Argon2id with the fixed parameters above into `[u8; 32]`.
-3. Insert into the session cache (10 000-entry cap, evict-half on overflow)
-   and return a `DerivedKey`, zeroizing the stack buffer
-   (`src/encryption.rs:207-226`).
+   a clone on a hit (`hash_api_key`). The version is part of the key because a
+   future version may use the same salt with different KDF parameters.
+3. Run Argon2id with the fixed parameters above into `[u8; 32]`.
+4. Insert into the session cache (10 000-entry cap, evict-half on overflow)
+   and return a `DerivedKey`, zeroizing the stack buffer.
 
-`DerivedKey` (`src/encryption.rs:102-113`) is `Zeroize + ZeroizeOnDrop +
-Default`; callers explicitly `zeroize()` / `drop(mem::take(&mut key))` after
-use (`src/encryption.rs:332`, `:359`). Cache keys hash the API key with the
-full SHA-256 digest so one user's entry can never collide with another's.
+`DerivedKey` is `Zeroize + ZeroizeOnDrop + Default`; callers explicitly
+`zeroize()` / `drop(mem::take(&mut key))` after use. Cache keys hash the API key
+with the full SHA-256 digest so one user's entry can never collide with
+another's.
 
 ### Versioning Constraint
 

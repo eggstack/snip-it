@@ -1,5 +1,14 @@
 name: CI
 
+# Action pinning policy
+# --------------------
+# Every third-party action is pinned to a full 40-character commit SHA with a
+# trailing `# vX.Y.Z` comment. The comment is load-bearing: Dependabot's
+# `github-actions` entry (`.github/dependabot.yml`) updates the SHA and the
+# comment together, so the pin stays reviewable. Never replace a pin with a
+# mutable tag or branch. See
+# `plans/implementation/security-assurance/002-ci-advisory-gates-and-action-pinning.md`.
+
 on:
   push:
     branches: [main]
@@ -17,13 +26,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  advisory-gate:
+    name: Advisory and license gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Prebuilt binaries keep the job short; the tool versions are exact and
+      # must match the versions recorded in the milestone closure evidence.
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-audit@0.23.0,cargo-deny@0.20.2
+      # The gate itself lives in the repository so local and CI verdicts agree
+      # by construction. No `continue-on-error`, no retry loop: a failure here
+      # must fail the pull request.
+      - name: Advisory and license policy
+        run: bash scripts/check-advisories.sh
+
   linux-correctness:
     name: Linux correctness
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch as of 2026-11-17
         with:
           toolchain: "1.94"
           components: rustfmt, clippy
@@ -38,7 +66,7 @@ jobs:
             sleep 10
           done
           sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
       - name: Linux checks
         run: bash scripts/check.sh
 
@@ -51,11 +79,11 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch as of 2026-11-17
         with:
           toolchain: "1.94"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
       - name: Check workspace
         run: cargo check --workspace --all-targets
       - name: CLI/platform smoke
