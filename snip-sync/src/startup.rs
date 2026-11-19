@@ -106,11 +106,11 @@ pub fn auto_detect_method() -> Result<StartupMethod, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        return Ok(StartupMethod::Launchd);
+        Ok(StartupMethod::Launchd)
     }
     #[cfg(windows)]
     {
-        return Ok(StartupMethod::TaskScheduler);
+        Ok(StartupMethod::TaskScheduler)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
