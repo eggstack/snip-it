@@ -81,12 +81,14 @@ if parse_args --version 1.2; then
     exit 1
 fi
 
+PATH_BEFORE_CONTAINS="$PATH"
 export PATH="/usr/bin:/home/alice/.local/bin"
 path_contains /home/alice/.local/bin
 if path_contains /opt/bin; then
     echo 'FAIL: unrelated PATH entry reported as present' >&2
     exit 1
 fi
+export PATH="$PATH_BEFORE_CONTAINS"
 
 # ---------------------------------------------------------------------------
 # Fixture HTTP server (Python stdlib only, no new dependencies)
@@ -245,7 +247,7 @@ CURRENT_VERSION='1.2.3'
 ASSET='snp-x86_64-unknown-linux-gnu'
 CANDIDATE="$VERIFY_DIR/$ASSET"
 make_fake_binary "$CANDIDATE" 'snp 1.2.3'
-DIGEST="$(sha256sum "$CANDIDATE" | awk '{print $1}')"
+DIGEST="$(checksum_file "$CANDIDATE" | awk '{print $1}')"
 printf '%s  %s\n' "$DIGEST" "$ASSET" > "$VERIFY_DIR/$ASSET.sha256"
 verify_candidate "$CANDIDATE" "$VERIFY_DIR/$ASSET.sha256" "$ASSET"
 
@@ -276,7 +278,7 @@ fi
 # Wrong program identity -> hard failure.
 WRONG_ID="$VERIFY_DIR/wrong-id"
 make_fake_binary "$WRONG_ID" 'snip-sync 1.2.3'
-WRONG_DIGEST="$(sha256sum "$WRONG_ID" | awk '{print $1}')"
+WRONG_DIGEST="$(checksum_file "$WRONG_ID" | awk '{print $1}')"
 printf '%s  %s\n' "$WRONG_DIGEST" "$ASSET" > "$VERIFY_DIR/wrong-id.sha256"
 if verify_candidate "$WRONG_ID" "$VERIFY_DIR/wrong-id.sha256" "$ASSET"; then
     echo 'FAIL: wrong program identity accepted' >&2
@@ -286,7 +288,7 @@ fi
 # Wrong version -> hard failure.
 WRONG_VER="$VERIFY_DIR/wrong-ver"
 make_fake_binary "$WRONG_VER" 'snp 9.9.9'
-WRONG_VER_DIGEST="$(sha256sum "$WRONG_VER" | awk '{print $1}')"
+WRONG_VER_DIGEST="$(checksum_file "$WRONG_VER" | awk '{print $1}')"
 printf '%s  %s\n' "$WRONG_VER_DIGEST" "$ASSET" > "$VERIFY_DIR/wrong-ver.sha256"
 if verify_candidate "$WRONG_VER" "$VERIFY_DIR/wrong-ver.sha256" "$ASSET"; then
     echo 'FAIL: wrong candidate version accepted' >&2
@@ -359,7 +361,7 @@ setup_snp_fixture() {
         valid)
             make_fake_binary "$candidate" 'snp 1.2.3'
             cp "$candidate" "$tag_dir/$asset"
-            (cd "$FIXTURE_ROOT" && sha256sum "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
+            (cd "$FIXTURE_ROOT" && checksum_file "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
             ;;
         mismatch)
             make_fake_binary "$candidate" 'snp 1.2.3'
@@ -378,12 +380,12 @@ setup_snp_fixture() {
         wrong-identity)
             make_fake_binary "$candidate" 'snip-sync 1.2.3'
             cp "$candidate" "$tag_dir/$asset"
-            (cd "$FIXTURE_ROOT" && sha256sum "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
+            (cd "$FIXTURE_ROOT" && checksum_file "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
             ;;
         wrong-version)
             make_fake_binary "$candidate" 'snp 0.0.0'
             cp "$candidate" "$tag_dir/$asset"
-            (cd "$FIXTURE_ROOT" && sha256sum "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
+            (cd "$FIXTURE_ROOT" && checksum_file "candidate-$mode" | awk -v a="$asset" '{print $1"  "a}' > "$tag_dir/$asset.sha256")
             ;;
         notfound)
             # No asset files: fixture server returns 404.
