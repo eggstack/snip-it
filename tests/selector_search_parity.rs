@@ -113,6 +113,7 @@ impl McpProcess {
         )
     }
 
+    #[cfg(target_os = "linux")]
     /// PID of the running MCP server process.
     fn pid(&self) -> u32 {
         self.child.id()
