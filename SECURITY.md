@@ -209,10 +209,11 @@ written; see the version matrix below.
 | 2 | Yes | Not yet | Yes (AAD over the snippet id) |
 
 Version 1 payloads remain readable indefinitely; no stored payload is ever
-rewritten. Version 2 read support exists so a later release can switch the write
-path once the fleet can read it — until that write switch ships, every payload
-on the wire is still version 1 and the id binding is *not* in effect. The
-decision and the two-phase rollout are recorded in
+rewritten. `snip-it` 1.4.1 is the minimum client version that can read version 2
+payloads; earlier clients skip version 2 rows during sync. This release adds
+read support only: the writer still emits version 1 payloads, so version 2's id
+binding is not yet in effect for newly written payloads. The decision and the
+two-phase rollout are recorded in
 [ADR-0002](plans/adrs/ADR-0002-encryption-payload-identity-binding.md); the
 implementation-level description is
 [`architecture/encryption.md`](architecture/encryption.md).
