@@ -49,7 +49,7 @@ jobs:
       mode: ${{ steps.validate.outputs.mode }}
     steps:
       - name: Check out the requested tag
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # For workflow_dispatch, github.ref is the branch containing this
           # workflow, so the explicit tag input must take precedence.
@@ -144,7 +144,7 @@ jobs:
 
     steps:
       - name: Check out the validated tag
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
