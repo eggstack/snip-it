@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Updater dependency refresh.** `snp update` now pins `eggfetch-core 0.4.0` on the
+  same lean HTTP/1, redirects, Rustls, and native-roots feature profile.
 - **Shared diagnostic vocabulary and library scan (behavior-preserving).**
   `validate`, `doctor`, and `repair` now share `DiagnosticSeverity`,
   `DiagnosticCode`, and `DiagnosticRepairability` in `src/diagnostics.rs`, plus

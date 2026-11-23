@@ -20,7 +20,7 @@ leaf (see [server.md](server.md)), or the update server's gRPC surface.
 
 **Sources**: `src/update.rs` (1769 lines), `snip-sync/src/update.rs` (778),
 `src/main.rs:96-109` (CLI flags), `src/main.rs:478-492` (dispatch),
-`tests/architecture.rs:163-258` (source-level pins).
+`tests/architecture.rs:173,313,333` (source-level transport pins).
 
 ## Module Map
 
@@ -30,14 +30,14 @@ leaf (see [server.md](server.md)), or the update server's gRPC surface.
 | `snip-sync/src/update.rs` | Server updater: same strategy over external `curl`, with lifecycle-aware stop/restart |
 | `src/main.rs:96-109` | `snp update --dry-run/--locked` and the hidden `__self-replace` subcommand |
 | `snip-sync/src/cli.rs:50-68` | `snip-sync update --dry-run/--locked` and the hidden `SelfReplace` subcommand |
-| `tests/architecture.rs:163-258` | Pins that lock the two-transport split at source level |
+| `tests/architecture.rs:173,313,333` | Pins that lock the two-transport split at source level |
 
 ## The Two-Transport Split
 
 | | `snp update` (client) | `snip-sync update` (server) |
 |---|---|---|
 | Transport | in-process `eggfetch-core` | external `curl` subprocess |
-| Dependency | `eggfetch-core = { version = "=0.2.2", default-features = false, features = ["standard-http1", "redirects", "tls-rustls", "tls-native-roots"] }` (`Cargo.toml:141-146`) | none — `curl` must be on `PATH` |
+| Dependency | `eggfetch-core = { version = "=0.4.0", default-features = false, features = ["standard-http1", "redirects", "tls-rustls", "tls-native-roots"] }` (`Cargo.toml:164-169`) | none — `curl` must be on `PATH` |
 | Redirect handling | `RedirectPolicy::strict(10)` inside eggfetch | `curl --location` (no `--max-redirs`; curl's own default applies — see Gotchas) |
 | Overall deadline | native per-request `Timeout.total` (60 s) | `curl --max-time 60` |
 | Initial-URL scheme | HTTPS only in production (`build_allow_http()` is `test-support` only) | HTTPS only in production (`validate_https_url`; `test-helpers` widens it) |
@@ -171,7 +171,7 @@ fn http_client_with(connect: Duration, read: Duration) -> eggfetch_core::Client 
 }
 ```
 
-- **Lean feature profile** (`Cargo.toml:141-146`): `default-features = false`
+- **Lean feature profile** (`Cargo.toml:164-169`): `default-features = false`
   plus exactly `standard-http1`, `redirects`, `tls-rustls`,
   `tls-native-roots` — the lean HTTP/1.1 route with native-root TLS. No broad
   `http1` alias.
@@ -285,17 +285,16 @@ the CLI `--locked` flag.
 
 | Test | Pin |
 |------|-----|
-| `snp_updater_does_not_shell_out_to_curl` (`:172`) | `src/update.rs` contains no `"curl"` / `curl_protocol` in non-comment lines (the server file is explicitly excluded from the scan) |
-| `snp_updater_pins_lean_eggfetch_profile` (`:202`) | `Cargo.toml` contains `eggfetch-core = { version = "=0.2.2"` plus `"standard-http1"` and `"redirects"` |
-| `snp_updater_delegates_redirects_and_total_timeout` (`:222`) | `src/update.rs` contains `RedirectPolicy::strict` and contains no `tokio::time::timeout`, `fn safe_get`, `fn is_redirect_status`, `fn redirect_location`, `fn redirect_target`, `follow_redirects(false)` |
+| `snp_updater_does_not_shell_out_to_curl` (`:173`) | `src/update.rs` contains no `"curl"` / `curl_protocol` in non-comment lines (the server file is explicitly excluded from the scan) |
+| `snp_updater_pins_lean_eggfetch_profile` (`:313`) | `Cargo.toml` contains `eggfetch-core = { version = "=0.4.0"` plus `"standard-http1"` and `"redirects"` |
+| `snp_updater_delegates_redirects_and_total_timeout` (`:333`) | `src/update.rs` contains `RedirectPolicy::strict` and contains no `tokio::time::timeout`, `fn safe_get`, `fn is_redirect_status`, `fn redirect_location`, `fn redirect_target`, `follow_redirects(false)` |
 
-> **Resolved.** The dependabot bump `bd8e988` raised the pin in
-> `Cargo.toml:141` from `=0.2.0` to `=0.2.2`, which left
-> `tests/architecture.rs:208-211` asserting a literal string that no longer
-> matched the manifest — `snp_updater_pins_lean_eggfetch_profile` failed on
-> `main`. The assertion now pins `=0.2.2`, matching the manifest. **Any
-> future bump of this pin must update the test string in the same change**,
-> or the architecture suite goes red again.
+> **History.** The dependabot bump `bd8e988` moved the pin from `=0.2.0`
+> to `=0.2.2` and the literal assertion was synchronized at that time.
+> Subsequent refreshes advanced the pin to `=0.4.0` (current in
+> `Cargo.toml:164`); the guard now asserts it at `tests/architecture.rs:319-320`.
+> **Any future bump must update the test string in the same change** or the
+> architecture suite will fail.
 
 There is **no** source-level pin that keeps the *server* on `curl` — the
 no-curl test deliberately skips `snip-sync/src/update.rs`, and the server's
@@ -320,12 +319,12 @@ no second HTTP client, no Tokio test runtime, no external network.
 - `redirect_policy_is_strict` (`src/update.rs:1648-1666`) asserts the
   updater *selects* the strict policy (`follow`, `max_redirects ==
   MAX_REDIRECTS`, `downgrade == RedirectDowngradePolicy::Deny`) rather than
-  re-testing eggfetch's own redirect engine. The comment there notes that
-  downgrade rejection itself is qualified by eggfetch 0.2.2 behavior
-  (`src/update.rs:1650-1654`) — the
-  pinned dependency is `=0.2.2` (`Cargo.toml:141`), matching the version
-  asserted by `tests/architecture.rs`. The qualification should be
-  re-confirmed whenever the pin moves.
+  re-testing eggfetch's own redirect engine. The `eggfetch-core 0.4.0` release
+  notes state that redirect-policy values remain honored with `redirects`
+  enabled ([release notes](https://github.com/eggstack/eggfetch/releases/tag/v0.4.0));
+  this test verifies that `snp` selects downgrade denial, not the upstream
+  traversal implementation. Re-confirm upstream redirect semantics whenever
+  the exact pin moves.
 - Endpoint overrides (`SNIP_UPDATE_CRATES_API_URL`,
   `SNIP_UPDATE_RELEASE_BASE_URL`) exist only under `test-support` /
   `test-helpers` (`src/update.rs:259-269`, `snip-sync/src/update.rs:150-160`)
@@ -338,8 +337,8 @@ no second HTTP client, no Tokio test runtime, no external network.
 - `snip-sync/src/update.rs` — server updater: `curl` adapter, lifecycle-aware stop/restart, size-gate rationale
 - `snip-sync/src/cli.rs:50-68` — server `update` flags and the hidden `SelfReplace` subcommand
 - `src/main.rs:96-109` — client `update` flags and the hidden `__self-replace` subcommand
-- `Cargo.toml:141-146` — the lean `eggfetch-core` feature set
-- `tests/architecture.rs:163-258` — the source-level pins on the split
+- `Cargo.toml:164-169` — the lean `eggfetch-core` feature set
+- `tests/architecture.rs:173,313,333` — the source-level pins on the split
 
 ## Invariants
 
@@ -363,8 +362,8 @@ no second HTTP client, no Tokio test runtime, no external network.
   always passes `--locked` to `cargo install` anyway
   (`src/update.rs:641-650`, `snip-sync/src/update.rs:419-424`), so the effective
   behavior is "always locked".
-- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:141` uses an
-  exact version. The manifest currently says `=0.2.2`, and the architecture
+- **`eggfetch-core` is pinned with `=`, not `^`.** `Cargo.toml:164` uses an
+  exact version. The manifest currently says `=0.4.0`, and the architecture
   test asserts the same pin (see [Architecture Pins](#architecture-pins)).
 - **The `curl` adapter has no explicit redirect-depth bound.** It relies on
   curl's own default (`--max-redirs` is not passed), while the client's

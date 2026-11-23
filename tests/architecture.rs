@@ -304,12 +304,11 @@ fn never_called() {}
 }
 
 /// Plan 017 adopted the lean `standard-http1 + redirects` profile on
-/// `eggfetch-core =0.2.0`; a later dependency refresh moved the exact pin
-/// from `=0.2.2` to `=0.3.0`. The `snp` updater must stay on the lean profile,
-/// delegate redirect traversal to `RedirectPolicy::strict`, and
-/// delegate the logical request/body deadline to native `Timeout.total`.
-/// The superseded Plan 014/015 machinery — the manual redirect loop and the
-/// duplicate outer Tokio timeout — must not return.
+/// `eggfetch-core =0.2.0`; its exact pin is now `=0.4.0` and must match
+/// the manifest assertion below. The `snp` updater stays on the lean profile,
+/// delegates redirect traversal to `RedirectPolicy::strict`, and uses native
+/// `Timeout.total` for the logical request/body deadline. The superseded
+/// Plan 014/015 manual redirect loop and duplicate outer Tokio timeout must not return.
 #[test]
 fn snp_updater_pins_lean_eggfetch_profile() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -317,8 +316,8 @@ fn snp_updater_pins_lean_eggfetch_profile() {
     let source = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
     assert!(
-        source.contains("eggfetch-core = { version = \"=0.3.0\""),
-        "snp updater must pin eggfetch-core =0.3.0"
+        source.contains("eggfetch-core = { version = \"=0.4.0\""),
+        "snp updater must pin eggfetch-core =0.4.0"
     );
     assert!(
         source.contains("\"standard-http1\""),
