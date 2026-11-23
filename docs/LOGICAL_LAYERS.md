@@ -222,7 +222,7 @@ a dependency, not a specific import form. External crates and `std` items are
   `src/` or `snip-sync/src/` — a `cfg`-gated platform build cannot see such an
   error on Linux, and the macOS-only `E0606` it causes reaches `main` unseen
 - [x] `src/update.rs` does not shell out to `curl`
-- [x] `Cargo.toml` pins `eggfetch-core = "=0.2.2"` with the
+- [x] `Cargo.toml` pins `eggfetch-core = "=0.4.0"` with the
   `standard-http1` + `redirects` features
 - [x] `src/update.rs` retains no manual redirect loop and no outer Tokio
   timeout

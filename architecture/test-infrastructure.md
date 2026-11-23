@@ -1200,23 +1200,23 @@ The third test pins module visibility: `clipboard`, `diagnostics`,
 ### Updater transport pin
 
 ```rust
-// tests/architecture.rs:202-220
+// tests/architecture.rs:313-330
 #[test]
 fn snp_updater_pins_lean_eggfetch_profile() {
     ...
     assert!(
-        source.contains("eggfetch-core = { version = \"=0.2.2\""),
-        "snp updater must pin eggfetch-core =0.2.2"
+        source.contains("eggfetch-core = { version = \"=0.4.0\""),
+        "snp updater must pin eggfetch-core =0.4.0"
     );
     assert!(source.contains("\"standard-http1\""), ...);
     assert!(source.contains("\"redirects\""), ...);
 }
 ```
 
-The pin is `=0.2.2`, matching `Cargo.toml:141`:
+The pin is `=0.4.0`, matching `Cargo.toml:164`:
 
 ```toml
-eggfetch-core = { version = "=0.2.2", default-features = false, features = [
+eggfetch-core = { version = "=0.4.0", default-features = false, features = [
     "standard-http1",
     "redirects",
     "tls-rustls",
@@ -1231,7 +1231,7 @@ Three further tests pin the split:
   `snip-sync/src/update.rs` curl adapter is intentionally *not* scanned: it
   is a measured footprint tradeoff (see [update.md](update.md)).
 - `snp_updater_delegates_redirects_and_total_timeout`
-  (`tests/architecture.rs:222-258`) — `RedirectPolicy::strict` must be
+  (`tests/architecture.rs:332-368`) — `RedirectPolicy::strict` must be
   present, and `tokio::time::timeout` plus the superseded manual redirect
   helpers (`fn safe_get`, `fn is_redirect_status`, `fn redirect_location`,
   `fn redirect_target`, `follow_redirects(false)`) must be absent.

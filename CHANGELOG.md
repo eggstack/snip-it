@@ -19,9 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Polished onboarding, command, and Pet migration guides; corrected installer and server setup examples and removed stale compatibility roadmap details.
+- Synchronized the Security Assurance index and M002 closure with PR #71's real advisory failure and corrected green CI evidence; kept M002 conditionally closed pending the controlled suppression-removal run and Dependabot verification.
 
 ### Changed
 
+- **Updater dependency refresh.** `snp update` now pins `eggfetch-core 0.4.0` on the
+  same lean HTTP/1, redirects, Rustls, and native-roots feature profile.
 - **Shared diagnostic vocabulary and library scan (behavior-preserving).**
   `validate`, `doctor`, and `repair` now share `DiagnosticSeverity`,
   `DiagnosticCode`, and `DiagnosticRepairability` in `src/diagnostics.rs`, plus
