@@ -66,7 +66,7 @@ jobs:
             sleep 10
           done
           sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
-      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Linux checks
         run: bash scripts/check.sh
 
@@ -83,7 +83,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch as of 2026-11-17
         with:
           toolchain: "1.94"
-      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check workspace
         run: cargo check --workspace --all-targets
       - name: CLI/platform smoke
