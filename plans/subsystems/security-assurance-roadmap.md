@@ -448,7 +448,7 @@ The roadmap closes when all six milestones have accepted closure records and:
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 1 — Advisory posture and license policy | closed | `plans/implementation/security-assurance/001-advisory-posture-and-license-policy.md` | `plans/closure/security-assurance/001-status.md` | None |
-| 2 — CI advisory gates and action pinning | conditionally closed | `plans/implementation/security-assurance/002-ci-advisory-gates-and-action-pinning.md` | `plans/closure/security-assurance/002-status.md` | CI run evidence from GitHub Actions |
+| 2 — CI advisory gates and action pinning | conditionally closed | `plans/implementation/security-assurance/002-ci-advisory-gates-and-action-pinning.md` | `plans/closure/security-assurance/002-status.md` | Real advisory fail/fix evidence recorded; controlled ignore-removal red run and post-pin Dependabot check remain |
 | 3 — Security claim reconciliation | closed | `plans/implementation/security-assurance/003-security-claim-reconciliation.md` | `plans/closure/security-assurance/003-status.md` | None |
 | 4 — Server abuse resistance and file hygiene | closed | `plans/implementation/security-assurance/004-server-abuse-resistance-and-local-file-hygiene.md` | `plans/closure/security-assurance/004-status.md` | None |
 | 5 — Encryption payload v2 read support | closed | `plans/implementation/security-assurance/005-encryption-payload-v2-read-support.md` | `plans/closure/security-assurance/005-status.md` | None |

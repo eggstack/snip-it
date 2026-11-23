@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Polished onboarding, command, and Pet migration guides; corrected installer and server setup examples and removed stale compatibility roadmap details.
+- Synchronized the Security Assurance index and M002 closure with PR #71's real advisory failure and corrected green CI evidence; kept M002 conditionally closed pending the controlled suppression-removal run and Dependabot verification.
 
 ### Changed
 

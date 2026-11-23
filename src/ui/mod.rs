@@ -917,7 +917,6 @@ fn select_snippet_inner(params: SnippetListParams) -> io::Result<Option<SnippetS
             needs_redraw = false;
 
             // The main filter is displayed in the filter input box, not the title.
-            // Main filter text is displayed in the filter input box below, not in the title.
             // This ensures the input field position remains stable and text appears in the correct location.
             let filter_indicator = if tag_filter_mode {
                 format!("[tag: {}]", filter_state.tag_filter_text)

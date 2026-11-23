@@ -21,7 +21,7 @@ entry is the revision under which `plans/README.md` permits this CI hardening.
 
 ## 1. Executive finding
 
-The gate is wired and every mutable action reference is pinned. PR #69 now has a green GitHub Actions run, including the `advisory-gate` job. A deliberately unsuppressed red run and a post-pin Dependabot `github-actions` update remain unverified, so the milestone stays conditionally closed with those two evidence items named.
+The gate is wired and every mutable action reference is pinned. PR #69 has a green GitHub Actions run, including the `advisory-gate` job. PR #71 later produced a red advisory-gate run for a real vulnerable `url 2.5.8` dependency, then passed after updating to 2.5.9. This confirms enforcement on that real finding but does not satisfy the planned controlled run that removes one `deny.toml` ignore entry. A post-pin Dependabot `github-actions` cycle also remains unverified, so M002 stays conditionally closed.
 
 ## 2. Requirement-to-evidence matrix
 
@@ -38,7 +38,8 @@ The gate is wired and every mutable action reference is pinned. PR #69 now has a
 | Least privilege preserved | workflow `permissions: contents: read`; new job repeats it | pass | `release-binaries.yml`'s narrow `contents: write` on the attach job untouched |
 | Workflows still valid | YAML parse of all four workflow files | pass | `ci.yml` jobs: `advisory-gate`, `linux-correctness`, `platform-smoke` |
 | Green CI run recorded | [run 44191381652](https://github.com/eggstack/snip-it/actions/runs/44191381652) | pass | Advisory/license gate, Linux correctness, and macOS/Windows platform smoke passed; Markdown link check also passed in [run 44191381677](https://github.com/eggstack/snip-it/actions/runs/44191381677) |
-| Red run on an unsuppressed branch recorded | — | not run | A deliberately unsuppressed branch has not been tested |
+| Real advisory finding blocks CI and passes after remediation | [run 45089234718](https://github.com/eggstack/snip-it/actions/runs/45089234718); corrected PR #71 [run 45104676395](https://github.com/eggstack/snip-it/actions/runs/45104676395); Markdown link check [run 45104676378](https://github.com/eggstack/snip-it/actions/runs/45104676378) | pass | `cargo audit` found `RUSTSEC-2026-0592` in `url 2.5.8`; the corrected head uses `url 2.5.9`. This validates a real finding, not a controlled suppression-removal test. |
+| Controlled red run with one `deny.toml` ignore removed | — | not run | The PR #71 failure above was a real dependency advisory, not a controlled ignore-removal test. |
 | Dependabot still updates pins | `.github/dependabot.yml` already tracks `github-actions` | not verified | Needs one Dependabot cycle after the branch lands |
 
 ## 3. Production implementation evidence
@@ -68,6 +69,8 @@ python3 -c 'import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob(".gith
 ```
 
 Local results: the script passes, both greps return nothing, and all four workflow files parse. GitHub Actions run [44191381652](https://github.com/eggstack/snip-it/actions/runs/44191381652) passed the advisory/license gate, Linux correctness, and macOS/Windows platform smoke; Markdown link-check run [44191381677](https://github.com/eggstack/snip-it/actions/runs/44191381677) also passed. `gh pr checks 69 --watch` exited 0 after all five checks completed.
+
+On PR #71, run [45089234718](https://github.com/eggstack/snip-it/actions/runs/45089234718) failed the advisory gate because `cargo audit` found `RUSTSEC-2026-0592` in `url 2.5.8` (fixed in 2.5.9). The corrected head `b38b82036668eb25d581d3b2a7b7a0fe5bbc223f` passed all four CI jobs in [run 45104676395](https://github.com/eggstack/snip-it/actions/runs/45104676395), with Markdown link check passing in [run 45104676378](https://github.com/eggstack/snip-it/actions/runs/45104676378). This real advisory failure was not a controlled `deny.toml` ignore-removal test.
 
 ## 5. Invariant review
 
@@ -111,13 +114,13 @@ reviewed SHA.
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| medium | No deliberately unsuppressed red run is recorded | The job's failure behavior on `ubuntu-latest` has not been exercised through GitHub Actions | Run a controlled branch with one suppression removed and record the failed run id |
+| medium | No controlled red run after removing one `deny.toml` ignore is recorded | The PR #71 red run was caused by a real `RUSTSEC-2026-0592` finding in `url 2.5.8`, not a deliberate ignore removal, so the planned negative test remains unverified | Run a controlled branch with one suppression removed and record the failed run id |
 | low | Dependabot's SHA-update behaviour after pinning is unverified | Pins could stale silently until the next manual bump | Confirm the first `github-actions` PR after landing; if none appears, add the minimal config it needs — do not remove pinning |
 | low | `taiki-e/install-action` is a new third-party dependency in the build path | A compromised action could alter the job | It is SHA-pinned and runs only in the read-only advisory job; review its bumps like any other dependency |
 
 ## 11. Roadmap disposition
 
-Milestone conditionally closed: production implementation complete, green CI evidence is recorded, and the deliberately unsuppressed red run plus one Dependabot cycle remain outstanding. M006 is unaffected by this condition; M005 may proceed.
+Milestone conditionally closed: production implementation complete, and green CI evidence is recorded. PR #71 also showed a real advisory being blocked and then resolved, but does not replace the controlled suppression-removal run. That controlled test and one post-pin Dependabot cycle remain outstanding. M006 is unaffected by this condition; M005 may proceed.
 
 ## 12. Registry updates
 
